@@ -523,21 +523,11 @@ function sendVideo(req: IncomingMessage, res: ServerResponse, file: string) {
   return fs.createReadStream(file, { start, end }).pipe(res);
 }
 
-// The gate's transaction history (tx-history.ts). The first time, the last pulled rcv_out.bin is imported.
-async function seedTxHistory(phone: string): Promise<void> {
-  if (await dk.txHistoryCount(STORE, phone)) return;
-  const rcv = await dk.readPulledFile(STORE, phone, 'rcv_out.bin');
-  if (rcv) await dk.mergeTransactions(STORE, phone, rcv.data, rcv.savedAt);
-}
-async function txHistory(phone: string) {
-  await seedTxHistory(phone);
-  return dk.readTransactions(STORE, phone);
-}
-// The transaction list, with names from the working copy's values.
+// The transaction list (the saved history, tx-history.ts), with names from the working copy's values.
 const gateData = async (phone: string) => {
-  const [prefs, tx, rcv, w] = await Promise.all([prefsOf(phone), txHistory(phone),
-    dk.readPulledFile(STORE, phone, 'rcv_out.bin'), dk.loadWorkingState(STORE, phone)]);
-  return loadData(rcv && { data: rcv.data, mtime: rcv.savedAt }, w && w.state, prefs.deviceAssociation, tx);
+  const [prefs, tx, pulledAt, w] = await Promise.all([prefsOf(phone), dk.readTransactions(STORE, phone),
+    dk.txPulledAt(STORE, phone), dk.loadWorkingState(STORE, phone)]);
+  return loadData(pulledAt, w && w.state, prefs.deviceAssociation, tx);
 };
 
 // Runs the round-trip check on the gate's latest pull (gate-state.ts) and records it. Returns a line for the job log.
@@ -561,9 +551,8 @@ function startPull(g: Gate, what: dk.PullKind, info: JobInfo = {}): Promise<JobS
   const pulled = (j: JobState) => { if (what === 'transactions' && j.state === 'done') queueSnapshots(g.phoneNumber, g.dir); return j; };
   return startJob(g, what, () => sessionRequest(g, what), async (log, request) => {
     const { files } = await dk.pullFromGate(client(), what, request, { onStatus: log });
-    if (what === 'transactions') await seedTxHistory(g.phoneNumber);
     await dk.savePulledFiles(STORE, g.phoneNumber, files);
-    for (const [f, data] of Object.entries(files)) log(`Saved ${f} (${data.length} bytes)`);
+    for (const [f, data] of Object.entries(files)) log(`${dk.CACHE_FILES.includes(f) ? 'Saved' : 'Read'} ${f} (${data.length} bytes)`);
     if (files['rcv_out.bin']) {
       const m = await dk.mergeTransactions(STORE, g.phoneNumber, files['rcv_out.bin']);
       log(`Transaction history: ${m.added} new event${m.added === 1 ? '' : 's'}, ${m.kept} already saved`);
@@ -847,7 +836,8 @@ async function revertEvent(s: Session, g: Gate, id: string): Promise<Reply> {
     const work = await dk.readCacheFiles(STORE, g.phoneNumber);
     let built: BoardBuffers;
     try {
-      built = dk.buildFiles({ names: work['names.bin'].base, phone: work['phone.bin'].base, cards: work['cards.bin'].base }, undone);
+      built = dk.buildFiles({ names: work['names.bin'].base, phone: work['phone.bin'].base, cards: work['cards.bin'].base }, undone,
+        { masterCode: g.masterCode });
     } catch (err) { return [409, { error: `Cannot revert: ${(err as Error).message}` }]; }
     for (const n of WORK_FILES) if (!built[n].equals(before[n])) restored[`${n}.bin`] = built[n];
   }
@@ -1865,6 +1855,11 @@ if (movedFiles && Object.keys(movedFiles).length) {
   console.log(`Moved the gate files on disk into the database: ${JSON.stringify(movedFiles)}`);
   DEBUG.write('server', `Moved the gate files on disk into the database: ${JSON.stringify(movedFiles)}`);
   for (const phone of Object.keys(movedFiles)) console.log(`Gate ${phone}: ${await recordGateState(phone)}`);
+}
+// Once per gate: the stored rcv_out.bin is merged into the transaction history and deleted (tx-history.ts).
+for (const { phone, added } of await dk.migrateRcvOut(STORE)) {
+  console.log(`Gate ${phone}: stored rcv_out.bin merged into the transaction history (${added} new) and deleted`);
+  DEBUG.write('server', `Gate ${phone}: stored rcv_out.bin merged into the transaction history (${added} new) and deleted`);
 }
 // Once per gate: a working copy still stored as files becomes values (gate-state.ts).
 for (const phone of await dk.migrateWorkingFiles(STORE)) {

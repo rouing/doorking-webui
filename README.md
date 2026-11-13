@@ -346,7 +346,7 @@ base + values ──build──> files ──send──> gate ──verify pull�
 - The **working copy is values**: `gate_residents`, `gate_cards`, `gate_settings` and `gate_working` (the text the
   app shows; the master code left out). Its board files are built from the base copy plus these values whenever
   they're needed (to show, compare or send). Bytes nothing decodes are stored too when they aren't blank
-  (`gate_working.extra`), so only the master code (kept in `managed_gates`) comes from the base copy. A file's change map
+  (`gate_working.extra`), and the master code is written from the gate login's saved code (`managed_gates`). A file's change map
   (1 byte per 128-byte block: 1 = changed, the `.map` a send uploads) compares the built file with the base.
 - An edit runs on the built files as before, then is stored as values, but only if building from those values
   gives the same files byte for byte; otherwise it's refused and nothing is saved.
@@ -365,7 +365,7 @@ base + values ──build──> files ──send──> gate ──verify pull�
 - One gate connection (pull or send) runs at a time across all gates.
 - Transactions (`rcv_out.bin`) are read-only. A pull reads the gate's whole buffer (10,000 events, oldest
   overwritten first); the events after the part already saved are added to the transaction history
-  (`tx_history`), which the Transactions page shows. The first time, the last pulled `rcv_out.bin` is imported.
+  (`tx_history`), which the Transactions page shows; the file itself isn't kept, only the pull time (`tx_pulls`).
   If a pull doesn't overlap the saved history at all, the job log says events may be missing (the buffer wrapped
   since the last pull, or it was cleared).
 - A card transaction's Event Type is the Device Association name whose range holds the card number (blank when
@@ -458,7 +458,7 @@ against changes observed on the gate. The database tests use the `doorking_test`
     email.ts             SMTP outbox, one-use email links, the email texts
     prefs.ts             gate-scoped preferences, Device Association
     notes.ts             resident/vendor notes (database only, not on the gate)
-    tx-history.ts        transaction history: merges each pulled rcv_out.bin into tx_history
+    tx-history.ts        transaction history: merges each pulled rcv_out.bin into tx_history (the file isn't kept)
     audit.ts             history log, sign-ins, revert patches
     schedules.ts         scheduled transfers (run with the gate's DKS login)
     cameras.ts           camera settings, the dahua-p2p bridge, ffmpeg pictures, videos and live view

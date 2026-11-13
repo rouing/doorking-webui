@@ -353,7 +353,7 @@ test('importGateFiles and migrateWorkingFiles move the files kept on disk into t
 // The synthetic gate with what a real one also holds: a master code, read-only values, undecoded non-blank bytes.
 function fullGate() {
   const gate = syntheticGate();
-  Buffer.from([1, 2, 0x0a, 9]).copy(gate.names, 0); // master code 1209 (0 stored as 0x0A)
+  Buffer.from([1, 2, 0, 9]).copy(gate.names, 0); // master code 1209 (0 stored as 0x00)
   Object.assign(gate.names, { [0x0f]: 0x0a, [0x06]: 0x0a, [0xfb]: 0x05, [0x37]: 0x01, [0x43]: 0x01, [0x230]: 0x12 });
   Buffer.from('00f9e0' + '0182b0', 'hex').copy(gate.names, 0xbf);
   Buffer.from('70bfec6a' + '75bfec6a', 'hex').copy(gate.names, 0x15);
@@ -383,6 +383,25 @@ test('rebuild check: the files come out of the values alone, with the master cod
   // Without recorded sizes there is nothing to build from.
   assert.throws(() => dk.buildFromValues({ ...w, sizes: undefined }), /sizes are not recorded/);
 });
+
+test('working copies and sends carry the master code saved with the gate login, 0 written as 00', withStore(async (store) => {
+  await dk.createUser(store, { username: 'user1', ['pass' + 'word']: PW, createdBy: 't' });
+  await dk.registerGate(store, { ...GATE_A, masterCode: '1209' }, 'user1');
+  const same = syntheticGate();
+  Buffer.from([1, 2, 0, 9]).copy(same.names, 0);
+  await pullInto(store, same);
+  await dk.ensureCache(store, PHONE);
+  assert.strictEqual((await dk.cacheStatus(store, PHONE)).edited, false); // the gate holds the saved code: no change
+  await pullInto(store); // a pull whose master code bytes differ (FF)
+  await dk.resetCache(store, PHONE);
+  assert.deepStrictEqual([...(await working(store)).names.subarray(0, 4)], [1, 2, 0, 9]);
+  assert.deepStrictEqual((await dk.cacheStatus(store, PHONE)).files.find((f) => f.name === 'names.bin').changedBlocks, [0]);
+  await setTalkTime(store, '2:30'); // a save rebuilds with the same code
+  const { files, changedBlocks } = await dk.prepareSend(store, PHONE);
+  assert.deepStrictEqual([...files['names.bin'].subarray(0, 4)], [1, 2, 0, 9]);
+  assert.deepStrictEqual(changedBlocks['names.bin'], [0]);
+  assert.throws(() => dk.buildFiles(same, dk.decodeWorking(same), { masterCode: '12a9' }), /4 digits/);
+}));
 
 test('buildFiles writes read-only settings and extra bytes from their stored values', () => {
   const gate = fullGate();
@@ -443,10 +462,13 @@ test('transactions take names from the working copy values: directory code, entr
   const values = { dirDigits: 3, areaCodeMode: 255, areaCodes: [], middlePointer: '', settings: {},
     residents: [res('108', 'Lee, K'), res('201', 'Diaz, R', '4821')],
     cards: [{ slot: 0, cardNumber: '12345', directoryCode: '305' }] };
-  const rows = loadData(rcv, values, null, null).transactions.rows;
-  assert.deepStrictEqual(rows.map((r) => [r.number, r.name, r.directoryCode]).reverse(),
+  const history = dk.orderRcvOut(rcv.data, rcv.mtime); // as readTransactions returns the saved history
+  const tx = loadData(rcv.mtime, values, null, history).transactions;
+  assert.deepStrictEqual(tx.rows.map((r) => [r.number, r.name, r.directoryCode]).reverse(),
     [['108', 'Lee, K', '108'], ['4821', 'Diaz, R', '201'], ['12345', '', '305'], ['04369', 'Unknown', '']]);
-  assert.strictEqual(loadData(null, values).transactions, null);
+  assert.strictEqual(tx.updated, rcv.mtime);
+  assert.strictEqual(loadData(null, values).transactions, null); // never pulled
+  assert.deepStrictEqual(loadData(rcv.mtime, values, null, []).transactions.rows, []); // pulled, no events
 });
 
 test('History values patches: only what changed, reverted exactly, refused when a later change touched it', () => {
@@ -566,6 +588,33 @@ test('transaction history keeps events that leave the gate buffer and adds only 
   assert.ok(saved.every((t) => t.year === 2026 && t.code === '12345'));
   assert.strictEqual(await dk.txHistoryCount(store, '5550100'), 7);
   assert.strictEqual(await dk.txHistoryCount(store, '5550199'), 0);
+  // The last pull time is recorded even when a pull adds nothing; an older time never replaces a newer one.
+  const later = new Date(2026, 9, 22);
+  assert.deepStrictEqual(await dk.mergeTransactions(store, '5550100', rcv(30, 31), later), { added: 0, kept: 2, gap: false });
+  assert.strictEqual((await dk.txPulledAt(store, '5550100')).getTime(), later.getTime());
+  await dk.mergeTransactions(store, '5550100', rcv(31), at);
+  assert.strictEqual((await dk.txPulledAt(store, '5550100')).getTime(), later.getTime());
+  assert.strictEqual(await dk.txPulledAt(store, '5550199'), null);
+}));
+
+test('rcv_out.bin is not kept: a pull skips it, and the stored ones are merged once and deleted', withStore(async (store) => {
+  await dk.savePulledFiles(store, PHONE, { 'rcv_out.bin': rcv(10, 11), 'names.bin': syntheticGate().names });
+  assert.strictEqual(await dk.readPulledFile(store, PHONE, 'rcv_out.bin'), null);
+  assert.ok(await dk.readPulledFile(store, PHONE, 'names.bin'));
+  // As kept before 2026-11-13: one gate already merged (nothing new), one never merged.
+  const at = new Date(2026, 9, 21, 12);
+  await dk.mergeTransactions(store, PHONE, rcv(10, 11), at);
+  await store.db.query('DELETE FROM tx_pulls');
+  for (const [phone, data] of [[PHONE, rcv(10, 11)], ['5550199', rcv(20, 21, 22)]]) {
+    await store.db.query(`INSERT INTO gate_files (phone, copy, name, data, saved_at) VALUES ($1, 'pulled', 'rcv_out.bin', $2, $3)`,
+      [phone, dk.encryptBytes(store, data), at.toISOString()]);
+  }
+  assert.deepStrictEqual(await dk.migrateRcvOut(store), [{ phone: PHONE, added: 0 }, { phone: '5550199', added: 3 }]);
+  assert.deepStrictEqual(await dk.migrateRcvOut(store), []);
+  assert.deepStrictEqual((await dk.readTransactions(store, PHONE)).map((t) => t.minute), [10, 11]);
+  assert.deepStrictEqual((await dk.readTransactions(store, '5550199')).map((t) => t.minute), [20, 21, 22]);
+  assert.strictEqual((await dk.txPulledAt(store, '5550199')).getTime(), at.getTime());
+  assert.strictEqual((await store.db.query("SELECT COUNT(*) AS n FROM gate_files WHERE name = 'rcv_out.bin'")).rows[0].n, 0);
 }));
 
 test('database encrypts master codes and DKS logins, and keeps prefs per gate', withStore(async (store) => {

@@ -295,7 +295,16 @@ Primary key (`phone`, `code`). Never sent to the gate. Clearing a note deletes i
 | `added_at` | TIMESTAMPTZ | when the pull that added it ran |
 
 Primary key (`phone`, `seq`). Each transactions pull adds only the records after the part already saved, in one
-transaction that holds a per-gate lock (`pg_advisory_xact_lock`), so two merges for a gate can't interleave.
+transaction that holds a per-gate lock (`pg_advisory_xact_lock`), so two merges for a gate can't interleave. The
+pulled `rcv_out.bin` itself isn't kept (until 2026-11-13 it was, in `gate_files`; `migrateRcvOut` merged each stored
+one at start, adding only events not yet saved, and deleted it).
+
+### `tx_pulls`: when each gate's transactions were last pulled (`src/tx-history.ts`)
+
+| Column | Type | Meaning |
+|---|---|---|
+| `phone` | TEXT | gate (primary key) |
+| `pulled_at` | TIMESTAMPTZ | the last transactions pull, also when it added nothing (an older time never replaces a newer one); the Transactions page's "downloaded" time |
 
 ### `gate_files`: the gate's board files (`src/gate-cache.ts`)
 
@@ -303,7 +312,7 @@ transaction that holds a per-gate lock (`pg_advisory_xact_lock`), so two merges 
 |---|---|---|
 | `phone` | TEXT | gate |
 | `copy` | TEXT | `pulled` (the latest pull) or `base` (as pulled when the working copy was made: what the gate holds). `working` was the working copy as files until 2026-11-12 (now values, below); `migrateWorkingFiles` converts any left |
-| `name` | TEXT | `names.bin`, `phone.bin`, `cards.bin`; `rcv_out.bin` (transactions) is kept as `pulled` only |
+| `name` | TEXT | `names.bin`, `phone.bin`, `cards.bin` (`rcv_out.bin` isn't kept; see `tx_history`) |
 | `data` | BYTEA | the file, **encrypted** (12-byte IV, 16-byte tag, ciphertext) |
 | `saved_at` | TIMESTAMPTZ | when it was pulled |
 
@@ -334,7 +343,8 @@ the area-code table (if the layout is unchanged); codes removed, resident values
 the area-code layout and its table (if changed); settings that differ (read-only ones from their stored values);
 the `extra` bytes; the directory order (by `entry_offset`) and the middle pointer; the phone records' positions (by
 `record_offset`); `cards.bin` from its slots. A code with a blank name is added as the gate's empty slot (blank name,
-flag `00`, blank phone record), as deleting leaves it. The master code comes from the base copy. The steps use the
+flag `00`, blank phone record), as deleting leaves it. The master code is written from `managed_gates` (one digit per
+byte, `0` = `00`), so what is shown, compared and sent carries the gate login's saved code. The steps use the
 same functions as the edit pages.
 
 **Saving an edit** (`writeCacheFiles`): the page's edit runs on the built files as before; the result is decoded into
@@ -349,7 +359,7 @@ rebuilt exactly, as edits do.
 
 **Rebuild check** (`checkRebuild`, `buildFromValues`). The files are built with no stored file at all: blank files
 of the recorded sizes (`FF`, spaces where DoorKing32 writes them, the directory code digits), then the values, every
-setting, and the master code from `managed_gates` (a `0` digit written as `0A`). The result must equal the pull byte
+setting, and the master code from `managed_gates`. The result must equal the pull byte
 for byte, so nothing is known only from a stored file. Run on every pull with the round-trip check; a difference is
 recorded (`rebuild_problems`) and logged but doesn't lock editing. What can't pass it: bytes after the directory or
 in unused phone records that aren't `FF`, a directory code digit count outside 1-4, and a gate whose `names.bin`
@@ -359,7 +369,7 @@ length isn't 64000/63104 with an empty directory (the layout is told from the le
 
 **System Settings → Delete stored gate data** (`POST /api/gates/{phone}/delete-data`) runs `deleteGateData` in
 `src/gate-list.ts`: in one transaction it deletes the gate's rows from `gate_access`, `api_keys`, `managed_gates`, `gates`,
-`prefs`, `history`, `schedules`, `cameras`, `snapshots`, `notes`, `tx_history`, `gate_files`, `gate_residents`,
+`prefs`, `history`, `schedules`, `cameras`, `snapshots`, `notes`, `tx_history`, `tx_pulls`, `gate_files`, `gate_residents`,
 `gate_cards`, `gate_settings`, `gate_state` and `gate_working`, and closes it in open sessions. The server then
 deletes `media/<phone>/` (camera pictures). Accounts and `meta` are not about one gate and are kept.
 

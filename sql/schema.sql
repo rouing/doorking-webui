@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS notes (phone TEXT NOT NULL, code TEXT NOT NULL, note 
   saved_by TEXT NOT NULL, saved_at TIMESTAMPTZ NOT NULL, PRIMARY KEY (phone, code));
 CREATE TABLE IF NOT EXISTS tx_history (phone TEXT NOT NULL, seq INTEGER NOT NULL, raw TEXT NOT NULL,
   year INTEGER NOT NULL, added_at TIMESTAMPTZ NOT NULL, PRIMARY KEY (phone, seq));
+CREATE TABLE IF NOT EXISTS tx_pulls (phone TEXT PRIMARY KEY, pulled_at TIMESTAMPTZ NOT NULL);
 CREATE TABLE IF NOT EXISTS gate_files (phone TEXT NOT NULL, copy TEXT NOT NULL CHECK (copy IN ('pulled', 'base', 'working')),
   name TEXT NOT NULL, data BYTEA NOT NULL, saved_at TIMESTAMPTZ NOT NULL, PRIMARY KEY (phone, copy, name));
 CREATE TABLE IF NOT EXISTS gate_residents (phone TEXT NOT NULL, seq INTEGER NOT NULL, directory_code TEXT NOT NULL,

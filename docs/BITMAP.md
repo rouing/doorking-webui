@@ -36,7 +36,7 @@ Which bytes of the board files hold which setting. Offsets are hex. The source o
 
 | Offset | Size | Setting | Encoding | Key / page | Notes |
 |---|---|---|---|---|---|
-| `000`–`003` | 4 | Master code | one digit per byte, `0A` = 0 | `masterCode` / System Settings (read-only) | |
+| `000`–`003` | 4 | Master code | one digit per byte, `00` = 0 | `masterCode` / System Settings (read-only) | written from the master code saved with the gate's login (`managed_gates`), not copied from the pull. `00` = 0 is what DoorKing32's send builders write (character − `'0'`) and its receive check expects; the app also reads `0A` as 0 |
 | `004` | 1 | Relay 1 strike time (s) | byte | `relay1Time` / Relays | `00` while Tracker 1 is ticked |
 | `005` | 1 | Relay 2 strike time (s) | byte | `relay2Time` / Relays | `00` while Tracker 2 is ticked |
 | `006` | 1 | Multiple systems | `01` = yes, `0A` = no (digit-style flag) | `multipleSystems` / System Settings (read-only) | System Information checkbox (account record `+0x118`); name from the manual's list; samples `0A` |

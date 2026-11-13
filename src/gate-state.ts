@@ -8,7 +8,8 @@
 //                   undecoded non-blank bytes (extra), the file sizes, and whether the base passed the round-trip check
 //   gate_state      the round-trip and rebuild checks of the latest pull
 // The board files to show, compare or send are built from the base copy (gate_files, what the gate holds) and these
-// values: buildFiles. The base also gives the master code (kept out of these tables) and the blocks a send uploads.
+// values: buildFiles, with the master code saved with the gate's login (managed_gates; kept out of these tables). The
+// base also gives the blocks a send uploads (those that differ from it).
 //
 // Round-trip check: the decoded values are written back into a copy of the pulled files whose decoded bytes were
 // first overwritten, and the copy must come out byte for byte the same as the pull. That shows the files can be
@@ -196,8 +197,9 @@ function orderPhone(bufs: BoardBuffers, residents: ResidentValues[]): Buffer {
 // directory code digits; the area-code table (when the layout is unchanged); directory codes removed, resident
 // values that differ, codes added (a blank name as the gate's empty slot); the area-code layout and then its table
 // (when the layout changed); settings that differ (read-only ones too, from their stored values); the extra bytes;
-// the directory order and middle-entry pointer; the phone records' positions; cards.bin from its slots.
-export function buildFiles(base: BoardBuffers, w: WorkingState, opts: EditOptions = {}): BoardBuffers {
+// the directory order and middle-entry pointer; the master code, when given (from managed_gates; it isn't in the
+// values tables; else the base's bytes stay); the phone records' positions; cards.bin from its slots.
+export function buildFiles(base: BoardBuffers, w: WorkingState, { masterCode, ...opts }: BuildOptions = {}): BoardBuffers {
   let bufs: BoardBuffers = { names: Buffer.from(base.names), phone: Buffer.from(base.phone), cards: Buffer.from(base.cards) };
   if (w.dirDigits !== namesDirDigits(bufs.names)) bufs = convertDirDigits(bufs, w.dirDigits);
   const sameLayout = w.areaCodeMode === namesLayout(bufs.names).areaCodeMode;
@@ -224,13 +226,21 @@ export function buildFiles(base: BoardBuffers, w: WorkingState, opts: EditOption
   writeExtra(names, w.extra);
   orderDirectory(names, w.residents);
   Buffer.from(w.middlePointer, 'hex').copy(names, MIDDLE_POINTER);
+  if (masterCode) writeMasterCode(names, masterCode);
   return { names, phone: orderPhone({ names, phone: bufs.phone, cards: bufs.cards }, w.residents), cards: buildCards(base.cards.length, w.cards) };
 }
 
+// The master code at 0x00-0x03, one digit per byte (0 = 0x00, as DoorKing32's send builders write it and its receive
+// check expects).
+function writeMasterCode(names: Buffer, code: string): void {
+  if (!/^\d{4}$/.test(code)) throw fail('The master code must be 4 digits', 400);
+  Buffer.from([...code].map(Number)).copy(names, 0);
+}
+
 // The board files from the values alone, with no stored file: blank files of the recorded sizes (0xFF, spaces where
-// DoorKing32 writes them, the directory code digits), then buildFiles, every written setting, and the master code
-// when given (from managed_gates; it isn't in the values tables; 0 is written as 0x0A). Throws without sizes.
-export function buildFromValues(w: WorkingState, { masterCode, ...opts }: BuildOptions = {}): BoardBuffers {
+// DoorKing32 writes them, the directory code digits), then buildFiles (with the master code, when given) and every
+// written setting. Throws without sizes.
+export function buildFromValues(w: WorkingState, opts: BuildOptions = {}): BoardBuffers {
   if (!w.sizes) throw new Error('The file sizes are not recorded for this working copy');
   const names = Buffer.alloc(w.sizes.names, 0xff);
   for (const [a, b] of BLANK_SPACES) names.fill(0x20, a, b);
@@ -240,7 +250,6 @@ export function buildFromValues(w: WorkingState, { masterCode, ...opts }: BuildO
     if (w.settings[f.key] === undefined) continue;
     try { f.type.encode!(w.settings[f.key]).copy(out.names, f.offset); } catch (e) { throw new Error(`${f.name}: ${(e as Error).message}`); }
   }
-  if (masterCode) Buffer.from([...masterCode].map((d) => (d === '0' ? 0x0a : Number(d)))).copy(out.names, 0);
   return out;
 }
 

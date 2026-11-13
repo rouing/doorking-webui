@@ -201,7 +201,7 @@ export async function migrateToLocalAccounts(store: Store): Promise<{ gates: str
 
 // Tables with rows about one gate, keyed by its phone number (see db.ts). gates is the pre-2026-11-13 per-user list.
 const GATE_TABLES = ['gate_access', 'api_keys', 'managed_gates', 'gates', 'prefs', 'history', 'schedules', 'cameras', 'snapshots', 'notes',
-  'tx_history', 'gate_files', 'gate_residents', 'gate_cards', 'gate_settings', 'gate_state', 'gate_working'];
+  'tx_history', 'tx_pulls', 'gate_files', 'gate_residents', 'gate_cards', 'gate_settings', 'gate_state', 'gate_working'];
 
 // Deletes every row about the gate, in one transaction: the gate itself, everyone's access to it and its API keys, prefs,
 // history, schedules, camera settings, snapshot log, notes, transaction history, board files and the tables decoded

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { all, decryptBytes, encryptBytes, getMeta, one, run, setMeta, transaction, type Store } from './db.ts';
+import { getGate } from './gate-list.ts';
 import { GATE_SETTING_FIELDS, decodeGateSettings } from './gate-settings.ts';
 import {
   addSettingRows, buildFiles, checkRoundTrip, decodeWorking, deleteWorkingState, fileDifferences, loadWorkingState, saveWorkingState,
@@ -9,7 +10,7 @@ import type { BoardBuffers } from './residents-edit.ts';
 
 // The gate's working copy. Nothing here talks to the gate.
 // gate_files (encrypted: names.bin holds the master code) keeps per gate and file:
-//   pulled   the latest pull (every pulled file, rcv_out.bin included)
+//   pulled   the latest residents pull (rcv_out.bin isn't kept: its events go into tx_history, see tx-history.ts)
 //   base     the files as pulled when the working copy was made (what the gate holds)
 // The working copy itself is values in tables (gate_residents, gate_cards, gate_settings, gate_working; see
 // gate-state.ts). Its board files are built from base + values whenever they are read; a write is decoded into
@@ -56,16 +57,19 @@ const boardOf = (m: Map<string, StoredFile>): BoardBuffers => ({
 });
 const hasAll = (m: Map<string, StoredFile>) => CACHE_FILES.every((n) => m.has(n));
 
-// pulled and base from gate_files; working built from base and the working copy's values.
-async function loadCopies(store: Store, phone: unknown, names: string[] = CACHE_FILES): Promise<Copies & { baseOk: boolean }> {
+// pulled and base from gate_files; working built from base and the working copy's values, with the master code saved
+// with the gate's login (managed_gates; for a gate not managed here the base's bytes stay).
+async function loadCopies(store: Store, phone: unknown, names: string[] = CACHE_FILES):
+  Promise<Copies & { baseOk: boolean; masterCode?: string }> {
   const c = await loadFiles(store, phone, [...new Set([...names, ...CACHE_FILES])]);
   c.working = new Map();
-  const w = await loadWorkingState(store, phone);
+  const [w, gate] = await Promise.all([loadWorkingState(store, phone), getGate(store, phone)]);
+  const masterCode = gate ? gate.masterCode : undefined;
   if (w && hasAll(c.base)) {
-    const built = buildFiles(boardOf(c.base), w.state);
+    const built = buildFiles(boardOf(c.base), w.state, { masterCode });
     for (const n of CACHE_FILES) c.working.set(n, { data: built[n.replace('.bin', '') as keyof BoardBuffers], savedAt: w.savedAt });
   }
-  return { ...c, baseOk: Boolean(w && w.baseOk) };
+  return { ...c, baseOk: Boolean(w && w.baseOk), masterCode };
 }
 
 async function putFile(store: Store, phone: unknown, copy: Copy, name: string, data: Buffer, savedAt: Date = new Date()): Promise<void> {
@@ -103,14 +107,17 @@ export async function cacheStatus(store: Store, phone: unknown): Promise<CacheSt
   return statusOf(await loadCopies(store, phone));
 }
 
-// Saves the files of a pull as the gate's latest pull. The working copy is not changed (see syncCacheAfterPull).
+// Saves the board files of a pull (names/phone/cards; others, such as rcv_out.bin, are skipped) as the gate's latest
+// pull. The working copy is not changed (see syncCacheAfterPull).
 export async function savePulledFiles(store: Store, phone: unknown, files: Record<string, Buffer>, at: Date = new Date()): Promise<void> {
   await transaction(store, async (tx) => {
-    for (const [name, data] of Object.entries(files)) await putFile(tx, phone, 'pulled', name.toLowerCase(), data, at);
+    for (const [name, data] of Object.entries(files)) {
+      if (CACHE_FILES.includes(name.toLowerCase())) await putFile(tx, phone, 'pulled', name.toLowerCase(), data, at);
+    }
   });
 }
 
-// One file of the latest pull (e.g. rcv_out.bin), or null.
+// One file of the latest pull, or null.
 export async function readPulledFile(store: Store, phone: unknown, name: string): Promise<StoredFile | null> {
   return (await loadFiles(store, phone, [name])).pulled.get(name) || null;
 }
@@ -200,7 +207,7 @@ export async function writeCacheFiles(store: Store, phone: unknown, files: Recor
   const want = boardOf(merged);
   const state = decodeWorking(want);
   let rebuilt: BoardBuffers;
-  try { rebuilt = buildFiles(boardOf(c.base), state); } catch (e) {
+  try { rebuilt = buildFiles(boardOf(c.base), state, { masterCode: c.masterCode }); } catch (e) {
     throw statusError(`This change can't be stored as gate values (${(e as Error).message}). Nothing was saved.`, 409);
   }
   const diff = fileDifferences(want, rebuilt);

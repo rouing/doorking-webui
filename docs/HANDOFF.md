@@ -335,8 +335,10 @@ Snapshots: `BAK\ACCT0001_step25_before_dirdigits`, `BAK\ACCT0001_step26_4digit_c
 - **Transaction history** (`src/tx-history.ts`, table `tx_history`): pulls always ask for the whole buffer (zero
   marker). `mergeTransactions()` finds the longest run at the end of the saved history that equals the start of
   the pull and adds the rest, keeping each event's year from when it was first saved. No overlap while history
-  exists = `gap` (logged). The first read/pull imports the `rcv_out.bin` already on disk. The Transactions view
-  and camera runs read the history (`readTransactions()`); with no history they fall back to `rcv_out.bin`.
+  exists = `gap` (logged). The Transactions view and camera runs read only the history (`readTransactions()`); the
+  pulled `rcv_out.bin` isn't stored, only its time (`tx_pulls`, the view's "downloaded" time). Until 2026-11-13 the
+  last one was kept in `gate_files`; `migrateRcvOut` merged it at start (the live gate: 10,000 events, 0 new, 13,895
+  saved) and deleted it.
 - Event layout:
   | bytes | field |
   |------|-------|
@@ -552,7 +554,7 @@ The web UI calls gate routes through `gateApi(phone)` in `web/ui/api.ts` (`gapi(
 
 ### 4.2 Working-copy model (`gate-cache.ts` + `gate-state.ts`; files on disk until 2026-11-12)
 Per gate and file, rows in `gate_files` (data encrypted with `encryptBytes`):
-- `pulled` — the latest pull (also `rcv_out.bin`).
+- `pulled` — the latest residents pull (`rcv_out.bin` isn't kept since 2026-11-13; §3.6).
 - `base` — the files as pulled when the working copy was made (what the gate holds).
 - The **working copy is values** (phase 3, 2026-11-12): `gate_residents`, `gate_cards`, `gate_settings`,
   `gate_working` (digits, area-code layout and table, middle pointer, `base_ok`). `loadCopies` builds the working
@@ -574,10 +576,14 @@ Per gate and file, rows in `gate_files` (data encrypted with `encryptBytes`):
   names). Now: read-only settings are written back from their stored values (their encoders take every decoded
   value back, `? (...)` included); undecoded non-blank bytes before the directory are stored (`gate_working.extra`)
   and written back; a blank-named code is added as an empty slot (`addStoredEntry`); phone records are put at their
-  stored `record_offset`; the file sizes are stored (`gate_working.sizes`). The master code comes from
-  `managed_gates` in the rebuild (normal builds keep the base's bytes, so saves don't need the secret; the two agree
-  on the live gate). `checkPull` runs `checkRebuild` on every pull (`gate_state.rebuild_ok`, not locking): the live
-  gate rebuilds byte for byte. The base copy stays: sends upload only the blocks that differ from it.
+  stored `record_offset`; the file sizes are stored (`gate_working.sizes`). Every build (working copy, saves, sends,
+  the rebuild) writes the master code saved with the gate login (`managed_gates`), not the pulled bytes; a gate whose
+  file holds a different code shows block 0 as changed, and a send writes the saved code, as DoorKing32 always does.
+  Digit 0 is `00`: DoorKing32's send builders write character − `'0'` and its receive check (`FUN_0045b490`, firmware
+  byte below `0x50`; newer boards send `AAAA`) compares the same way; BITMAP's earlier `0A` had no source. No gate
+  with a 0 in its code has been pulled yet to confirm it. `checkPull` runs `checkRebuild` on every pull
+  (`gate_state.rebuild_ok`, not locking): the live gate rebuilds byte for byte. The base copy stays: sends upload only
+  the blocks that differ from it.
 
 Edit flow: `ensureCache` → `writeCacheFile` → `prepareSend`/`verifySend` (all async, `(store, phone, …)`). The server
 awaits `prepareGateSend` (duplicates, `prepareSend`, resident counts) before its synchronous busy check, so a send

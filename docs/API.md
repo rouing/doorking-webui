@@ -115,7 +115,7 @@ card numbers are 00001–65407.
 | POST | `/history/{id}/revert` | gate | | undoes that change in the working copy (and prefs); 409 if already reverted or a later change touched the same data |
 | GET | `/relays` | gate | | live relay state (DKS `GetRelays`): `{ checkedAt, relays }`, all 19 relays |
 | PUT | `/relays` | gate | `{ "<relay>": true\|false, … }` | **changes the gate now** (DKS `SetRelays`); `true` = Active (held open). Allowed: relays 0–2 except a Tracker command relay, plus 3–10 with Tracker 2 and 11–18 with Tracker 1 (400 otherwise) |
-| POST | `/delete-data` | gate | `{ confirm: true }` | **deletes everything stored about the gate**: its rows in every table keyed by phone (every user's gate-list entry, prefs, history, schedules, camera settings, snapshot log, notes, transaction history) and its `DOWNLOADED/<phone>/` folder: `{ removed: { <table>: rows }, filesError? }`. Nothing on the gate changes. 409 while a gate connection, snapshot run or scheduled transfer for the gate is running |
+| POST | `/delete-data` | gate | `{ confirm: true }` | **deletes everything stored about the gate**: its rows in every table keyed by phone (every user's gate-list entry, prefs, history, schedules, camera settings, snapshot log, notes, transaction history) and its `media/<phone>/` folder: `{ removed: { <table>: rows }, filesError? }`. Nothing on the gate changes. 409 while a gate connection, snapshot run or scheduled transfer for the gate is running |
 
 **Preferences** (`PUT /prefs`, any of these keys; they are kept in the local database, never sent to the gate):
 

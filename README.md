@@ -40,8 +40,8 @@ This README is the technical overview.
 11. [Security](#security)
 12. [Project layout](#project-layout)
 
-Installing, starting options (`--port`, `--public-host`, `--dir`, `--db`, `--logs`, the gate-match flags, `DKS_URL`), public HTTPS access and updating
-are in [`INSTALL.md`](docs/INSTALL.md).
+Installing, the server's settings (`config.json`, every setting listed in INSTALL §4; `config.example.json` has the
+defaults), public HTTPS access and updating are in [`INSTALL.md`](docs/INSTALL.md).
 
 ## Signing in and gate access
 ```
@@ -95,7 +95,7 @@ connection runs at a time across all gates. When a pull or send finishes, the da
 | **Anti-Pass Back** | Mode, In/Out relays (up to 10; 0-2, plus 3-10 / 11-18 with the Tracker boxes), facility counter, one-time re-sync, scheduled Re-Sync All. Applies only to cards in security levels 02-27; levels 01, 28, 29 and 30 are never limited by it. |
 | **History** | Every user's last sign-in; this gate's pulls, sends, relay changes, camera setting changes and working-copy changes, newest first. Click a change for a From/To table; **Revert** undoes it in the working copy (refused if a later change touched the same data). |
 | **Scheduled Transfers** | Entries the server runs on set days and times: send, pull residents, pull transactions, camera snapshots. Edit, Run now, Delete, Forget my saved password. See [Scheduled transfers](#scheduled-transfers). |
-| **System Settings** | **Gate configuration** (must match the gate; a new gate starts at 255 area codes, the default in the DoorKing 6.5 manual; also lists the working copy's area codes, where a 4-digit code is 1 + area code for long-distance dialing, and **Num of digits in dir code** (1-4), where decreasing wipes all resident data; **Show on the page**: switch off **Floors** to hide the Residents Floor column and field and the Security Levels Floors column, or **Elevators** to hide the Residents Elevator column and field and the Elevator Reference page; page only, the stored values are kept). **Gate settings** (master code read-only; talk time as m:ss, up to 4:14; outside line digit). **Working copy files** (download `names.bin`, `names.map`, `phone.bin`, `cards.bin`). **Tracker** (shows the Additional Relays boxes on the Relays page; page only). **Device association** (names for card-number ranges), **Gate cameras**, **Debug logs**, **Appearance** (dark mode), **Delete stored gate data** (after a warning, deletes every database row about the gate for every user, including its gate-list entries, and its `DOWNLOADED/<phone>/` folder; nothing on the gate changes). |
+| **System Settings** | **Gate configuration** (must match the gate; a new gate starts at 255 area codes, the default in the DoorKing 6.5 manual; also lists the working copy's area codes, where a 4-digit code is 1 + area code for long-distance dialing, and **Num of digits in dir code** (1-4), where decreasing wipes all resident data; **Show on the page**: switch off **Floors** to hide the Residents Floor column and field and the Security Levels Floors column, or **Elevators** to hide the Residents Elevator column and field and the Elevator Reference page; page only, the stored values are kept). **Gate settings** (master code read-only; talk time as m:ss, up to 4:14; outside line digit). **Working copy files** (download `names.bin`, `names.map`, `phone.bin`, `cards.bin`). **Tracker** (shows the Additional Relays boxes on the Relays page; page only). **Device association** (names for card-number ranges), **Gate cameras**, **Debug logs**, **Appearance** (dark mode), **Delete stored gate data** (after a warning, deletes every database row about the gate for every user, including its gate-list entries, and its `media/<phone>/` folder; nothing on the gate changes). |
 
 Hold Open, Holidays, Facility Codes, Elevator and Anti-Pass Back have **Save to working copy**, **Discard unsaved**
 and **Clear** (fills every setting on the page with its unset value as an unsaved edit; nothing changes until Save).
@@ -111,22 +111,23 @@ Settings live in one of five places, depending on what they belong to:
 | **Database, whole server** | Debug logs on/off (`meta` key `debugLogs`). | Everyone |
 | **This browser** (localStorage) | Remember user and the user name, dark mode, the Display page's layout choice. Never a password or master code. | That browser |
 
-Sessions (with the DKS password) are only in server memory. Command-line flags give gate-match defaults.
+Sessions (with the DKS password) are only in server memory. `config.json` (`gateDefaults`) gives gate-match
+defaults.
 
-**Encryption.** On first start the server creates `DB/key`: 32 random bytes as 64 hex digits (file mode 0600
-where the system supports it). Master codes, saved DKS passwords and recorder passwords are encrypted with
-AES-256-GCM using that key; everything else in the database is plain. Keep the database and `key` together: without
-the key the encrypted values can't be read, and anyone with both can read them. The database connection URL is in
-`DB/postgres.url` (or `DATABASE_URL`); tables and setup are in [DB.md](docs/DB.md).
+**Encryption.** On first start the server creates `doorking.key` next to `config.json` (`paths.keyFile`): 32 random
+bytes as 64 hex digits, mode 0600. Master codes, saved DKS passwords, recorder passwords and the stored gate files
+are encrypted with AES-256-GCM using that key; everything else in the database is plain. Keep the database and the
+key together: without the key the encrypted values can't be read, and anyone with both can read them. The database
+login is in `config.json` (`database`); tables and setup are in [DB.md](docs/DB.md). The server refuses to start
+while `config.json` or the key can be read by other users (Linux/macOS).
 
 | File | Contents | Share? |
 |---|---|---|
 | PostgreSQL database `doorking` | tables `gates`, `prefs`, `sign_ins`, `history` (per phone, with before/after resident data), `credentials`, `schedules`, `cameras`, `snapshots`, `notes`, `tx_history`, `meta` | **No** |
-| `DB/postgres.url`, `DB/pgpass` | the database login (URL for the app, `.pgpass` for `psql`) | **No** |
-| `DB/key` | AES-256-GCM key for the encrypted columns | **No**: with the database it decrypts master codes and passwords |
-| `DOWNLOADED/<phone>/` | `snapshots/` (camera pictures and videos). The board files are in the database (`gate_files`) | No: camera pictures |
+| `config.json` | the server's settings, including the database password (`config.example.json` is the committed template) | **No** |
+| `doorking.key` | AES-256-GCM key for the encrypted columns | **No**: with the database it decrypts master codes and passwords |
+| `media/<phone>/` | `snapshots/` (camera pictures and videos). The board files are in the database (`gate_files`) | No: camera pictures |
 | `logs/debug.log` | written only while Debug logs is on | No: holds phone numbers and recorder serials |
-| `gates.json`, `prefs.json`, `DOWNLOADED/sign-ins.json`, `DOWNLOADED/<phone>/history.jsonl` | pre-database files, imported once and no longer written | No |
 
 ## Scheduled transfers
 DoorKing32's Scheduled Transfers, reworked: each gate has its own list of entries instead of four shared
@@ -176,7 +177,8 @@ server ──spawns──> dahua-p2p bridge ──Dahua P2P cloud──> recorde
 - Recorder playback uses the **recorder's local time**. **Clock offset** (seconds) is added to the gate's
   transaction time to match the recorder's clock.
 - The bridge is bundled with its license in `tools/licenses/` (dahua-p2p MIT; also ffmpeg's GPLv3 texts, for
-  a local copy in `tools/bin/`); the bridge's Go source is in `tools/dahua-p2p/` (rebuild steps in `HANDOFF.md`).
+  a local copy in `tools/bin/`). The bridge binaries are built, unmodified, from upstream
+  [blackjid/dahua-p2p](https://github.com/blackjid/dahua-p2p) at commit `345f724` (rebuild steps in `HANDOFF.md`).
 
 ### Setting up
 **System Settings → Gate cameras** (shared by every account that manages the gate; the password is encrypted in
@@ -269,7 +271,7 @@ camera settings is recorded in History (never the password).
   live view" with **Try again**.
 
 ### Files
-`DOWNLOADED/<phone>/snapshots/<YYYYMMDD-HHMM>/` per transaction minute: `ch<N>-<SS>.jpg` (pictures),
+`media/<phone>/snapshots/<YYYYMMDD-HHMM>/` per transaction minute: `ch<N>-<SS>.jpg` (pictures),
 `ch<N>-a<SS>.jpg` (pictures from the next minute), `ch<N>.mp4` and its first frame `ch<N>.jpg` (videos);
 `snapshots/live/` holds the Test pictures. The database's `snapshots` table logs each minute's status, files,
 errors and tries.
@@ -355,12 +357,12 @@ and error codes are in [`API.md`](docs/API.md).
 node --test
 ```
 Suites: `board-files`, `gate-cache`, `relay-control`, `residents-edit`. Encodings are checked byte for byte
-against changes observed on the gate. The database tests use the `doorking_test` PostgreSQL database (or
-`TEST_DATABASE_URL`), one throwaway schema per test (see [DB.md](docs/DB.md)).
+against changes observed on the gate. The database tests use the `doorking_test` PostgreSQL database
+(`database.testName`, with `config.json`'s login; or `TEST_DATABASE_URL`), one throwaway schema per test (see [DB.md](docs/DB.md)).
 
 ## Security
 - The server binds to `127.0.0.1` and checks the `Host` and `Origin` headers. Public access goes through an HTTPS
-  reverse proxy (Caddy) and `--public-host <name>`: that host and `https://<name>` origins are accepted, and the
+  reverse proxy (Caddy) and `server.publicHost` (config.json): that host and `https://<name>` origins are accepted, and the
   `sid` cookie gets `Secure` there (INSTALL.md section 6a).
 - DKS Cloud is reached over **HTTPS** by default (`DEFAULT_URL` in `src/dks-cloud.ts`), so the DKS password and
   master codes are encrypted on the way. `DKS_URL` can override it.
@@ -368,7 +370,7 @@ against changes observed on the gate. The database tests use the `doorking_test`
   of that time without asking DKS Cloud, so a guessing script can't get the DKS account locked.
 - The DKS password is held in server memory for the session; idle sessions are removed every minute after 30
   minutes without use. It is written to disk only when the user saves a scheduled transfer, encrypted with
-  AES-256-GCM in the database; the key is `DB/key`, so anyone with the key and the database (or a dump of it) can
+  AES-256-GCM in the database; the key is `doorking.key`, so anyone with the key and the database (or a dump of it) can
   decrypt it. It is never logged. Pull/send logs mask credentials.
 - Request bodies must be JSON objects of at most 10,000 bytes (413 otherwise). Files are served only by name
   patterns (`cacheFilePath`, `snapshotFile`), so paths can't leave the gate's folder; gate, schedule and history
@@ -393,9 +395,11 @@ against changes observed on the gate. The database tests use the `doorking_test`
   cli.ts                 command-line tool
   package.json           npm scripts and packages (TypeScript, React, Vite, Radix Themes)
   tsconfig.json          type check settings for the server code (tsc, no output)
-  DB/                    database login (postgres.url, pgpass) + the encryption key (created on first start)
+  config.json            server settings incl. the database password (not in git; copy config.example.json)
+  doorking.key           the encryption key (created on first start; not in git)
   logs/                  debug.log (only while Debug logs is on)
   src/
+    config.ts            server settings: config.json + environment + flags, checked at startup
     types.ts             shapes shared by the server and the web page (types only)
     board-files.ts       parsers for names.bin / phone.bin / cards.bin / rcv_out.bin
     residents-edit.ts    resident/vendor edits on the board buffers (pure functions)
@@ -404,7 +408,7 @@ against changes observed on the gate. The database tests use the `doorking_test`
       gate-state.ts        plain gate tables decoded from each pull, and the round-trip check
     gate-pull.ts         DKS Cloud pull/send sessions, relay read/control
     dks-cloud.ts         DKS Cloud SOAP client
-    db.ts                PostgreSQL connection (pg), schema, query helpers, AES-256-GCM encryption, one-time JSON import
+    db.ts                PostgreSQL connection (pg), schema, query helpers, AES-256-GCM encryption
     gate-list.ts         per-user gate list (master codes encrypted), "connected" state
     prefs.ts             gate-scoped preferences, Device Association
     notes.ts             resident/vendor notes (database only, not on the gate)
@@ -427,9 +431,9 @@ against changes observed on the gate. The database tests use the `doorking_test`
     dist/                build output of ui/ (npm run build), served at /
   test/                  node --test suites
   tools/                 bin/ (Windows: dahua-p2p-x64.exe, dahua-p2p-arm64.exe; Linux: dahua-p2p-linux-<x64|arm64>;
-                         optionally ffmpeg.exe / ffmpeg-linux-<x64|arm64>, not in git), dahua-p2p/ (bridge
-                         source), licenses/ (keep with the binaries)
-  DOWNLOADED/<phone>/    per-gate camera pictures and videos (snapshots/)
+                         optionally ffmpeg.exe / ffmpeg-linux-<x64|arm64>, not in git), licenses/ (keep with
+                         the binaries)
+  media/<phone>/         per-gate camera pictures and videos (snapshots/)
   research/              reference material (local only, not in git: DoorKing's copyrighted files): decompiled
                          DoorKing32 (DoorKing32.exe.c / .h), the 1835 manual PDF
 ```

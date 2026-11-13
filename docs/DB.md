@@ -9,17 +9,20 @@ code and file were removed.)
 
 | File | Contents | Back up | Share |
 |---|---|---|---|
-| `DB/postgres.url` | the connection URL, `postgres://<user>:<password>@<host>:5432/<database>` (mode 0600). `DATABASE_URL` overrides it | yes | **never** |
-| `DB/pgpass` | the same login in `.pgpass` format, for `psql` (not used by the app) | no | **never** |
-| `DB/key` | the encryption key: 32 random bytes as 64 hex digits, created on first start (file mode 0600 where the system supports it) | yes, **with** the database | **never** |
-| `DOWNLOADED/<phone>/` | not the database: camera pictures and videos (`snapshots/`) | yes | no |
+| `config.json` | the server's settings; `database` holds the login (host, port, name, user, password, or a full `url`). `DATABASE_URL` overrides it. Mode 0600 | yes | **never** |
+| `doorking.key` | the encryption key (`paths.keyFile`, by default next to `config.json`): 32 random bytes as 64 hex digits, created on first start, mode 0600 | yes, **with** the database | **never** |
+| `~/.pgpass` | the same login for `psql`, `pg_dump`, `pg_restore` (not used by the app) | no | **never** |
+| `media/<phone>/` | not the database: camera pictures and videos (`snapshots/`) | yes | no |
 | `logs/debug.log` | not the database: the debug log, written only while Debug logs is on | no | no |
 
-- The folder is `DB` by default; `--db <folder>` uses another one. The server creates the folder, the key and
-  the tables on first start. It doesn't start (exit 1, "Database not available") when the database can't be reached.
-- **Keep the database and `key` together.** Without the key the encrypted values (master codes, passwords) can't be
-  read; with both, anyone can read them. `DB/` is in `.gitignore`.
-- Backups: `pg_dump` of the database plus a copy of `key` (not set up yet).
+- The server creates the key and the tables on first start. It doesn't start (exit 1) when `config.json` is wrong
+  ("Configuration error"), when it or the key can be read by other users, or when the database can't be reached
+  ("Database not available"). Settings are read by `loadConfig` in `src/config.ts` (see INSTALL.md §4).
+- **Keep the database and the key together.** Without the key the encrypted values (master codes, passwords, gate
+  files) can't be read; with both, anyone can read them. `config.json` and `doorking.key` are in `.gitignore`.
+- Until 2026-11-13 the login and key were in a `DB/` folder (`DB/postgres.url`, `DB/pgpass`, `DB/key`); the key was
+  moved to `doorking.key` unchanged and the login into `config.json`.
+- Backups: `pg_dump` of the database plus a copy of the key (not set up yet).
 
 ### The PostgreSQL server (set up 2026-11-12)
 
@@ -27,7 +30,7 @@ The machine's own PostgreSQL 18 cluster (`/var/lib/postgresql/18/main`, listenin
 only, SCRAM passwords) has:
 - role **`doorking`** (login; not superuser, can't create databases or roles) owning database **`doorking`** (the
   app's) and **`doorking_test`** (for `npm test`). `PUBLIC` has no access to either database or its `public` schema.
-- To open a shell: `PGPASSFILE=DB/pgpass psql -h 127.0.0.1 -U doorking doorking`. Administration:
+- To open a shell: `psql -h 127.0.0.1 -U doorking doorking` (password from `~/.pgpass`). Administration:
   `sudo -u postgres psql`.
 - A new install creates the role and database the same way (see [INSTALL.md](INSTALL.md)).
 
@@ -35,8 +38,8 @@ The Docker container `local-build-postgres-1` on the same machine belongs to ano
 
 ### Tests
 
-`npm test` uses `TEST_DATABASE_URL`, else the URL in `DB/postgres.url` with the database name changed to
-`doorking_test`. Each test creates its own schema (`t_<random>`) and drops it afterwards, so tests never touch the
+`npm test` uses `TEST_DATABASE_URL`, else `config.json`'s login with database `database.testName`
+(`doorking_test`). Each test creates its own schema (`t_<random>`) and drops it afterwards, so tests never touch the
 app's data and can run while the server runs.
 
 ## Encryption
@@ -59,7 +62,7 @@ case-insensitively). Times are `TIMESTAMPTZ`; the app reads and writes them as I
 | `value` | TEXT | value |
 
 Keys: `debugLogs` (`1` = Debug logs on, `0` = off), `jsonImported` (time the pre-database JSON files were
-imported), `gatesVerifiedBackfill` (time gates were marked connected from history, once).
+imported; the import code was removed 2026-11-13), `gatesVerifiedBackfill` (time gates were marked connected from history, once).
 
 ### `gates`: each user's gate list (`src/gate-list.ts`)
 
@@ -239,7 +242,7 @@ from the pull when the directory rebuilt exactly, as edits do.
 **System Settings → Delete stored gate data** (`POST /api/gates/{phone}/delete-data`) runs `deleteGateData` in
 `src/gate-list.ts`: in one transaction it deletes the gate's rows from `gates` (every user), `prefs`, `history`,
 `schedules`, `cameras`, `snapshots`, `notes`, `tx_history`, `gate_files`, `gate_residents`, `gate_cards`,
-`gate_settings` and `gate_state`. The server then deletes `DOWNLOADED/<phone>/` (camera pictures).
+`gate_settings` and `gate_state`. The server then deletes `media/<phone>/` (camera pictures).
 `meta`, `sign_ins` and `credentials` are not about one gate and are kept.
 
 ## Schema changes
@@ -247,17 +250,10 @@ from the pull when the directory rebuilt exactly, as edits do.
 `openStore` creates missing tables and indexes with `CREATE … IF NOT EXISTS` on every start. A new column needs an
 `ALTER TABLE … ADD COLUMN IF NOT EXISTS` there too, so existing databases update themselves. Nothing is ever dropped.
 
-## One-time import
-
-On the first start with a new database, `importJson` imports the files used before the database existed, if they
-are there: `gates.json`, `prefs.json`, `DOWNLOADED/sign-ins.json` and every `DOWNLOADED/<phone>/history.jsonl`.
-It then sets `meta.jsonImported` and never runs again. The files are left in place; delete them once the import is
-checked (`gates.json` holds master codes in plain text).
-
 ## Looking inside
 
 With `psql` (safe while the server runs), from the project root:
 ```
-PGPASSFILE=DB/pgpass psql -h 127.0.0.1 -U doorking doorking -c "SELECT phone, COUNT(*) FROM tx_history GROUP BY phone"
+psql -h 127.0.0.1 -U doorking doorking -c "SELECT phone, COUNT(*) FROM tx_history GROUP BY phone"
 ```
-Encrypted columns can only be read with `key` (`decrypt` in `src/db.ts`); don't print them.
+Encrypted columns can only be read with the key (`decrypt` in `src/db.ts`); don't print them.

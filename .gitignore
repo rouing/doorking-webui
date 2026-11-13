@@ -1,4 +1,6 @@
-# Database login (postgres.url, pgpass) and the encryption key for master codes and saved passwords
+# Server settings (database password) and the encryption key for master codes and saved passwords
+config.json
+doorking.key
 DB/
 postgres.url
 pgpass
@@ -9,13 +11,13 @@ pgpass
 # Debug logs: gate phone numbers, recorder serials, error details
 logs/
 
-# Gate list: DKS users and master codes in plain text (imported into DB/ on first start)
+# Pre-database JSON files, if still around: DKS users and master codes in plain text, site configuration
 gates.json
-
-# Gate-scoped preferences: real site configuration
 prefs.json
 
-# Pulled gate data and working copies: resident names, phones, entry codes, cards, transactions
+# Camera pictures and videos; board files the CLI pulls (resident data, master code)
+media/
+pulls/
 DOWNLOADED/
 
 # DoorKing desktop app data, if copied in again

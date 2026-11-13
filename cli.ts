@@ -18,13 +18,14 @@ DKS Cloud (read-only; credentials from DKS_USER / DKS_PASSWORD, URL from DKS_URL
   cloud-login                       Check the login
   cloud-status <sessionId>          Show a session's status
   cloud-download <sessionId> <rcv_out.bin|names.bin|phone.bin|cards.bin>   Save a session file
-  cloud-pull <transactions|residents> [--dir DOWNLOADED] [--phone <sys phone>] [--site-name <tag>]
+  cloud-pull <transactions|residents> [--dir pulls] [--phone <sys phone>] [--site-name <tag>]
              [--memory 1000|2000|3000] [--area-codes 255|10] [--model 1834] [--marker <24 hex>]
              [--anti-passback Y|N] [--interface-1816 Y|N] [--dry-run]
                                     Start a session, read from the gate, download the files
                                     (master code from DKS_MASTER_CODE, system phone from --phone or DKS_PHONE)
 
-Web UI and REST API: node web/server.ts [--port 8080] [--dir DOWNLOADED] [--db DB]
+Web UI and REST API: node web/server.ts [--config config.json] [--check-config] [--port 8080] [--public-host <name>]
+                           [--media media] [--logs logs]
                            [--site-name <tag>] [--memory 1000|2000|3000] [--area-codes "255 Area Codes"|"10 Area Codes"]
                            [--anti-passback Y|N] [--interface-1816 Y|N] [--model 1834]   (see README.md)`;
 
@@ -120,7 +121,7 @@ const COMMANDS: Record<string, (positional: string[], args: string[]) => void | 
     if (!masterCode) throw new Error('Set DKS_MASTER_CODE (the account/master code)');
     const phoneNumber = opt('--phone', process.env.DKS_PHONE);
     if (!phoneNumber) throw new Error('Pass --phone <system phone> or set DKS_PHONE');
-    const dir = opt('--dir', 'DOWNLOADED')!;
+    const dir = opt('--dir', 'pulls')!;
     const request = dk.buildSessionRequest(what, {
       user,
       password,

@@ -53,7 +53,7 @@ Working, tested end-to-end against live gate pulls:
   info/edit/remove, own job, pull) work, and `gate-setup` routes (prefs) work while no account has connected
   to the gate (`gateClaimed`). `backfillGateVerified()` (once, `meta.gatesVerifiedBackfill`) marks older
   entries from successful pull/send history events.
-- **Pull residents** and **Pull transactions** (read from the gate into `DOWNLOADED/<gate phone>/`).
+- **Pull residents** and **Pull transactions** (read from the gate into the database).
 - **Live Relay Control** — red/green buttons for relays 0–2 (`GetRelays`/`SetRelays`); holds the gate
   open / releases, immediately, with confirm. Lives on the **Relays** page. State is read
   automatically once when the app opens (login or reload while logged in); **Refresh** re-reads it.
@@ -84,10 +84,10 @@ Working, tested end-to-end against live gate pulls:
   the server unattended with the saving user's encrypted DKS password. Reworks DoorKing32's Scheduled Transfers
   (4 shared schedules A–D, run only while the app is open). Details in `README.md` → Scheduled transfers.
 - **Database** (added 2026-10-16 as SQLite `DB/data.db`; **PostgreSQL since 2026-11-12**, see §9): PostgreSQL
-  (connection in `DB/postgres.url` or `DATABASE_URL`) + `DB/key` (AES-256-GCM) holds gate lists, prefs,
-  sign-ins, history, saved passwords, schedules, camera settings, snapshot log, notes and transaction history. On first start it imports
-  `gates.json`, `prefs.json`, `DOWNLOADED/sign-ins.json` and `DOWNLOADED/<phone>/history.jsonl` once
-  (`importJson`, flag `meta.jsonImported`); those files are left in place and no longer written.
+  (login in `config.json`'s `database` section since 2026-11-13, see §9) + `doorking.key` (AES-256-GCM) holds gate
+  lists, prefs, sign-ins, history, saved passwords, schedules, camera settings, snapshot log, notes, transaction
+  history and gate files. (The one-time import of the pre-database JSON files, `importJson`, ran 2026-10-16 and
+  was removed 2026-11-13.)
 - **Added 2026-10-21 (built and tested; not yet clicked through against the live gate):**
   - **Duplicate checks:** `findDuplicates()` (`residents-edit.ts`) finds directory codes, entry codes and cards
     used by more than one entry. `GET G/residents` returns them (`duplicates`); Residents/Vendors show a red
@@ -105,7 +105,7 @@ Working, tested end-to-end against live gate pulls:
     against the gate.
   - **Delete stored gate data:** red button at the bottom of System Settings → `POST G/delete-data`
     `{ confirm: true }` → `deleteGateData()` (`gate-list.ts`): every user's gate-list entry, all DB rows keyed by
-    the phone, and `DOWNLOADED/<phone>/` (pulls, working copy, pictures). Nothing on the gate changes. Refused
+    the phone, and `media/<phone>/` (camera pictures). Nothing on the gate changes. Refused
     while a gate connection, snapshot run or scheduled transfer for that gate is running.
   - **User guide:** `MANUAL.md` rewritten for everyday users (no file paths/APIs), served at public `GET /help`
     by `src/markdown.ts` (small Markdown subset; all text HTML-escaped; only `#…` and http(s) links). Linked from
@@ -346,7 +346,8 @@ Snapshots: `BAK\ACCT0001_step25_before_dirdigits`, `BAK\ACCT0001_step26_4digit_c
   docs/               INSTALL, MANUAL (served at /help), API, DB, BITMAP, HANDOFF (.md)
   index.ts            re-exports every src/ module as one `dk` object
   cli.ts              command-line entry (archive/parse utilities)
-  DB/                 postgres.url + pgpass (database login) + key (AES-256-GCM)  <-- never commit or share
+  config.json         server settings incl. database password (template config.example.json)  <-- never commit
+  doorking.key        AES-256-GCM key, next to config.json  <-- never commit or share
   src/
     board-files.ts    parse names/phone/cards/rcv_out .bin  (+ all names.bin regions)
     residents-edit.ts  WRITE path: applyResidentEdit / deleteResident / removeDirectoryCode / addEntry / emptySlots
@@ -356,7 +357,8 @@ Snapshots: `BAK\ACCT0001_step25_before_dirdigits`, `BAK\ACCT0001_step26_4digit_c
     gate-pull.ts      buildSessionRequest, pullFromGate, pushToGate, controlRelays, checkRelays
     dks-cloud.ts      SOAP client (CheckLogin, GetRelays, SetRelays, SendResidentData,
                       ReceiveResidentData, StartSessionSeries30)
-    db.ts             openStore(dir) -> Store { dir, db, key }, encrypt/decrypt, importJson (one-time JSON import)
+    config.ts         loadConfig (config.json < env < flags, validated), connectionSettings, maskedConfig
+    db.ts             openStore({ connection, keyFile, schema?, poolSize? }) -> Store { db, key }, encrypt/decrypt
     prefs.ts          phone-keyed prefs (getPrefs/setPrefs(store, phone, ...))
     notes.ts          resident/vendor notes per gate + directory code without leading zeros (getNotes/getNote/setNote, noteKey)
     tx-history.ts     transaction history (mergeTransactions/readTransactions/txHistoryCount), table tx_history
@@ -400,7 +402,7 @@ Snapshots: `BAK\ACCT0001_step25_before_dirdigits`, `BAK\ACCT0001_step26_4digit_c
       camera/         snapshots.ts (useSnapshots: log, run polling, refresh), SnapViews.tsx (SnapCell,
                       SnapViewer), LiveView.tsx (top-right camera button + MJPEG window)
   test/               node --test suites (board-files, gate-cache, relay-control, residents-edit)
-  DOWNLOADED/         per-gate data (pulled files, working copy, camera pictures)  <-- private
+  media/              per-gate camera pictures and videos (DOWNLOADED/ until 2026-11-13)  <-- private
   research/           DoorKing32.exe.c / .h (decompiled desktop app), the 1835 manual PDF
   tools/              bundled camera tooling, run by src/cameras.ts
     bin/              picked by process.platform + process.arch (bridgeExe/ffmpegExe):
@@ -409,7 +411,6 @@ Snapshots: `BAK\ACCT0001_step25_before_dirdigits`, `BAK\ACCT0001_step26_4digit_c
                       Linux: dahua-p2p-linux-x64, dahua-p2p-linux-arm64, ffmpeg-linux-x64, ffmpeg-linux-arm64
                       (BtbN n9.0 gpl builds; need glibc, not Alpine/musl). The execute bit is added at first use
                       when missing.
-    dahua-p2p/        Go source of the P2P bridge (MIT, commit 345f724)
     licenses/         dahua-p2p (MIT) and ffmpeg (GPLv3) license files (ffmpeg-linux-LICENSE.txt for the Linux
                       builds); keep them with the binaries
 ```
@@ -430,7 +431,7 @@ GET    G                            one gate
 PUT    G                            { masterCode }
 DELETE G                            remove from the list (files, prefs, history and schedules are kept)
 POST   G/delete-data                { confirm: true }  delete everything stored about the gate (all users' lists, DB rows,
-                                    DOWNLOADED/<phone>/); 409 while a job/snapshot run/schedule for it runs
+                                    media/<phone>/); 409 while a job/snapshot run/schedule for it runs
 GET    G/job                        this gate's pull/send job; another gate's job shows idle + busyElsewhere
 POST   G/pull                       { what: 'residents' | 'transactions' }  202 (gate config read from prefs)
 GET    G/send                       send preview: changed blocks + resident counts
@@ -580,24 +581,23 @@ kept and the user must **Reset to gate** to start from the new pull.
     Radix dialogs add; scripts stay `'self'` only.
 - Start the server (from the project root):
   ```
-  node web/server.ts --port 8080 --dir DOWNLOADED
+  node web/server.ts
   ```
-  - `--dir DOWNLOADED` is the root data directory, with one folder per gate (digits of the system
-    phone), now only for camera pictures (`snapshots/`); pulls and the working copy are in `gate_files`. The test
-    gate's (ending 0630) earlier files were moved there on 2026-10-14. Open `http://localhost:8080`.
-  - Without `--dir`, the default is `DOWNLOADED` in the project root (resolved from `server.ts`'s location, like
-    `--db`), so the working directory doesn't matter. A `--dir` value given on the command line is still
-    resolved against the working directory.
+  - Settings come from `config.json` (`src/config.ts`; INSTALL.md §4 lists them; `--check-config` prints them).
+    `paths.media` (default `media/` next to `config.json`) holds one folder per gate (digits of the system phone),
+    only for camera pictures (`snapshots/`); pulls and the working copy are in the database. Open
+    `http://localhost:8080`.
+  - 2026-11-13: `DB/` (postgres.url, pgpass, key) was replaced by `config.json` + `doorking.key`, `DOWNLOADED/`
+    renamed `media/`, and `--dir`, `--db`, `--prefs`, `--gates` and `importJson` removed. psql uses `~/.pgpass`.
   - Historically the server was pointed at the desktop app's folder
     `C:\Users\Public\Documents\DoorKing\DoorKing Account Manager\ACCT0001` for decode comparisons —
-    **we moved off that** on 2026-10-13; use the project's own `DOWNLOADED` now. Don't run the web app
+    **we moved off that** on 2026-10-13. Don't run the web app
     and the desktop app against the same folder simultaneously.
-- `--public-host <name>` (or `PUBLIC_HOST`, added 2026-11-12): the name an HTTPS reverse proxy serves; adds it to
+- `server.publicHost` (or `--public-host` / `PUBLIC_HOST`, added 2026-11-12): the name an HTTPS reverse proxy serves; adds it to
   `ALLOWED_HOSTS`, `https://<name>` to `ALLOWED_ORIGINS`, and `Secure` to the `sid` cookie for requests with that
   Host (`cookieAttrs`). The server still binds `127.0.0.1` only.
-- Other server flags: `--db <folder>` (default `DB`), `--logs <folder>` (default `logs`), `--prefs <file>` / `--gates <file>` (JSON import
-  sources, read once) and gate-match defaults `--site-name`, `--memory`,
-  `--area-codes`, `--anti-passback`, `--interface-1816`, `--model`. The earlier sessions always started
+- Flags that still override `config.json`: `--config`, `--port`, `--public-host`, `--media`, `--logs` and the
+  gate-match defaults `--site-name`, `--memory`, `--area-codes`, `--anti-passback`, `--interface-1816`, `--model`. The earlier sessions always started
   the server with `--anti-passback Y`. The command above omits it, which is how the default `'N'` leaked
   into pulls (see §6).
 - Sign-in sessions are in memory, so **restarting the server signs everyone out**. After code changes,
@@ -607,9 +607,12 @@ kept and the user must **Reset to gate** to start from the new pull.
   `directory`, `rcvout`, `transactions`) and `cloud-*` commands that read credentials from the
   `DKS_USER` / `DKS_PASSWORD` / `DKS_URL` environment variables.
 - Tests: `node --test` (from the project root).
-- Rebuild the bridge (needs Go), from `tools/dahua-p2p`: set `GOOS=windows`, `CGO_ENABLED=0`, `GOARCH=amd64`
-  or `arm64`, then `go build -trimpath -ldflags "-s -w" -o ..\bin\dahua-p2p-<x64|arm64>.exe ./cmd/dahua-p2p`.
-  For Linux set `GOOS=linux` and use `-o ../bin/dahua-p2p-linux-<x64|arm64>`.
+- Rebuild the bridge (needs Go): the binaries are upstream `github.com/blackjid/dahua-p2p` at commit `345f724`,
+  unmodified (verified 2026-11-13; the vendored copy in `tools/dahua-p2p/` differed only in line endings and was
+  removed). `git clone https://github.com/blackjid/dahua-p2p && cd dahua-p2p && git checkout 345f724`, set
+  `GOOS=windows`, `CGO_ENABLED=0`, `GOARCH=amd64` or `arm64`, then
+  `go build -trimpath -ldflags "-s -w" -o <root>\tools\bin\dahua-p2p-<x64|arm64>.exe ./cmd/dahua-p2p`.
+  For Linux set `GOOS=linux` and use `-o <root>/tools/bin/dahua-p2p-linux-<x64|arm64>`.
 - Linux ffmpeg: `ffmpeg-n9.0-latest-<linux64|linuxarm64>-gpl-9.0.tar.xz` from
   github.com/BtbN/FFmpeg-Builds releases; copy `bin/ffmpeg` to `tools/bin/ffmpeg-linux-<x64|arm64>`.
 - Verified 2026-10-19 under WSL Ubuntu (arm64, Node 22): the arm64 Linux binaries start and the test suite
@@ -834,15 +837,15 @@ byte, not only the one expected.
 - **Relay control and Send physically change the gate.** Relay "hold open" leaves the gate open until
   released. Keep the confirm dialogs.
 - Login convenience stores only the user name in the browser — **never** the password or master code.
-- `DB/` holds master codes and saved DKS passwords, encrypted, with the key file next to them (user's
-  choice, 2026-10-16): anyone who copies the folder can decrypt them. Local only, never commit or share
+- The database holds master codes and saved DKS passwords, encrypted; `doorking.key` sits next to `config.json`
+  (user's choice, 2026-10-16 and 2026-11-13): anyone with both the key and the database can decrypt them. Local only, never commit or share
   (git-ignored). `GET /api/gates` never returns master codes; no route returns saved passwords.
 - The pre-database files (`gates.json` with plain-text master codes, `prefs.json`, `DOWNLOADED/sign-ins.json`,
   `DOWNLOADED/<phone>/history.jsonl`) were checked against the database and deleted on 2026-10-21.
 - Scheduled entries with **Send** change the gate without a confirm at run time; the UI confirms on save.
 - Test credentials used during development were to be destroyed post-testing; don't commit secrets.
-- Prefs (`DB/`, formerly `prefs.json`) may contain gate config for real sites — treat as local, don't publish.
-- **Files in the project that contain secrets:** `DB/` (encrypted master codes/passwords + key). The conversation exports
+- Prefs (database, formerly `prefs.json`) may contain gate config for real sites — treat as local, don't publish.
+- **Files in the project that contain secrets:** `config.json` (database password) and `doorking.key`. The conversation exports
   and `export/ACCOUNT.txt`, which held the test DKS login and the gate master code, were deleted on
   2026-10-16. The old machine also had a user-level `DKS_PASSWORD` environment variable set for the CLI.
   Rotate the test credentials as planned and clear that variable.
@@ -889,6 +892,11 @@ byte, not only the one expected.
     encrypted value decrypts: meta 2, gates 1, prefs 1, sign_ins 1, history 89, credentials 1, schedules 1,
     cameras 1, snapshots 346, notes 0, tx_history 13833. The old `DB/data.db` files were deleted the same day
     (user's choice). No PostgreSQL backups yet (user: not now), so PostgreSQL holds the only copy of this data.
+- **Config file, 2026-11-13:** `config.json` (gitignored, mode 0600; template `config.example.json`) holds every
+  server setting including the database password; `doorking.key` (the old `DB/key`, byte for byte) sits next to it.
+  `loadConfig` (`src/config.ts`) refuses unknown names, wrong values and files other users can read. `DB/` was
+  deleted after checking that every encrypted value decrypts with the moved key; its `pgpass` became `~/.pgpass`.
+  `DOWNLOADED/` became `media/`. The systemd unit no longer passes `--public-host` (it's `server.publicHost`).
 
 ---
 

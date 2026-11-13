@@ -1,13 +1,14 @@
-// Database: PostgreSQL through the pg driver. One folder, by default DB/ in the project, holds the connection URL
-// (postgres.url, unless DATABASE_URL is set) and the encryption key (key, created on first use). The database holds
-// the gate lists, gate-scoped prefs, sign-ins, history, saved DKS passwords, scheduled transfers, camera settings,
-// the snapshot log, resident/vendor notes and the transaction history. Master codes and passwords are encrypted
-// with AES-256-GCM using the key; anyone with the key and the database can decrypt them, so the folder must stay
-// local and never be committed.
+// Database: PostgreSQL through the pg driver, connected as config.json says (config.ts), with the encryption key in
+// its own file (paths.keyFile, created on first use). The database holds the gate lists, gate-scoped prefs,
+// sign-ins, history, saved DKS passwords, scheduled transfers, camera settings, the snapshot log, resident/vendor
+// notes, the transaction history and the gate files. Master codes, passwords and the gate files are encrypted with
+// AES-256-GCM using the key; anyone with the key and the database can decrypt them, so the key file must stay
+// private and never be committed.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import pg from 'pg';
+import { checkPrivate } from './config.ts';
 
 // Timestamps come back as ISO strings (as stored before), bigints (COUNT, identities) as numbers.
 const parseTimestamptz = pg.types.getTypeParser(pg.types.builtins.TIMESTAMPTZ);
@@ -16,7 +17,7 @@ pg.types.setTypeParser(pg.types.builtins.INT8, (v: string) => Number(v));
 
 export interface Queryable { query(text: string, values?: unknown[]): Promise<pg.QueryResult> }
 // db: the pool, or inside transaction() the transaction's client.
-export interface Store { dir: string; pool: pg.Pool; db: Queryable; key: Buffer; schema: string }
+export interface Store { id: string; pool: pg.Pool; db: Queryable; key: Buffer; schema: string }
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -62,32 +63,30 @@ ALTER TABLE gate_working ADD COLUMN IF NOT EXISTS area_codes JSONB NOT NULL DEFA
 ALTER TABLE gate_working ADD COLUMN IF NOT EXISTS middle_pointer TEXT NOT NULL DEFAULT 'ffffff';
 `;
 
-const URL_FILE = 'postgres.url';
-const KEY_FILE = 'key';
-const stores = new Map<string, Promise<Store>>(); // folder + schema -> store
+const stores = new Map<string, Promise<Store>>(); // key file + connection + schema -> store
 
-function readKey(dir: string): Buffer {
-  const file = path.join(dir, KEY_FILE);
-  if (!fs.existsSync(file)) fs.writeFileSync(file, crypto.randomBytes(32).toString('hex'), { mode: 0o600, flag: 'wx' });
+// The key from keyFile (64 hex digits), created when missing.
+function readKey(file: string): Buffer {
+  if (!fs.existsSync(file)) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, crypto.randomBytes(32).toString('hex'), { mode: 0o600, flag: 'wx' });
+  }
+  checkPrivate(file);
   const key = Buffer.from(fs.readFileSync(file, 'utf8').trim(), 'hex');
   if (key.length !== 32) throw new Error(`${file} is not a valid key (64 hex digits)`);
   return key;
 }
 
-// The connection URL: url, else DATABASE_URL, else <dir>/postgres.url.
-function connectionUrl(dir: string, url?: string): string {
-  const file = path.join(dir, URL_FILE);
-  const u = url || process.env.DATABASE_URL || (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim() : '');
-  if (!u) throw new Error(`No database configured: put the PostgreSQL connection URL in ${file} or set DATABASE_URL`);
-  return u;
+export interface StoreOptions {
+  connection: pg.PoolConfig; // from connectionSettings (config.ts)
+  keyFile: string;
+  schema?: string; // a separate schema (tests use one per store)
+  poolSize?: number;
 }
 
-async function connect(d: string, url: string | undefined, schema: string): Promise<Store> {
-  const key = readKey(d);
-  const pool = new pg.Pool({
-    connectionString: connectionUrl(d, url), max: 5,
-    ...(schema !== 'public' && { options: `-c search_path=${schema}` }),
-  });
+async function connect(id: string, { connection, keyFile, schema = 'public', poolSize = 5 }: StoreOptions): Promise<Store> {
+  const key = readKey(keyFile);
+  const pool = new pg.Pool({ ...connection, max: poolSize, ...(schema !== 'public' && { options: `-c search_path=${schema}` }) });
   try {
     if (schema !== 'public') await pool.query(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
     await pool.query(SCHEMA);
@@ -95,18 +94,18 @@ async function connect(d: string, url: string | undefined, schema: string): Prom
     await pool.end().catch(() => {});
     throw e;
   }
-  return { dir: d, pool, db: pool, key, schema };
+  return { id, pool, db: pool, key, schema };
 }
 
-// Opens the database configured in `dir` (creating the key and the tables when missing). The same folder and
-// schema always return the same store. schema: a separate schema (tests use one per store).
-export function openStore(dir: string, { url, schema = 'public' }: { url?: string; schema?: string } = {}): Promise<Store> {
+// Opens the database (creating the key and the tables when missing). The same key file, connection and schema
+// always return the same store.
+export function openStore(opts: StoreOptions): Promise<Store> {
+  const schema = opts.schema || 'public';
   if (!/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error(`Invalid schema name ${schema}`);
-  const d = path.resolve(dir);
-  const id = `${d}|${schema}`;
+  const keyFile = path.resolve(opts.keyFile);
+  const id = `${keyFile}|${JSON.stringify(opts.connection)}|${schema}`;
   if (!stores.has(id)) {
-    fs.mkdirSync(d, { recursive: true });
-    const p = connect(d, url, schema);
+    const p = connect(id, { ...opts, keyFile, schema });
     p.catch(() => stores.delete(id));
     stores.set(id, p);
   }
@@ -114,7 +113,7 @@ export function openStore(dir: string, { url, schema = 'public' }: { url?: strin
 }
 
 export async function closeStore(store: Store): Promise<void> {
-  stores.delete(`${store.dir}|${store.schema}`);
+  stores.delete(store.id);
   await store.pool.end();
 }
 
@@ -186,59 +185,4 @@ export async function getMeta(store: Store, key: string): Promise<string | null>
 export async function setMeta(store: Store, key: string, value: unknown): Promise<void> {
   await run(store, 'INSERT INTO meta (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = excluded.value',
     [key, String(value)]);
-}
-
-const readJsonFile = (file: string): any => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
-
-export interface ImportCounts { gates: number; prefs: number; signIns: number; history: number }
-
-// One-time import of the JSON files used before the database: gates.json, prefs.json, <root>/sign-ins.json
-// and <root>/<phone>/history.jsonl. Returns the counts, or null when the import already ran.
-// The JSON files are left in place.
-export async function importJson(
-  store: Store,
-  { gatesFile, prefsFile, root }: { gatesFile?: string; prefsFile?: string; root?: string } = {},
-): Promise<ImportCounts | null> {
-  if (await getMeta(store, 'jsonImported')) return null;
-  const counts: ImportCounts = { gates: 0, prefs: 0, signIns: 0, history: 0 };
-  const now = new Date().toISOString();
-  await transaction(store, async (tx) => {
-    for (const [user, list] of Object.entries((gatesFile && readJsonFile(gatesFile)) || {})) {
-      for (const g of Array.isArray(list) ? list : []) {
-        if (!g || !g.phoneNumber || !g.masterCode) continue;
-        await run(tx, `INSERT INTO gates (username, phone, master_code, added_at) VALUES ($1, $2, $3, $4)
-          ON CONFLICT (username, phone) DO UPDATE SET master_code = excluded.master_code, added_at = excluded.added_at`,
-        [String(user).trim().toLowerCase(), String(g.phoneNumber), encrypt(tx, g.masterCode), g.addedAt || now]);
-        counts.gates++;
-      }
-    }
-    for (const [phone, prefs] of Object.entries((prefsFile && readJsonFile(prefsFile)) || {})) {
-      await run(tx, 'INSERT INTO prefs (phone, data) VALUES ($1, $2) ON CONFLICT (phone) DO UPDATE SET data = excluded.data',
-        [phone, JSON.stringify(prefs || {})]);
-      counts.prefs++;
-    }
-    if (root && fs.existsSync(root)) {
-      const signIns: Record<string, { last?: string; count?: number }> = readJsonFile(path.join(root, 'sign-ins.json')) || {};
-      for (const [user, v] of Object.entries(signIns)) {
-        await run(tx, `INSERT INTO sign_ins (username, last, count) VALUES ($1, $2, $3)
-          ON CONFLICT (username) DO UPDATE SET last = excluded.last, count = excluded.count`,
-        [user, String(v.last || now), Number(v.count) || 0]);
-        counts.signIns++;
-      }
-      for (const phone of fs.readdirSync(root).filter((n) => /^\d+$/.test(n))) {
-        const file = path.join(root, phone, 'history.jsonl');
-        if (!fs.existsSync(file)) continue;
-        for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-          let e: { id?: string } | null;
-          try { e = JSON.parse(line); } catch { continue; } // blank or damaged line
-          if (!e || !e.id) continue;
-          await run(tx, 'INSERT INTO history (id, phone, data) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING',
-            [e.id, phone, JSON.stringify(e)]);
-          counts.history++;
-        }
-      }
-    }
-    await setMeta(tx, 'jsonImported', now);
-  });
-  return counts;
 }

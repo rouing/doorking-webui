@@ -22,23 +22,28 @@ Check Node with `node --version` (it must print `v24` or later).
 Clone the repository (`git clone <repository URL> doorkings`) or copy the project folder to the machine. The
 layout is:
 ```
-<root>/          the app: package.json, web/, src/, docs/, tools/, …
-  DOWNLOADED/    camera pictures per gate (everything else is in the database)
-  research/      reference material only (not needed to run the app)
+<root>/            the app: package.json, web/, src/, docs/, tools/, …
+  config.json      the server's settings, including the database password (section 2a; not in git)
+  doorking.key     the encryption key (created on the first start; not in git)
+  media/           camera pictures per gate (everything else is in the database)
+  research/        reference material only (not needed to run the app)
 ```
-When copying, leave out `node_modules/`, `web/dist/`, `DB/`, `logs/` and `DOWNLOADED/` (they are created on the
-machine); `research/` is optional and not in the git repository. Keep `tools/` (camera bridge and licenses) if you
-use cameras. `.gitignore` keeps all of these, and the secrets in `DB/`, out of git.
+When copying, leave out `node_modules/`, `web/dist/`, `logs/` and `media/` (they are created on the machine);
+`research/` is optional and not in the git repository. Keep `tools/` (camera bridge and licenses) if you use
+cameras. `.gitignore` keeps all of these, `config.json` and `doorking.key` out of git.
 
 This guide runs every command from `<root>`.
 
 **Moving an existing install** instead of starting fresh: also copy, with the old server stopped,
-- the database: `pg_dump -Fc` on the old machine, `pg_restore` into the new database (sections 2a and 8), and `DB/key`
-  (**the key and the database belong together**): gate lists, master codes, history, schedules, notes,
-  transaction history, camera settings;
-- `DOWNLOADED/`: camera pictures and videos (pulled gate files and working copies are in the database).
+- the database: `pg_dump -Fc` on the old machine, `pg_restore` into the new database (sections 2a and 8), and
+  `doorking.key` (**the key and the database belong together**): gate lists, master codes, history, schedules,
+  notes, transaction history, camera settings, gate files;
+- `config.json` (adjust it for the new machine);
+- `media/`: camera pictures and videos.
 
-Transfer these privately (not by e-mail or a shared drive): with `key` they reveal master codes and passwords.
+Transfer these privately (not by e-mail or a shared drive): with the key they reveal master codes and passwords.
+(Installs from before 2026-11-13 kept the login and key in a `DB/` folder: `DB/key` is `doorking.key`, and the
+login in `DB/postgres.url` goes into `config.json`'s `database` section. The camera folder was `DOWNLOADED/`.)
 
 ## 2a. Set up the database
 
@@ -52,14 +57,17 @@ REVOKE ALL ON DATABASE doorking, doorking_test FROM PUBLIC;
 ```
 then in each of the two databases: `REVOKE ALL ON SCHEMA public FROM PUBLIC; ALTER SCHEMA public OWNER TO doorking;`.
 
-Put the connection URL in `DB/postgres.url` (create the folder; make the file readable by the app's user only,
-e.g. `chmod 600`):
+Copy `config.example.json` to `config.json`, put the password in `database.password`, and make the file readable
+by the app's user only (the server refuses to start otherwise):
 ```
-postgres://doorking:<password>@127.0.0.1:5432/doorking
+cp config.example.json config.json
+chmod 600 config.json
 ```
-Or set the environment variable `DATABASE_URL` instead. The app creates its tables on the first start.
+The `database` section's other values (host `127.0.0.1`, port `5432`, database `doorking`, user `doorking`, tests in
+`doorking_test`) match the commands above. Instead of the separate values, `database.url` can hold a full
+`postgres://user:password@host:port/database` URL. The app creates its tables on the first start.
 
-For `psql`, `pg_dump` and `pg_restore`, keep the same login in a `.pgpass` file (mode 0600), e.g. `DB/pgpass`:
+For `psql`, `pg_dump` and `pg_restore`, keep the same login in `~/.pgpass` (mode 0600):
 `127.0.0.1:5432:doorking:doorking:<password>` (one line per database). Don't type the password on a command line.
 
 ## 3. Build the web page
@@ -79,27 +87,43 @@ node web/server.ts
 ```
 (or `npm start`). It prints:
 ```
-DoorKing web UI: http://localhost:8080  (gate folders in <root>\DOWNLOADED, database in <root>\DB)
+DoorKing web UI: http://localhost:8080  (config <root>\config.json, media in <root>\media)
 ```
-On the first start it creates the tables and the encryption key `DB/key`. Stop it with **Ctrl+C**. Without a
-reachable database it prints "Database not available: …" and stops.
+On the first start it creates the tables and the encryption key `doorking.key`. Stop it with **Ctrl+C**. Without a
+reachable database it prints "Database not available: …" and stops; a mistake in `config.json` prints
+"Configuration error: …" with the setting's name. `node web/server.ts --check-config` prints the settings in effect
+(passwords hidden) and exits.
 
-Options (all optional):
+### Settings (`config.json`)
 
-| Flag | Default | Meaning |
+Every setting is optional except the database password; `config.example.json` lists them all with their defaults.
+Relative paths are relative to the folder `config.json` is in. Unknown names and wrong values stop the server.
+
+| Setting | Default | Meaning |
 |---|---|---|
-| `--port <n>` | `8080` (or the `PORT` environment variable) | HTTP port |
-| `--public-host <name>` | none (or the `PUBLIC_HOST` environment variable) | public name served by an HTTPS reverse proxy (section 6a); the server also accepts that host and `https://` origins, and marks its cookie `Secure` there |
-| `--dir <folder>` | `<root>/DOWNLOADED` | camera pictures folder (one folder per gate) |
-| `--db <folder>` | `DB` | folder with `postgres.url` (the database connection) and `key` |
-| `--logs <folder>` | `logs` | folder for `debug.log` |
-| `--gates <file>`, `--prefs <file>` | `gates.json`, `prefs.json` | pre-database JSON files, imported once into a new database when present (see [DB.md](DB.md)) |
-| `--site-name`, `--memory`, `--area-codes`, `--model`, `--anti-passback`, `--interface-1816` | see `GATE_DEFAULTS` in `src/gate-pull.ts` | gate-match defaults, used when a gate's Gate configuration leaves a value empty |
+| `server.port` | `8080` | HTTP port (the server listens on `127.0.0.1` only) |
+| `server.publicHost` | `""` | public name served by an HTTPS reverse proxy (section 6a); the server also accepts that host and `https://` origins, and marks its cookie `Secure` there |
+| `paths.media` | `media` | camera pictures folder (one folder per gate) |
+| `paths.logs` | `logs` | folder for `debug.log` |
+| `paths.keyFile` | `doorking.key` | the encryption key (created when missing; must be chmod 600) |
+| `database.host`, `.port`, `.name`, `.user`, `.password` | `127.0.0.1`, `5432`, `doorking`, `doorking`, none | the PostgreSQL login |
+| `database.url` | `""` | a full `postgres://` URL instead of the values above |
+| `database.poolSize` | `5` | database connections |
+| `database.testName` | `doorking_test` | database the tests use (same login) |
+| `dks.url` | `https://dksdb.dksoftware.com/DkWebService.asmx` | DKS Cloud address |
+| `security.sessionIdleMinutes` | `30` | sign-out after this long without activity |
+| `security.maxFailedSignIns`, `.signInWindowMinutes` | `5`, `15` | after this many failed sign-ins within the window, that user name is refused for the rest of it |
+| `schedules.checkSeconds` | `30` | how often scheduled transfers are checked |
+| `cameras.ffmpeg` | `""` | the ffmpeg program; empty = `tools/bin`, else `ffmpeg` on the PATH |
+| `cameras.tidyMinutes` | `60` | how often old snapshots and leftover pieces are cleaned up |
+| `gateDefaults.*` | `GATE_DEFAULTS` in `src/gate-pull.ts` | gate-match defaults (`siteName`, `memorySize`, `areaCodes`, `modelNumber`, `antiPassBack`, `interface1816`, `dialDelay`), used when a gate's Gate configuration leaves a value empty |
 
-The environment variable `DATABASE_URL` overrides `postgres.url`. `DKS_URL` overrides the DKS Cloud address (default
-`https://dksdb.dksoftware.com/DkWebService.asmx`).
+**Overrides**, highest first: command-line flags (`--port`, `--public-host`, `--media`, `--logs`, `--site-name`,
+`--memory`, `--area-codes`, `--model`, `--anti-passback`, `--interface-1816`), then environment variables (`PORT`,
+`PUBLIC_HOST`, `DATABASE_URL`, `DKS_URL`), then `config.json`, then the defaults. `--config <file>` (or
+`DOORKING_CONFIG`) reads another config file.
 
-The gate-match values sent to DKS Cloud come from, lowest first: `GATE_DEFAULTS`, then the command-line flags,
+The gate-match values sent to DKS Cloud come from, lowest first: `gateDefaults`, then the command-line flags,
 then the gate's saved **System Settings → Gate configuration**. The `antiPassBack` default is `N`; set `Y` per
 gate if the gate uses anti-pass back.
 
@@ -153,13 +177,13 @@ Restart=on-failure
 WantedBy=multi-user.target
 ```
 Then `sudo systemctl daemon-reload && sudo systemctl enable --now doorking`. The service user must be able to
-write `DB/`, `logs/` and `DOWNLOADED/`. Use the full path of `node` (with nvm, `readlink -f $(which node)`;
+read `config.json` and `doorking.key`, and write `logs/` and `media/`. Use the full path of `node` (with nvm, `readlink -f $(which node)`;
 update the service after a Node upgrade). Logs: `journalctl -u doorking`.
 
 ## 6a. Public access (HTTPS)
 
 The app itself never listens on a public address. A reverse proxy serves HTTPS on the public address and passes
-requests to `127.0.0.1:8080`; the server is started with `--public-host <name>`. Anyone who reaches the page can
+requests to `127.0.0.1:8080`; `server.publicHost` in `config.json` is set to the name. Anyone who reaches the page can
 try to sign in; the DKS sign-in (with its failure limit) is what protects it.
 
 With **Caddy** (Ubuntu: `sudo apt install caddy`), which gets and renews Let's Encrypt certificates itself:
@@ -188,8 +212,8 @@ With **Caddy** (Ubuntu: `sudo apt install caddy`), which gets and renews Let's E
    ```
    `flush_interval -1` passes the live camera stream through unbuffered. `cert_issuer acme` uses Let's Encrypt only
    (Ubuntu's Caddy 2.6 can't register with its ZeroSSL fallback).
-3. `sudo systemctl reload caddy`, then add `--public-host gate.example.com` to the server's start command
-   (section 6) and restart it.
+3. `sudo systemctl reload caddy`, then set `"publicHost": "gate.example.com"` in `config.json`'s `server` section
+   and restart the server.
 4. Open `https://gate.example.com`. Until DNS points to the machine, Caddy logs "could not get certificate" and
    retries by itself (`journalctl -u caddy`); HTTP already redirects to HTTPS.
 
@@ -197,7 +221,7 @@ Sessions stay in memory, so restarting either service signs everyone out.
 
 ## 7. Update
 
-1. `git pull` (or replace the program files, keeping `DB/`, `logs/` and `DOWNLOADED/`).
+1. `git pull` (or replace the program files, keeping `config.json`, `doorking.key`, `logs/` and `media/`).
 2. `npm install` and `npm run build`.
 3. Restart the server (a rebuild of the page alone doesn't need a restart; open pages show "A new version of
    this page is available" with **Reload** within a minute).
@@ -206,13 +230,13 @@ The database updates its own tables on start (see [DB.md](DB.md)); there is no s
 
 ## 8. Back up
 
-Back up the database (safe while the server runs), plus `DB/key` and `DOWNLOADED/`:
+Back up the database (safe while the server runs), plus `doorking.key`, `config.json` and `media/`:
 ```
-PGPASSFILE=DB/pgpass pg_dump -Fc -h 127.0.0.1 -U doorking -f doorking.dump doorking
+pg_dump -Fc -h 127.0.0.1 -U doorking -f doorking.dump doorking
 ```
-Keep the backup private: with `key` it reveals master codes and passwords. To restore into an empty database:
-`PGPASSFILE=DB/pgpass pg_restore -h 127.0.0.1 -U doorking -d doorking doorking.dump`, put `key` and
-`DOWNLOADED/` back, and start the server.
+(the password comes from `~/.pgpass`, section 2a). Keep the backup private: with the key it reveals master codes and
+passwords. To restore into an empty database: `pg_restore -h 127.0.0.1 -U doorking -d doorking doorking.dump`, put
+`doorking.key`, `config.json` and `media/` back, and start the server.
 
 ## 9. Check the install
 
@@ -221,18 +245,20 @@ npm run typecheck
 npm test
 ```
 Both should finish without errors. The tests don't contact DKS Cloud or the gate; they need the `doorking_test`
-database (section 2a), or `TEST_DATABASE_URL` set to another database the login may create schemas in.
+database (`database.testName`, section 2a), or `TEST_DATABASE_URL` set to another database the login may create
+schemas in.
 
 ## 10. Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
 | `node` prints a syntax error for `.ts` files | Node is older than 24. Install Node 24 or later. |
-| "Database not available: …" on start | PostgreSQL isn't running, `DB/postgres.url` is missing or wrong, or the login is refused. Check with `PGPASSFILE=DB/pgpass psql -h 127.0.0.1 -U doorking doorking`. |
+| "Configuration error: …" on start | `config.json` has a mistake: the message names the setting. "can be read by other users": run `chmod 600` on the file it names. |
+| "Database not available: …" on start | PostgreSQL isn't running, `config.json`'s `database` settings are missing or wrong, or the login is refused. Check with `psql -h 127.0.0.1 -U doorking doorking`. |
 | The page says "The web page is not built yet" | Run `npm install` and `npm run build`, then reload. |
 | `EADDRINUSE` on start | Port 8080 is in use (often a server already running). Stop the other one, or start with `--port 8081`. |
-| `Forbidden host` | Open the page as `http://localhost:<port>` or `http://127.0.0.1:<port>`, or by the `--public-host` name through the proxy, not by machine name or IP. |
-| `Forbidden origin` on sign-in through the public name | The server wasn't started with `--public-host <that name>`, or the page was opened over `http://` instead of `https://`. |
+| `Forbidden host` | Open the page as `http://localhost:<port>` or `http://127.0.0.1:<port>`, or by the `server.publicHost` name through the proxy, not by machine name or IP. |
+| `Forbidden origin` on sign-in through the public name | `server.publicHost` isn't set to that name, or the page was opened over `http://` instead of `https://`. |
 | Sign-in says "Login refused" | DKS Cloud rejected the user or password. |
 | Sign-in says "Too many failed sign-ins" | 5 failed tries for that user within 15 minutes. Wait 15 minutes. |
 | A pull fails with "… Mismatch" | Gate configuration doesn't match the gate (System Settings). Fix the named value. |

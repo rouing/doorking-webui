@@ -42,46 +42,45 @@ interface SnapRun {
 }
 interface PrefsChange { before: Record<string, unknown>; after: Record<string, unknown> }
 
-const args = process.argv.slice(2);
-function opt(name: string): string | undefined;
-function opt(name: string, def: string): string;
-function opt(name: string, def?: string) { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : def; }
 const HERE = import.meta.dirname;
+// Settings: config.json, environment variables and flags (src/config.ts). --check-config prints them and exits.
+let CONFIG: dk.ServerConfig;
+try { CONFIG = dk.loadConfig(); } catch (e) {
+  console.error(`Configuration error: ${(e as Error).message}`);
+  process.exit(1);
+}
+if (process.argv.includes('--check-config')) {
+  console.log(JSON.stringify(dk.maskedConfig(CONFIG), null, 2));
+  process.exit(0);
+}
 const HOST = '127.0.0.1';
-const PORT = Number(opt('--port', process.env.PORT || '8080'));
+const PORT = CONFIG.server.port;
 // Public name served by an HTTPS reverse proxy (Caddy) in front of this server, e.g. gate.example.com. Empty = local only.
-const PUBLIC_HOST = opt('--public-host', process.env.PUBLIC_HOST || '').trim().toLowerCase();
-const ROOT = path.resolve(opt('--dir', path.join(HERE, '..', 'DOWNLOADED'))); // one folder per gate: DOWNLOADED/<phone digits>
-const DB_DIR = path.resolve(opt('--db', path.join(HERE, '..', 'DB'))); // postgres.url + key
-// JSON files from before the database, imported once on first start.
-const PREFS = path.resolve(opt('--prefs', path.join(HERE, '..', 'prefs.json')));
-const GATES = path.resolve(opt('--gates', path.join(HERE, '..', 'gates.json')));
-const LOG_DIR = path.resolve(opt('--logs', path.join(HERE, '..', 'logs'))); // debug.log
+const PUBLIC_HOST = CONFIG.server.publicHost;
+const ROOT = CONFIG.paths.media; // one folder per gate: media/<phone digits>
+const LOG_DIR = CONFIG.paths.logs; // debug.log
 let STORE: dk.Store;
-try { STORE = await dk.openStore(DB_DIR); } catch (e) {
+try {
+  STORE = await dk.openStore({ connection: dk.connectionSettings(CONFIG.database), keyFile: CONFIG.paths.keyFile, poolSize: CONFIG.database.poolSize });
+} catch (e) {
   console.error(`Database not available: ${(e as Error).message}`);
   process.exit(1);
 }
 // The Debug logs setting, kept in memory so writing a line never waits for the database.
 let debugOn = await dk.debugLogEnabled(STORE);
 const DEBUG = dk.createDebugLog(path.join(LOG_DIR, 'debug.log'), { enabled: () => debugOn });
-const imported = await dk.importJson(STORE, { gatesFile: GATES, prefsFile: PREFS, root: ROOT });
-if (imported) {
-  console.log(`Imported into ${DB_DIR}: ${JSON.stringify(imported)}`);
-  DEBUG.write('server', `Imported the pre-database JSON files: ${JSON.stringify(imported)}`);
-}
 const backfilled = await dk.backfillGateVerified(STORE);
 if (backfilled) {
   console.log(`Marked ${backfilled} gate(s) as connected from history`);
   DEBUG.write('server', `Marked ${backfilled} gate(s) as connected from history`);
 }
 const DIST = path.join(HERE, 'dist'); // the web page, built from web/ui by `npm run build`
-const IDLE_MS = 30 * 60000;
+const IDLE_MS = CONFIG.security.sessionIdleMinutes * 60000;
 const MAX_BODY_BYTES = 10000;
 // Failed sign-ins per user name: after MAX_FAILED_SIGN_INS within SIGN_IN_WINDOW_MS, sign-in is refused for the
 // rest of the window without asking DKS Cloud, so a guessing script cannot get the DKS account locked.
-const MAX_FAILED_SIGN_INS = 5;
-const SIGN_IN_WINDOW_MS = 15 * 60000;
+const MAX_FAILED_SIGN_INS = CONFIG.security.maxFailedSignIns;
+const SIGN_IN_WINDOW_MS = CONFIG.security.signInWindowMinutes * 60000;
 const ASSET_TYPES: Record<string, string> = {
   '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2',
 };
@@ -101,17 +100,9 @@ function staticFile(pathname: string): [string, string] | null {
 }
 
 // Gate-match defaults for the login form; the browser can override them in the Connect panel.
-const defaults = {
-  ...dk.GATE_DEFAULTS,
-  siteName: opt('--site-name', dk.GATE_DEFAULTS.siteName),
-  memorySize: opt('--memory', dk.GATE_DEFAULTS.memorySize),
-  areaCodes: opt('--area-codes', dk.GATE_DEFAULTS.areaCodes),
-  antiPassBack: opt('--anti-passback', dk.GATE_DEFAULTS.antiPassBack),
-  interface1816: opt('--interface-1816', dk.GATE_DEFAULTS.interface1816),
-  modelNumber: opt('--model', dk.GATE_DEFAULTS.modelNumber),
-};
-const client = () => new dk.DksCloudClient({ url: process.env.DKS_URL || dk.DEFAULT_URL, log: (m) => DEBUG.write('dks', m) });
-const CAMERAS = dk.createCameraRunner({ log: (m) => DEBUG.write('camera', m) });
+const defaults = CONFIG.gateDefaults;
+const client = () => new dk.DksCloudClient({ url: CONFIG.dks.url, log: (m) => DEBUG.write('dks', m) });
+const CAMERAS = dk.createCameraRunner({ ffmpegPath: CONFIG.cameras.ffmpeg, log: (m) => DEBUG.write('camera', m) });
 
 // token -> { user, password, lastSeen, gate? }; gate is the phone number the web UI has open.
 const sessions = new Map<string, SessionData>();
@@ -276,7 +267,7 @@ function refreshSnapshot(phone: string, dir: string, minute: string, file: strin
   return p;
 }
 
-const SNAPSHOT_TIDY_MS = 3600000;
+const SNAPSHOT_TIDY_MS = CONFIG.cameras.tidyMinutes * 60000;
 const mb = (bytes: number) => `${Math.round(bytes / 1e6)} MB`;
 // Tidies a gate's saved snapshots (dk.tidySnapshots with its keepDays) and logs what was deleted. inRun: called by
 // the gate's snapshot run, which waited for refreshes; otherwise skipped while a run or refresh is going.
@@ -1287,7 +1278,7 @@ const ROUTES = [
 
 // Scheduled transfers: checked every 30 s and once at startup, so a time missed while the server was stopped
 // runs once. Due entries queue up and run one at a time, each transfer waiting for any running gate connection.
-const SCHEDULE_TICK_MS = 30000;
+const SCHEDULE_TICK_MS = CONFIG.schedules.checkSeconds * 1000;
 const scheduleQueue: Schedule[] = [];
 let scheduleRunning = false;
 const sleep = (ms: number) => new Promise((r) => { setTimeout(r, ms); });
@@ -1450,8 +1441,8 @@ for (const phone of await dk.migrateWorkingFiles(STORE)) {
   DEBUG.write('server', `Gate ${phone}: working copy moved into the values tables`);
 }
 server.listen(PORT, HOST, () => {
-  console.log(`DoorKing web UI: http://localhost:${PORT}${PUBLIC_HOST ? ` and https://${PUBLIC_HOST}` : ''}  (gate folders in ${ROOT}, database in ${DB_DIR})`);
-  DEBUG.write('server', `Started on port ${PORT} (gate folders in ${ROOT})`);
+  console.log(`DoorKing web UI: http://localhost:${PORT}${PUBLIC_HOST ? ` and https://${PUBLIC_HOST}` : ''}  (config ${CONFIG.file || 'none, defaults'}, media in ${ROOT})`);
+  DEBUG.write('server', `Started on port ${PORT}: ${JSON.stringify(dk.maskedConfig(CONFIG))}`);
   checkSchedules();
   setInterval(checkSchedules, SCHEDULE_TICK_MS);
   setInterval(sweepSessions, 60000);

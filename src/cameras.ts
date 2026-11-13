@@ -369,13 +369,14 @@ interface Bridge {
 }
 
 export interface CameraRunnerOptions {
-  binDir?: string; idleMs?: number; readyMs?: number; grabMs?: number; clipExtraMs?: number;
+  binDir?: string; ffmpegPath?: string; idleMs?: number; readyMs?: number; grabMs?: number; clipExtraMs?: number;
   connectTries?: number; connectWaitMs?: number; retryWaitMs?: number; log?: Log;
 }
 export interface GrabOptions { signal?: AbortSignal; onRetry?: (e: Error) => void; once?: boolean; video?: number }
 export interface LiveOptions { sub?: boolean; signal?: AbortSignal; onStart?: () => void; maxMs?: number }
 
-export function createCameraRunner({ binDir = BIN_DIR, idleMs = 120000, readyMs = 45000, grabMs = 45000,
+// ffmpegPath: the ffmpeg program to run; empty = ffmpegCommand(binDir).
+export function createCameraRunner({ binDir = BIN_DIR, ffmpegPath = '', idleMs = 120000, readyMs = 45000, grabMs = 45000,
   clipExtraMs = 60000, connectTries = 3, connectWaitMs = 10000, retryWaitMs = 2000, log = () => {} }: CameraRunnerOptions = {}) {
   const bridges = new Map<string, Bridge>();
 
@@ -446,7 +447,7 @@ export function createCameraRunner({ binDir = BIN_DIR, idleMs = 120000, readyMs 
         ? [...input, '-i', url, '-t', String(video), '-map', '0:v:0', '-c', 'copy',
           '-f', 'mp4', '-movflags', '+frag_keyframe+empty_moov', '-y', outFile]
         : [...input, '-fflags', '+discardcorrupt', '-skip_frame', 'nokey', '-i', url, '-frames:v', '1', '-update', '1', '-q:v', '3', '-y', outFile];
-      const proc = spawn(executable(ffmpegCommand(binDir)), args, { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+      const proc = spawn(executable(ffmpegPath || ffmpegCommand(binDir)), args, { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
       let err = '';
       proc.stderr.on('data', (c) => { err = (err + c).slice(-2000); });
       const timer = setTimeout(() => proc.kill(), video ? video * 1000 + clipExtraMs : grabMs + 5000);
@@ -471,7 +472,7 @@ export function createCameraRunner({ binDir = BIN_DIR, idleMs = 120000, readyMs 
   // Runs ffmpeg on local files: { code, err } (err: the last 4000 characters of its output).
   function localFfmpeg(args: string[], ms = 60000): Promise<{ code: number | null; err: string }> {
     return new Promise((resolve) => {
-      const proc = spawn(executable(ffmpegCommand(binDir)), ['-hide_banner', ...args], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+      const proc = spawn(executable(ffmpegPath || ffmpegCommand(binDir)), ['-hide_banner', ...args], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
       let err = '';
       proc.stderr.on('data', (c) => { err = (err + c).slice(-4000); });
       const timer = setTimeout(() => proc.kill(), ms);
@@ -592,7 +593,7 @@ export function createCameraRunner({ binDir = BIN_DIR, idleMs = 120000, readyMs 
         '-fflags', 'nobuffer', '-flags', 'low_delay', '-i', url, '-map', '0:v:0', '-an',
         '-vf', `fps=${LIVE_FPS},scale=w='min(${LIVE_WIDTH},iw)':h=-2`, '-c:v', 'mjpeg', '-q:v', '6',
         '-f', 'mpjpeg', '-boundary_tag', 'frame', 'pipe:1'];
-      const proc = spawn(executable(ffmpegCommand(binDir)), args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      const proc = spawn(executable(ffmpegPath || ffmpegCommand(binDir)), args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
       let err = '';
       let started = false;
       const firstTimer = setTimeout(() => proc.kill(), grabMs + 5000);

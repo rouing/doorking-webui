@@ -8,6 +8,7 @@ export * from './src/gate-state.ts';
 export * from './src/residents-edit.ts';
 export * from './src/dks-cloud.ts';
 export * from './src/gate-pull.ts';
+export * from './src/config.ts';
 export * from './src/db.ts';
 export * from './src/prefs.ts';
 export * from './src/notes.ts';

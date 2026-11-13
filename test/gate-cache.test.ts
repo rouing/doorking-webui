@@ -61,16 +61,16 @@ test('history patch reverts a change, and refuses when a later change touched th
   assert.strictEqual(dk.undoPatch(Buffer.alloc(80, 0), whole), null);
 });
 
-// Test database: TEST_DATABASE_URL, else the app's database URL (DB/postgres.url) with database doorking_test.
-// Each store gets its own schema, dropped afterwards.
-function testDatabaseUrl() {
-  if (process.env.TEST_DATABASE_URL) return process.env.TEST_DATABASE_URL;
-  const url = new URL(fs.readFileSync(path.join(import.meta.dirname, '..', 'DB', 'postgres.url'), 'utf8').trim());
-  url.pathname = '/doorking_test';
-  return url.toString();
+// Test database: TEST_DATABASE_URL, else config.json's database login with database.testName (doorking_test).
+// Each store gets its own schema, dropped afterwards; dir holds its key file.
+function testConnection() {
+  if (process.env.TEST_DATABASE_URL) return { connectionString: process.env.TEST_DATABASE_URL };
+  const { database } = dk.loadConfig({ args: [] });
+  return dk.connectionSettings(database, database.testName);
 }
-const TEST_DB = testDatabaseUrl();
-const testStore = (dir) => dk.openStore(dir, { url: TEST_DB, schema: `t_${crypto.randomBytes(6).toString('hex')}` });
+const TEST_DB = testConnection();
+const testStore = (dir) => dk.openStore({ connection: TEST_DB, keyFile: path.join(dir, 'key'),
+  schema: `t_${crypto.randomBytes(6).toString('hex')}` });
 async function dropStore(store) {
   await store.pool.query(`DROP SCHEMA ${store.schema} CASCADE`);
   await dk.closeStore(store);
@@ -79,7 +79,7 @@ async function dropStore(store) {
 // Runs fn(store, dir) with an empty database schema and a fresh temp folder.
 function withStore(fn) {
   return withDir(async (dir) => {
-    const store = await testStore(path.join(dir, 'DB'));
+    const store = await testStore(path.join(dir, 'store'));
     try { await fn(store, dir); } finally { await dropStore(store); }
   });
 }
@@ -516,24 +516,43 @@ test('gate connections: verifiedAt, master code changes and the history backfill
   assert.strictEqual(await dk.backfillGateVerified(store), null);
 }));
 
-test('JSON files are imported once', withDir(async (dir) => {
-  const root = path.join(dir, 'DOWNLOADED');
-  fs.mkdirSync(path.join(root, '5550100'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'gates.json'), JSON.stringify({ u1: [{ phoneNumber: '5550100', masterCode: '1234', addedAt: T1 }] }));
-  fs.writeFileSync(path.join(dir, 'prefs.json'), JSON.stringify({ 5550100: { relayLabels: { 0: 'Gate' } } }));
-  fs.writeFileSync(path.join(root, 'sign-ins.json'), JSON.stringify({ u1: { last: '2026-01-01T00:00:00Z', count: 3 } }));
-  fs.writeFileSync(path.join(root, '5550100', 'history.jsonl'), `${JSON.stringify({ id: 'a', summary: 'one' })}\nbad\n`);
-  const store = await testStore(path.join(dir, 'DB'));
-  try {
-    const opts = { gatesFile: path.join(dir, 'gates.json'), prefsFile: path.join(dir, 'prefs.json'), root };
-    assert.deepStrictEqual(await dk.importJson(store, opts), { gates: 1, prefs: 1, signIns: 1, history: 1 });
-    assert.strictEqual(await dk.importJson(store, opts), null);
-    assert.strictEqual((await dk.findGate(store, 'U1', '5550100')).masterCode, '1234');
-    assert.deepStrictEqual(await dk.getPrefs(store, '5550100'), { relayLabels: { 0: 'Gate' } });
-    assert.deepStrictEqual((await dk.signIns(store)).map((u) => u.count), [3]);
-    assert.deepStrictEqual((await dk.listHistory(store, '5550100')).map((e) => e.summary), ['one']);
-    assert.ok(fs.existsSync(path.join(dir, 'DB', 'key')));
-  } finally { await dropStore(store); }
+test('config: defaults, file, environment and flags, checked values and private files', withDir(async (dir) => {
+  assert.throws(() => dk.loadConfig({ env: {}, args: ['--config', path.join(dir, 'missing.json')] }), /not found/);
+  const file = path.join(dir, 'conf', 'config.json');
+  fs.mkdirSync(path.dirname(file));
+  const write = (o) => fs.writeFileSync(file, JSON.stringify(o), { mode: 0o600 });
+  write({ server: { publicHost: 'Gate.Example.com' }, database: { password: 'pw', name: 'gates' }, paths: { media: '../m' } });
+  const c = dk.loadConfig({ file, env: {}, args: [] });
+  assert.strictEqual(c.file, file);
+  assert.deepStrictEqual([c.server.port, c.server.publicHost], [8080, 'gate.example.com']);
+  assert.deepStrictEqual(c.paths, { media: path.join(dir, 'm'), logs: path.join(dir, 'conf', 'logs'), keyFile: path.join(dir, 'conf', 'doorking.key') });
+  assert.strictEqual(c.database.user, 'doorking'); // default kept beside the file's values
+  assert.deepStrictEqual(dk.connectionSettings(c.database), { host: '127.0.0.1', port: 5432, user: 'doorking', password: 'pw', database: 'gates' });
+  assert.strictEqual(dk.connectionSettings(c.database, c.database.testName).database, 'doorking_test');
+  assert.strictEqual(dk.maskedConfig(c).database.password, '***');
+  assert.strictEqual(c.security.sessionIdleMinutes, 30);
+  // Environment over the file, flags over both.
+  const o = dk.loadConfig({ file, env: { PORT: '9000', DATABASE_URL: 'postgres://u:secret@db/x' }, args: ['--port', '9100', '--media', 'pics', '--site-name', 'Lobby'] });
+  assert.deepStrictEqual([o.server.port, o.paths.media, o.gateDefaults.siteName], [9100, path.join(dir, 'conf', 'pics'), 'Lobby']);
+  assert.deepStrictEqual(dk.connectionSettings(o.database, 'other'), { connectionString: 'postgres://u:secret@db/other' });
+  assert.strictEqual(dk.maskedConfig(o).database.url, 'postgres://u:***@db/x');
+  // Mistakes are refused with the setting's name.
+  write({ server: { prot: 1 } });
+  assert.throws(() => dk.loadConfig({ file, env: {}, args: [] }), /unknown setting "server.prot"/);
+  write({ server: { port: 70000 } });
+  assert.throws(() => dk.loadConfig({ file, env: {}, args: [] }), /"server.port" must be a whole number from 1 to 65535/);
+  write({ database: { password: 1234 } });
+  assert.throws(() => dk.loadConfig({ file, env: {}, args: [] }), /"database.password" must be text/);
+  write({ cameras: {}, extra: {} });
+  assert.throws(() => dk.loadConfig({ file, env: {}, args: [] }), /unknown section "extra"/);
+  fs.writeFileSync(file, '{ "server": ');
+  assert.throws(() => dk.loadConfig({ file, env: {}, args: [] }), /not valid JSON/);
+  write({ database: {} });
+  assert.throws(() => dk.connectionSettings(dk.loadConfig({ file, env: {}, args: [] }).database), /No database password/);
+  if (process.platform !== 'win32') {
+    fs.chmodSync(file, 0o644);
+    assert.throws(() => dk.loadConfig({ file, env: {}, args: [] }), /can be read by other users/);
+  }
 }));
 
 test('schedules: validation, due times and missed runs', withStore(async (store) => {
@@ -721,7 +740,7 @@ test('cameras: tidySnapshots deletes old minutes and leftover pieces, and marks 
 
 test('cameras: runSnapshots grabs each channel and frame with the clock offset', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dk-snap-'));
-  const store = await testStore(path.join(dir, 'DB'));
+  const store = await testStore(path.join(dir, 'store'));
   t.after(() => dropStore(store));
   let asked = [];
   let ch2Error = 'No recording at this time';
@@ -1003,8 +1022,8 @@ test('cameras: finishClip turns a recorded fragmented MP4 into .mp4 (hvc1) and a
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('debug log: written only while turned on, one line per entry, moved aside when too big', withStore(async (store) => {
-  const file = path.join(store.dir, 'logs', 'debug.log');
+test('debug log: written only while turned on, one line per entry, moved aside when too big', withStore(async (store, dir) => {
+  const file = path.join(dir, 'logs', 'debug.log');
   let on = await dk.debugLogEnabled(store);
   const log = dk.createDebugLog(file, { enabled: () => on, maxBytes: 200 });
   log.write('camera', 'not written');

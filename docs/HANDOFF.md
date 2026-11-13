@@ -931,6 +931,13 @@ byte, not only the one expected.
   `loadConfig` (`src/config.ts`) refuses unknown names, wrong values and files other users can read. `DB/` was
   deleted after checking that every encrypted value decrypts with the moved key; its `pgpass` became `~/.pgpass`.
   `DOWNLOADED/` became `media/`. The systemd unit no longer passes `--public-host` (it's `server.publicHost`).
+- **Schema file and db-setup, 2026-11-13:** the schema moved from a string in `src/db.ts` to `sql/schema.sql` (not
+  `db/`: `.gitignore`'s `DB/` would hide it on case-insensitive filesystems); later columns are folded into the
+  `CREATE TABLE`s, the `ALTER … IF NOT EXISTS` lines kept for older databases. `node cli.ts db-setup [--test-db]`
+  (`setupDatabase`) creates the login role and databases through an admin URL asked for hidden (or
+  `DATABASE_ADMIN_URL`), then opens the store. Checked with a throwaway non-superuser admin (CREATEROLE +
+  CREATEDB): on PostgreSQL 16+ such an admin only gets ADMIN on roles it creates, and `CREATE DATABASE … OWNER`
+  needs SET, so it grants itself membership first.
 
 ---
 

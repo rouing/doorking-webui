@@ -47,25 +47,43 @@ login in `DB/postgres.url` goes into `config.json`'s `database` section. The cam
 
 ## 2a. Set up the database
 
-Create a login and a database for the app, plus a second database for the tests (as the PostgreSQL admin; on Linux
-`sudo -u postgres psql`). Pick a long random password:
+Copy `config.example.json` to `config.json`, put a long random password for the app's database login in
+`database.password`, and make the file readable by the app's user only (the server refuses to start otherwise):
+```
+cp config.example.json config.json
+chmod 600 config.json
+```
+The `database` section's other values are host `127.0.0.1`, port `5432`, database `doorking`, user `doorking` and,
+for the tests, database `doorking_test`. Instead of the separate values, `database.url` can hold a full
+`postgres://user:password@host:port/database` URL.
+
+Then let the CLI create the login and databases (it needs `npm install` from section 3 first):
+```
+npm install
+node cli.ts db-setup --test-db
+```
+It asks, without showing it, for a PostgreSQL admin connection URL: a superuser such as
+`postgres://postgres:<admin password>@127.0.0.1:5432/postgres`, or any role with CREATEROLE and CREATEDB (on a
+managed/cloud PostgreSQL, its admin user). It can also read it from `DATABASE_ADMIN_URL`. The admin login is used
+only for this and isn't saved. The command:
+1. creates the login role from `config.json` (user and password), unless it exists;
+2. creates the `doorking` database (and `doorking_test` with `--test-db`; leave that out on a server that won't run
+   the tests), owned by that login and closed to every other login (no `PUBLIC` access to the database or its
+   `public` schema);
+3. connects as the app's login, loads the schema from `sql/schema.sql`, and creates `doorking.key` when missing.
+
+It's safe to run again: what exists is kept (an existing role keeps its password) and the output says what it did.
+If the postgres superuser has no password (Linux peer login only), set one first with `sudo -u postgres psql` and
+`\password postgres`, or do the same steps by hand:
 ```
 CREATE ROLE doorking LOGIN PASSWORD '<password>';
 CREATE DATABASE doorking OWNER doorking;
 CREATE DATABASE doorking_test OWNER doorking;
 REVOKE ALL ON DATABASE doorking, doorking_test FROM PUBLIC;
 ```
-then in each of the two databases: `REVOKE ALL ON SCHEMA public FROM PUBLIC; ALTER SCHEMA public OWNER TO doorking;`.
-
-Copy `config.example.json` to `config.json`, put the password in `database.password`, and make the file readable
-by the app's user only (the server refuses to start otherwise):
-```
-cp config.example.json config.json
-chmod 600 config.json
-```
-The `database` section's other values (host `127.0.0.1`, port `5432`, database `doorking`, user `doorking`, tests in
-`doorking_test`) match the commands above. Instead of the separate values, `database.url` can hold a full
-`postgres://user:password@host:port/database` URL. The app creates its tables on the first start.
+then in each of the two databases `REVOKE ALL ON SCHEMA public FROM PUBLIC; ALTER SCHEMA public OWNER TO doorking;`.
+The server loads `sql/schema.sql` itself on every start (or by hand:
+`psql -h 127.0.0.1 -U doorking -d doorking -v ON_ERROR_STOP=1 -f sql/schema.sql`).
 
 For `psql`, `pg_dump` and `pg_restore`, keep the same login in `~/.pgpass` (mode 0600):
 `127.0.0.1:5432:doorking:doorking:<password>` (one line per database). Don't type the password on a command line.

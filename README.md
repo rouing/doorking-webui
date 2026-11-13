@@ -376,7 +376,9 @@ and error codes are in [`API.md`](docs/API.md).
 `node cli.ts` prints usage. Read-only parsers for local files (`transactions`, `board`, `phones`, `cards`,
 `directory`, `rcvout`; `--out <file>` writes CSV) and DKS Cloud commands (`cloud-login`, `cloud-status`,
 `cloud-download`, `cloud-pull`) that read `DKS_USER`, `DKS_PASSWORD`, `DKS_MASTER_CODE`, `DKS_PHONE` and
-`DKS_URL` from the environment.
+`DKS_URL` from the environment. For whoever runs the server: `db-setup [--test-db]` (creates the database login and
+databases through an admin connection and loads `sql/schema.sql`; INSTALL.md section 2a), `create-admin`,
+`reset-password`, `grant`, `test-email` and `emails`.
 
 ## Tests
 ```
@@ -426,6 +428,7 @@ against changes observed on the gate. The database tests use the `doorking_test`
     INSTALL.md, MANUAL.md  install guide, user manual
     API.md, DB.md          REST API, database schema
     BITMAP.md, HANDOFF.md  board file address map, reverse-engineering notes
+  sql/schema.sql         PostgreSQL schema (tables, indexes): applied on every start and by `cli.ts db-setup`
   index.ts               re-exports every module in src/
   cli.ts                 command-line tool
   package.json           npm scripts and packages (TypeScript, React, Vite, Radix Themes)
@@ -443,7 +446,8 @@ against changes observed on the gate. The database tests use the `doorking_test`
       gate-state.ts        plain gate tables decoded from each pull, and the round-trip check
     gate-pull.ts         DKS Cloud pull/send sessions, relay read/control
     dks-cloud.ts         DKS Cloud SOAP client
-    db.ts                PostgreSQL connection (pg), schema, query helpers, AES-256-GCM encryption
+    db.ts                PostgreSQL connection (pg), loads sql/schema.sql, query helpers, AES-256-GCM encryption,
+                         setupDatabase (login role and databases for `cli.ts db-setup`)
     users.ts             local accounts (scrypt passwords) and sessions
     gate-list.ts         managed gates (DKS login, master code, encrypted), access roles, the move from DKS sign-in
     api-keys.ts          per-gate API keys (hashed), role and expiry

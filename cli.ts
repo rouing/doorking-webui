@@ -24,6 +24,12 @@ DKS Cloud (read-only; credentials from DKS_USER / DKS_PASSWORD, URL from DKS_URL
                                     Start a session, read from the gate, download the files
                                     (master code from DKS_MASTER_CODE, system phone from --phone or DKS_PHONE)
 
+Database (for whoever runs the server):
+  db-setup [--test-db]              Create config.json's login role and database (and the tests' database with
+                                    --test-db) through a PostgreSQL admin connection, then load sql/schema.sql and
+                                    create the encryption key. Asks (hidden) for the admin connection URL, or reads
+                                    DATABASE_ADMIN_URL. Safe to run again: existing roles, databases, tables are kept.
+
 Accounts (for whoever runs the server; uses config.json's database; the password is asked for, not typed on the
 command line):
   create-admin <username>           Create an account that becomes admin of every gate without an admin
@@ -72,9 +78,11 @@ function credentials(): [string, string] {
   return [DKS_USER, DKS_PASSWORD];
 }
 
+const serverConfig = () => dk.loadConfig({ args: process.argv.slice(2).filter((a, i, all) => a === '--config' || all[i - 1] === '--config') });
+
 // The server's database (config.json).
 async function openDatabase(): Promise<dk.Store> {
-  const cfg = dk.loadConfig({ args: process.argv.slice(2).filter((a, i, all) => a === '--config' || all[i - 1] === '--config') });
+  const cfg = serverConfig();
   return dk.openStore({ connection: dk.connectionSettings(cfg.database), keyFile: cfg.paths.keyFile, poolSize: 1 });
 }
 
@@ -128,6 +136,22 @@ async function withDatabase(fn: (store: dk.Store) => Promise<void>): Promise<voi
 }
 
 const COMMANDS: Record<string, (positional: string[], args: string[]) => void | Promise<void>> = {
+  'db-setup': async (_, args) => {
+    const cfg = serverConfig();
+    const login = dk.databaseLogin(cfg.database);
+    const admin = process.env.DATABASE_ADMIN_URL
+      || await askHidden('PostgreSQL admin connection URL (for example postgres://postgres:<password>@127.0.0.1:5432/postgres): ');
+    if (!admin.trim()) throw new Error('No admin connection URL');
+    const databases = [login.name, ...(args.includes('--test-db') ? [cfg.database.testName] : [])];
+    for (const step of await dk.setupDatabase({ connectionString: admin.trim() }, { ...login, databases })) console.error(step);
+    const hadKey = fs.existsSync(cfg.paths.keyFile);
+    await withDatabase(async (store) => {
+      const tables = await dk.all<{ n: number }>(store, "SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_schema = 'public'");
+      console.error(`Schema: ${path.relative(process.cwd(), dk.SCHEMA_FILE)} loaded into ${login.name} as ${login.user} (${tables[0].n} tables)`);
+    });
+    console.error(`Encryption key: ${cfg.paths.keyFile} (${hadKey ? 'already there' : 'created; back it up with the database'})`);
+  },
+
   'create-admin': ([username]) => withDatabase(async (store) => {
     if (!username) throw new Error('Usage: create-admin <username>');
     dk.checkUsername(username);

@@ -1,7 +1,7 @@
 # Database
 
 The app keeps everything that is not on the gate in a **PostgreSQL** database, through the `pg` driver. The code is in
-`src/db.ts` (connection, schema, encryption, query helpers) and the module named for each table below. (Until
+`src/db.ts` (connection, encryption, query helpers), the schema in **`sql/schema.sql`**, and the module named for each table below. (Until
 2026-11-12 it was a SQLite file, `DB/data.db`; its data was copied over and checked row by row, then the SQLite
 code and file were removed.)
 
@@ -351,8 +351,12 @@ deletes `media/<phone>/` (camera pictures). Accounts and `meta` are not about on
 
 ## Schema changes
 
-`openStore` creates missing tables and indexes with `CREATE … IF NOT EXISTS` on every start. A new column needs an
-`ALTER TABLE … ADD COLUMN IF NOT EXISTS` there too, so existing databases update themselves. Nothing is ever dropped.
+`sql/schema.sql` is the only copy of the schema (tables and indexes; no rows). `openStore` runs it on every start, and
+`node cli.ts db-setup` uses it for a new database (INSTALL.md section 2a). Every statement is `… IF NOT EXISTS`, so
+running it again only adds what's missing. A new column goes in its `CREATE TABLE` (new databases) and in an
+`ALTER TABLE … ADD COLUMN IF NOT EXISTS` at the end of the file (existing ones). Nothing is ever dropped; the
+`gates`, `sign_ins` and `credentials` tables from before local accounts stay for older databases' migration.
+A test checks that the tables made match the file's `CREATE TABLE`s.
 
 ## Looking inside
 

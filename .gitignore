@@ -60,5 +60,8 @@ Thumbs.db
 # Serena (MCP) project settings, code index and memories: local only
 .serena/
 
+# Augment rules (startupRules.md: activate Serena): local only
+.augment/
+
 # Local helper script
 auggie.sh

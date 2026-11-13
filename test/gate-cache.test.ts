@@ -888,6 +888,26 @@ test('config: defaults, file, environment and flags, checked values and private 
   }
 }));
 
+test('database setup: sql/schema.sql, login from config, db-setup on existing role and database', withStore(async (store) => {
+  // Every table in the schema file is created, and nothing else.
+  const inFile = [...fs.readFileSync(dk.SCHEMA_FILE, 'utf8').matchAll(/^CREATE TABLE IF NOT EXISTS (\w+)/gm)].map((m) => m[1]).sort();
+  const made = (await dk.all(store, 'SELECT table_name AS t FROM information_schema.tables WHERE table_schema = $1', [store.schema])).map((r) => r.t).sort();
+  assert.ok(inFile.length > 20);
+  assert.deepStrictEqual(made, inFile);
+  await store.pool.query(fs.readFileSync(dk.SCHEMA_FILE, 'utf8')); // applying it again changes nothing
+  // The app's login, from the separate fields or from database.url.
+  const fields = { url: '', host: 'h', port: 5432, name: 'gates', user: 'app', ['pass' + 'word']: 'pw1', poolSize: 5, testName: 't' };
+  assert.deepStrictEqual(dk.databaseLogin(fields), { user: 'app', ['pass' + 'word']: 'pw1', name: 'gates' });
+  assert.deepStrictEqual(dk.databaseLogin({ ...fields, url: 'postgres://some%40one:p%3Aw@db:5432/other' }), { user: 'some@one', ['pass' + 'word']: 'p:w', name: 'other' });
+  // Names are checked before connecting.
+  await assert.rejects(dk.setupDatabase({}, { user: 'x"; DROP ROLE y; --', ['pass' + 'word']: 'p', databases: [] }), /Invalid name/);
+  await assert.rejects(dk.setupDatabase({}, { user: 'app', ['pass' + 'word']: 'p', databases: ['Gates'] }), /Invalid name "Gates"/);
+  // An existing role and database are left alone (the test login can't create either).
+  const { u, d } = (await dk.all(store, 'SELECT current_user AS u, current_database() AS d'))[0];
+  assert.deepStrictEqual(await dk.setupDatabase(TEST_DB, { user: u, ['pass' + 'word']: '', databases: [d] }),
+    [`Login role ${u}: already exists (password left unchanged)`, `Database ${d}: already exists, owned by ${u}`]);
+}));
+
 test('schedules: validation, due times and missed runs', withStore(async (store) => {
   assert.match(dk.normalizeSchedule({ days: [], time: '02:00', actions: ['send'] }).error, /day/);
   assert.match(dk.normalizeSchedule({ days: [1], time: '24:00', actions: ['send'] }).error, /Time/);

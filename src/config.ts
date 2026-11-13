@@ -136,6 +136,13 @@ export function connectionSettings(db: DatabaseConfig, name = db.name): { connec
   return { host: db.host, port: db.port, user: db.user, password: db.password, database: name };
 }
 
+// The app's login and database name, from database.url when set, else the separate fields.
+export function databaseLogin(db: DatabaseConfig): { user: string; password: string; name: string } {
+  if (!db.url) return { user: db.user, password: db.password, name: db.name };
+  const u = new URL(db.url);
+  return { user: decodeURIComponent(u.username), password: decodeURIComponent(u.password), name: decodeURIComponent(u.pathname.slice(1)) };
+}
+
 // The settings with passwords and URLs hidden, for --check-config and the debug log.
 export function maskedConfig(c: ServerConfig): ServerConfig {
   return {

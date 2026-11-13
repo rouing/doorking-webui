@@ -22,6 +22,9 @@ export interface ServerConfig {
   security: { sessionIdleMinutes: number; maxFailedSignIns: number; signInWindowMinutes: number };
   schedules: { checkSeconds: number };
   cameras: { ffmpeg: string; tidyMinutes: number }; // ffmpeg: '' = tools/bin, else ffmpeg on the PATH; a path is absolute
+  // SMTP for account emails and gate alerts; host '' = email off. security: 'starttls' (port 587), 'tls' (465) or
+  // 'none'. appUrl: the address links in emails point to ('' = https://<server.publicHost>).
+  email: { host: string; port: number; security: string; user: string; password: string; from: string; appUrl: string };
   gateDefaults: typeof GATE_DEFAULTS;
 }
 
@@ -36,6 +39,7 @@ const DEFAULTS = {
   security: { sessionIdleMinutes: 30, maxFailedSignIns: 5, signInWindowMinutes: 15 },
   schedules: { checkSeconds: 30 },
   cameras: { ffmpeg: '', tidyMinutes: 60 },
+  email: { host: '', port: 587, security: 'starttls', user: '', password: '', from: '', appUrl: '' },
   gateDefaults: { ...GATE_DEFAULTS },
 };
 type Section = keyof typeof DEFAULTS;
@@ -43,7 +47,7 @@ type Section = keyof typeof DEFAULTS;
 const RANGES: Record<string, [number, number]> = {
   'server.port': [1, 65535], 'database.port': [1, 65535], 'database.poolSize': [1, 100],
   'security.sessionIdleMinutes': [1, 1440], 'security.maxFailedSignIns': [1, 100], 'security.signInWindowMinutes': [1, 1440],
-  'schedules.checkSeconds': [5, 3600], 'cameras.tidyMinutes': [5, 1440],
+  'schedules.checkSeconds': [5, 3600], 'cameras.tidyMinutes': [5, 1440], 'email.port': [1, 65535],
 };
 
 const fail = (msg: string): never => { throw new Error(msg); };
@@ -109,6 +113,11 @@ export function loadConfig({ file, env = process.env, args = process.argv.slice(
   }
   s.server.publicHost = String(s.server.publicHost).trim().toLowerCase();
   for (const k of ['media', 'logs', 'keyFile'] as const) s.paths[k] = path.resolve(dir, s.paths[k]);
+  if (!['starttls', 'tls', 'none'].includes(s.email.security)) fail(`${f}: "email.security" must be starttls, tls or none`);
+  if (s.email.host && !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$|<[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+>$/.test(s.email.from)) {
+    fail(`${f}: "email.from" must be an address such as "DoorKing Gate Manager <gate@example.com>" when email.host is set`);
+  }
+  s.email.appUrl = String(s.email.appUrl || (s.server.publicHost ? `https://${s.server.publicHost}` : `http://localhost:${s.server.port}`)).replace(/\/+$/, '');
   // A path (with a folder) is relative to the file's folder; a bare name such as "ffmpeg" is looked up on the PATH.
   if (/[\\/]/.test(s.cameras.ffmpeg)) s.cameras.ffmpeg = path.resolve(dir, s.cameras.ffmpeg);
   return { file: fs.existsSync(f) ? f : null, ...s };
@@ -132,5 +141,6 @@ export function maskedConfig(c: ServerConfig): ServerConfig {
   return {
     ...c,
     database: { ...c.database, password: c.database.password ? '***' : '', url: c.database.url ? c.database.url.replace(/:[^:@/]*@/, ':***@') : '' },
+    email: { ...c.email, password: c.email.password ? '***' : '' },
   };
 }

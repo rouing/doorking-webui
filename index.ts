@@ -16,6 +16,8 @@ export * from './src/tx-history.ts';
 export * from './src/users.ts';
 export * from './src/gate-list.ts';
 export * from './src/api-keys.ts';
+export * from './src/passkeys.ts';
+export * from './src/email.ts';
 export * from './src/audit.ts';
 export * from './src/schedules.ts';
 export * from './src/cameras.ts';

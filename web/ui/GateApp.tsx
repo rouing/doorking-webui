@@ -151,9 +151,9 @@ export function GateApp({ session, gate, onChange }: { session: SignedIn; gate: 
     page = <Schedules gapi={gapi} video={snaps.video} />;
   } else if (nav === 'prefs') {
     page = <SystemSettings phone={gate.phoneNumber} gapi={gapi} prefs={prefs} defaults={session.defaults} list={residents}
-      cameras={cameras} user={session.user} onReload={loadData} onSessionChange={onChange} onJobStarted={jobStarted} />;
+      cameras={cameras} user={session.user} emailEnabled={session.emailEnabled} onReload={loadData} onSessionChange={onChange} onJobStarted={jobStarted} />;
   } else if (nav === 'user') {
-    page = <UserSettings user={session.user} email={session.email} dark={session.dark} onSaved={onChange} />;
+    page = <UserSettings session={session} onSaved={onChange} />;
   } else if (nav === 'relays') {
     page = <RelaysPage gapi={gapi} prefs={prefs} onReload={loadData} onJobStarted={jobStarted} />;
   } else if (nav === 'display') {

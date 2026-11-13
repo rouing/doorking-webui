@@ -9,6 +9,7 @@ import path from 'node:path';
 import * as dk from '../index.ts';
 import { helpPage, inline, markdownToHtml } from '../src/markdown.ts';
 import { loadData } from '../web/data.ts';
+import { isoCBOR } from '@simplewebauthn/server/helpers';
 
 const SIZE = 1024;
 
@@ -500,17 +501,20 @@ test('accounts: rules, scrypt hashes, unique usernames and emails, own settings 
   assert.throws(() => dk.checkEmail('nope'), /email/);
   assert.strictEqual(await dk.userCount(store), 0);
   const u = await dk.createUser(store, { username: 'Jane', password: PW, email: 'Jane@Example.com', createdBy: 'admin' });
-  assert.deepStrictEqual([u.username, u.email, u.mustChangePassword, u.createdBy], ['jane', 'jane@example.com', true, 'admin']);
+  assert.deepStrictEqual([u.username, u.email, u.pendingEmail, u.mustChangePassword, u.createdBy], ['jane', '', 'jane@example.com', true, 'admin']);
   const hash = (await store.db.query('SELECT password_hash FROM users')).rows[0].password_hash;
   assert.ok(hash.startsWith('scrypt$') && !hash.includes(PW));
   await assert.rejects(() => dk.createUser(store, { username: 'JANE', password: PW, createdBy: 'x' }), (e) => e.status === 409 && /already taken/.test(e.message));
+  await dk.confirmEmail(store, 'jane', 'jane@example.com');
+  assert.strictEqual((await dk.getUser(store, 'jane')).email, 'jane@example.com');
   await assert.rejects(() => dk.createUser(store, { username: 'john', password: PW, email: 'jane@EXAMPLE.com', createdBy: 'x' }), /already used/);
   assert.strictEqual(await dk.authenticate(store, 'jane', 'wrong password!!'), null);
   assert.strictEqual(await dk.authenticate(store, 'nobody', PW), null);
   const signed = await dk.authenticate(store, 'JANE', PW);
   assert.deepStrictEqual([signed.username, signed.signIns, Boolean(signed.lastSignIn)], ['jane', 1, true]);
-  // Own settings: email (unique, '' removes) and dark mode.
+  // Own settings: email (unique once confirmed, '' removes) and dark mode.
   await dk.createUser(store, { username: 'john', password: PW, email: 'john@example.com', createdBy: 'x' });
+  await dk.confirmEmail(store, 'john', 'john@example.com');
   await assert.rejects(() => dk.updateUserSettings(store, 'jane', { email: 'john@example.com' }), /already used/);
   assert.deepStrictEqual(await dk.updateUserSettings(store, 'jane', { email: '', dark: true }).then((x) => [x.email, x.dark]), ['', true]);
   // Own password change: needs the current one; ends the other sessions, keeps this one; clears must-change.
@@ -527,6 +531,96 @@ test('accounts: rules, scrypt hashes, unique usernames and emails, own settings 
   await dk.setPassword(store, 'jane', PW, { mustChange: true });
   assert.strictEqual((await dk.getUser(store, 'jane')).mustChangePassword, true);
   assert.strictEqual((await store.db.query("SELECT COUNT(*)::int AS n FROM sessions WHERE username = 'jane'")).rows[0].n, 0);
+}));
+
+test('email: confirmation, unconfirmed addresses never block, reset lookup, invitations, notifications switch', withStore(async (store) => {
+  await dk.createUser(store, { username: 'ann', password: PW, createdBy: 't', mustChangePassword: false });
+  // A new address waits for its link; the confirmed one stays meanwhile.
+  let u = await dk.updateUserSettings(store, 'ann', { email: 'Ann@Example.com' });
+  assert.deepStrictEqual([u.email, u.pendingEmail], ['', 'ann@example.com']);
+  const t1 = await dk.createToken(store, 'verify', 'ann', 'ann@example.com');
+  assert.strictEqual(await dk.useToken(store, 'reset', t1), null); // wrong kind (and now used up)
+  const t2 = await dk.createToken(store, 'verify', 'ann', 'ann@example.com');
+  const t3 = await dk.createToken(store, 'verify', 'ann', 'ann@example.com'); // replaces t2
+  assert.strictEqual(await dk.useToken(store, 'verify', t2), null);
+  assert.deepStrictEqual(await dk.useToken(store, 'verify', t3), { username: 'ann', data: 'ann@example.com' });
+  assert.strictEqual(await dk.useToken(store, 'verify', t3), null); // once only
+  assert.ok(!(await store.db.query('SELECT token_hash FROM email_tokens')).rows.some((r) => r.token_hash === t3));
+  u = await dk.confirmEmail(store, 'ann', 'ann@example.com');
+  assert.deepStrictEqual([u.email, u.pendingEmail], ['ann@example.com', '']);
+  u = await dk.updateUserSettings(store, 'ann', { email: 'new@example.com' });
+  assert.deepStrictEqual([u.email, u.pendingEmail], ['ann@example.com', 'new@example.com']);
+  // Someone typing ann's address (or a stranger's) doesn't take it: only confirming does, and only once.
+  await dk.createUser(store, { username: 'bob', password: PW, createdBy: 't', email: 'new@example.com' });
+  await dk.confirmEmail(store, 'bob', 'new@example.com');
+  await assert.rejects(() => dk.confirmEmail(store, 'ann', 'new@example.com'), /already used/);
+  await assert.rejects(() => dk.confirmEmail(store, 'ann', 'other@example.com'), /no longer waiting/);
+  // Expired links don't work.
+  const t4 = await dk.createToken(store, 'reset', 'ann');
+  await store.db.query("UPDATE email_tokens SET expires_at = now() - interval '1 second'");
+  assert.strictEqual(await dk.useToken(store, 'reset', t4), null);
+  assert.strictEqual(await dk.deleteExpiredTokens(store), 0); // useToken already removed it
+  // Reset: by username or confirmed email; never for an account without one.
+  assert.strictEqual((await dk.userForReset(store, 'ANN@example.com')).username, 'ann');
+  assert.strictEqual((await dk.userForReset(store, 'ann')).username, 'ann');
+  await dk.createUser(store, { username: 'cyd', password: PW, createdBy: 't', email: 'cyd@example.com' });
+  assert.strictEqual(await dk.userForReset(store, 'cyd'), null); // unconfirmed
+  assert.strictEqual(await dk.userForReset(store, 'nobody'), null);
+  // Invitations: no password until accepted (can't sign in), then the email counts as confirmed.
+  await assert.rejects(() => dk.createUser(store, { username: 'dee', createdBy: 'ann', invite: true }), /needs an email/);
+  const dee = await dk.createUser(store, { username: 'dee', createdBy: 'ann', email: 'dee@example.com', invite: true });
+  assert.deepStrictEqual([dee.invited, dee.mustChangePassword, dee.pendingEmail], [true, false, 'dee@example.com']);
+  assert.strictEqual(await dk.authenticate(store, 'dee', '!'), null);
+  assert.strictEqual(await dk.userForReset(store, 'dee'), null);
+  const accepted = await dk.acceptInvite(store, 'dee', NEW_PW);
+  assert.deepStrictEqual([accepted.invited, accepted.email, accepted.pendingEmail], [false, 'dee@example.com', '']);
+  await assert.rejects(() => dk.acceptInvite(store, 'dee', NEW_PW), /already used/);
+  assert.ok(await dk.authenticate(store, 'dee', NEW_PW));
+  // Gate alerts go to admins with a confirmed email and alerts on.
+  await dk.registerGate(store, GATE_A, 'ann');
+  await dk.grantAccess(store, '5550100', 'dee', 'admin', 'ann');
+  await dk.grantAccess(store, '5550100', 'bob', 'readonly', 'ann');
+  assert.deepStrictEqual((await dk.alertRecipients(store, '5550100')).map((r) => r.username).sort(), ['ann', 'dee']);
+  await dk.updateUserSettings(store, 'dee', { notifyAlerts: false, notifyAccess: false });
+  assert.deepStrictEqual((await dk.alertRecipients(store, '5550100')).map((r) => r.username), ['ann']);
+  assert.strictEqual((await dk.getUser(store, 'dee')).notifyAccess, false);
+  assert.ok((await dk.gateUsers(store, '5550100')).every((g) => g.invited === false));
+}));
+
+test('email outbox: bodies encrypted until sent, retries with a growing wait, then given up', withStore(async (store) => {
+  const sent = [];
+  let fail = false;
+  const mailer = { sendMail: async (m) => { if (fail) throw new Error('SMTP 421 try later'); sent.push(m); } };
+  const id = await dk.queueEmail(store, { to: 'a@example.com', subject: 'Hi', text: 'secret link https://x/#reset=abc', kind: 'reset' });
+  const raw = (await store.db.query('SELECT body FROM emails WHERE id = $1', [id])).rows[0].body;
+  assert.ok(raw.startsWith('v1:') && !raw.includes('reset=abc'));
+  assert.deepStrictEqual(await dk.sendQueued(store, mailer, 'Gate <gate@example.com>'), { sent: 1, failed: 0 });
+  assert.deepStrictEqual([sent[0].to, sent[0].from, sent[0].text], ['a@example.com', 'Gate <gate@example.com>', 'secret link https://x/#reset=abc']);
+  let row = (await store.db.query('SELECT status, body, sent_at FROM emails WHERE id = $1', [id])).rows[0];
+  assert.deepStrictEqual([row.status, row.body, Boolean(row.sent_at)], ['sent', null, true]);
+  fail = true;
+  const id2 = await dk.queueEmail(store, { to: 'b@example.com', subject: 'Hi', text: 'x', kind: 'access' });
+  const logs = [];
+  for (let i = 0; i < 6; i++) {
+    await dk.sendQueued(store, mailer, 'g@example.com', (m) => logs.push(m));
+    await store.db.query("UPDATE emails SET next_try = now() WHERE id = $1 AND status = 'queued'", [id2]); // skip the wait
+  }
+  row = (await store.db.query('SELECT status, attempts, error, body FROM emails WHERE id = $1', [id2])).rows[0];
+  assert.deepStrictEqual([row.status, row.attempts, row.error, row.body], ['failed', 6, 'SMTP 421 try later', null]);
+  assert.match(logs[0], /trying again in 1 min/);
+  assert.match(logs[5], /given up/);
+  assert.deepStrictEqual((await dk.listEmails(store)).map((e) => [e.to, e.status]), [['b@example.com', 'failed'], ['a@example.com', 'sent']]);
+  assert.match(dk.messages.reset('https://gate.example.com', 'ann', 'TOK').text, /https:\/\/gate\.example\.com\/#reset=TOK/);
+}));
+
+test('old emails become unconfirmed once', withStore(async (store) => {
+  await dk.createUser(store, { username: 'ann', password: PW, createdBy: 't' });
+  await store.db.query("UPDATE users SET email = 'ann@example.com', pending_email = NULL");
+  assert.strictEqual(await dk.unconfirmOldEmails(store), 1);
+  assert.deepStrictEqual(await dk.getUser(store, 'ann').then((u) => [u.email, u.pendingEmail]), ['', 'ann@example.com']);
+  await dk.confirmEmail(store, 'ann', 'ann@example.com');
+  assert.strictEqual(await dk.unconfirmOldEmails(store), null);
+  assert.strictEqual((await dk.getUser(store, 'ann')).email, 'ann@example.com');
 }));
 
 test('sessions: stored hashed, found by token, ended when idle, open gate kept', withStore(async (store) => {
@@ -590,7 +684,7 @@ test('API keys: per gate, shown once, stored hashed, role and expiry, revoked at
   assert.match(key, /^dkg_[0-9a-f]{12}_[A-Za-z0-9_-]{43}$/);
   assert.deepStrictEqual([apiKey.name, apiKey.role, apiKey.createdBy, apiKey.expiresAt, apiKey.lastUsedAt], ['Home Assistant', 'readonly', 'ann', null, null]);
   const row = (await store.db.query('SELECT * FROM api_keys')).rows[0];
-  assert.ok(!JSON.stringify(row).includes(key.split('_')[2]));
+  assert.ok(!JSON.stringify(row).includes(key.slice(17))); // the secret after dkg_<id>_
   assert.deepStrictEqual(await dk.findApiKey(store, key), { id: apiKey.id, phone: '5550100', name: 'Home Assistant', role: 'readonly' });
   assert.ok((await dk.listApiKeys(store, '5550100'))[0].lastUsedAt);
   assert.strictEqual(await dk.findApiKey(store, `${key.slice(0, -1)}${key.endsWith('A') ? 'B' : 'A'}`), null); // wrong secret
@@ -612,6 +706,110 @@ test('API keys: per gate, shown once, stored hashed, role and expiry, revoked at
   assert.strictEqual((await dk.deleteGateData(store, '5550111')).api_keys, 1);
   assert.strictEqual(await dk.findApiKey(store, other.key), null);
 }));
+
+// A software authenticator (ES256) that answers WebAuthn registration and sign-in like a real passkey would.
+function softAuthenticator() {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const jwk = publicKey.export({ format: 'jwk' });
+  const credId = crypto.randomBytes(16);
+  const b64 = (b) => Buffer.from(b).toString('base64url');
+  const sha = (b) => crypto.createHash('sha256').update(b).digest();
+  const cose = isoCBOR.encode(new Map([[1, 2], [3, -7], [-1, 1], [-2, new Uint8Array(Buffer.from(jwk.x, 'base64url'))], [-3, new Uint8Array(Buffer.from(jwk.y, 'base64url'))]]));
+  const counter = (n) => { const b = Buffer.alloc(4); b.writeUInt32BE(n); return b; };
+  const client = (type, challenge, origin) => Buffer.from(JSON.stringify({ type, challenge, origin, crossOrigin: false }));
+  return {
+    id: b64(credId),
+    register(options, origin = 'https://gate.example.com') {
+      const authData = Buffer.concat([sha(options.rp.id), Buffer.from([0x45]), counter(0), Buffer.alloc(16), Buffer.from([0, credId.length]), credId, Buffer.from(cose)]);
+      const attestationObject = isoCBOR.encode(new Map([['fmt', 'none'], ['attStmt', new Map()], ['authData', new Uint8Array(authData)]]));
+      return { id: b64(credId), rawId: b64(credId), type: 'public-key', clientExtensionResults: {},
+        response: { clientDataJSON: b64(client('webauthn.create', options.challenge, origin)), attestationObject: b64(attestationObject), transports: ['internal'] } };
+    },
+    signIn(options, n, origin = 'https://gate.example.com') {
+      const authData = Buffer.concat([sha(options.rpId), Buffer.from([0x05]), counter(n)]);
+      const cd = client('webauthn.get', options.challenge, origin);
+      const signature = crypto.sign('sha256', Buffer.concat([authData, sha(cd)]), privateKey);
+      return { id: b64(credId), rawId: b64(credId), type: 'public-key', clientExtensionResults: {},
+        response: { clientDataJSON: b64(cd), authenticatorData: b64(authData), signature: b64(signature) } };
+    },
+  };
+}
+
+test('passkeys: added with a real WebAuthn answer, sign in, one-use challenges, site and counter checks', withStore(async (store) => {
+  const RP = { rpID: 'gate.example.com', origin: 'https://gate.example.com' };
+  await dk.createUser(store, { username: 'ann', password: PW, createdBy: 't', mustChangePassword: false });
+  assert.strictEqual(await dk.checkOwnPassword(store, 'ann', PW), true);
+  assert.strictEqual(await dk.checkOwnPassword(store, 'ann', 'wrong password!!'), false);
+  const key = softAuthenticator();
+  const opts = await dk.registrationOptions(store, 'ann', RP);
+  assert.deepStrictEqual([opts.rp.id, opts.authenticatorSelection.residentKey, opts.authenticatorSelection.userVerification], ['gate.example.com', 'required', 'required']);
+  await assert.rejects(() => dk.addPasskey(store, 'ann', key.register(opts, 'https://evil.example.com'), 'Phone', RP), /could not be added/); // wrong origin (challenge now used up)
+  await assert.rejects(() => dk.addPasskey(store, 'ann', key.register(opts), 'Phone', RP), /could not be added/); // challenge used once
+  const opts2 = await dk.registrationOptions(store, 'ann', RP);
+  const pk = await dk.addPasskey(store, 'ann', key.register(opts2), 'Phone', RP);
+  assert.deepStrictEqual([pk.id, pk.name, pk.site, pk.lastUsedAt], [key.id, 'Phone', 'gate.example.com', null]);
+  const handle = (await store.db.query('SELECT webauthn_id FROM users')).rows[0].webauthn_id;
+  assert.ok(handle && !handle.includes('ann'));
+  assert.deepStrictEqual((await dk.registrationOptions(store, 'ann', RP)).excludeCredentials.map((c) => c.id), [key.id]);
+  // Sign-in: no username; the right challenge, origin, site and a rising counter.
+  const a1 = await dk.authenticationOptions(RP);
+  assert.strictEqual(await dk.signInWithPasskey(store, key.signIn(a1, 5), RP), 'ann');
+  assert.ok((await dk.listPasskeys(store, 'ann'))[0].lastUsedAt);
+  await assert.rejects(() => dk.signInWithPasskey(store, key.signIn(a1, 6), RP), (e) => e.status === 401); // challenge reused
+  const a2 = await dk.authenticationOptions(RP);
+  await assert.rejects(() => dk.signInWithPasskey(store, key.signIn(a2, 3), RP), (e) => e.status === 401); // counter went back
+  const a3 = await dk.authenticationOptions(RP);
+  await assert.rejects(() => dk.signInWithPasskey(store, key.signIn(a3, 9, 'https://evil.example.com'), RP), /Passkey sign-in failed/);
+  const a4 = await dk.authenticationOptions({ rpID: 'localhost', origin: 'http://localhost:8080' });
+  await assert.rejects(() => dk.signInWithPasskey(store, key.signIn(a4, 9, 'http://localhost:8080'), { rpID: 'localhost', origin: 'http://localhost:8080' }),
+    /not registered here/); // made for the public name only
+  await assert.rejects(async () => dk.signInWithPasskey(store, softAuthenticator().signIn(await dk.authenticationOptions(RP), 1), RP), /not registered here/);
+  // A registration challenge can't be used to sign in.
+  const reg = await dk.registrationOptions(store, 'ann', RP);
+  await assert.rejects(() => dk.signInWithPasskey(store, key.signIn({ rpId: RP.rpID, challenge: reg.challenge }, 20), RP), (e) => e.status === 401);
+  // Rename, remove (only your own).
+  await dk.createUser(store, { username: 'bob', password: PW, createdBy: 't' });
+  await assert.rejects(() => dk.removePasskey(store, 'bob', key.id), (e) => e.status === 404);
+  await dk.renamePasskey(store, 'ann', key.id, 'iPhone');
+  assert.strictEqual((await dk.listPasskeys(store, 'ann'))[0].name, 'iPhone');
+  assert.strictEqual(await dk.removePasskey(store, 'ann', key.id), 'iPhone');
+  await assert.rejects(async () => dk.signInWithPasskey(store, key.signIn(await dk.authenticationOptions(RP), 30), RP), /not registered here/);
+}));
+
+test('docs/openapi.json matches the routes an API key can use (paths, methods, roles) and its references resolve', () => {
+  const root = path.join(import.meta.dirname, '..');
+  const src = fs.readFileSync(path.join(root, 'web', 'server.ts'), 'utf8');
+  const spec = JSON.parse(fs.readFileSync(path.join(root, 'docs', 'openapi.json'), 'utf8'));
+  const fromRoutes = new Map();
+  for (const m of src.matchAll(/(webOnly\()?route\('(GET|POST|PUT|DELETE)', (`[^`]*`|'[^']*'|G), '([a-z-]+)'/g)) {
+    const [, webOnly, method, raw, scope] = m;
+    if (webOnly || !scope.startsWith('gate')) continue;
+    const sub = raw === 'G' ? '' : raw.replace(/^[`']|[`']$/g, '').replace('${G}', '');
+    fromRoutes.set(`${method.toLowerCase()} /api/gates/{phone}${sub.replace(/:(\w+)/g, '{$1}')}`, scope === 'gate' ? 'readonly' : 'admin');
+  }
+  const fromSpec = new Map();
+  for (const [p, ops] of Object.entries(spec.paths)) for (const [method, o] of Object.entries(ops)) fromSpec.set(`${method} ${p}`, o['x-role']);
+  const missing = [...fromRoutes.keys()].filter((k) => !fromSpec.has(k));
+  const extra = [...fromSpec.keys()].filter((k) => !fromRoutes.has(k));
+  assert.deepStrictEqual({ missing, extra }, { missing: [], extra: [] }, 'every API-key route is in the spec, and nothing else');
+  for (const [k, role] of fromRoutes) assert.strictEqual(fromSpec.get(k), role, `x-role of ${k}`);
+  // Every $ref points somewhere, and every {param} in a path is declared by its operations.
+  const resolve = (r) => r.slice(2).split('/').reduce((o, k) => (o ? o[k] : undefined), spec);
+  const walk = (v) => {
+    if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { if (k === '$ref') assert.ok(resolve(x), `unresolved ${x}`); else walk(x); }
+  };
+  walk(spec);
+  for (const [p, ops] of Object.entries(spec.paths)) {
+    const want = [...p.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
+    for (const [method, o] of Object.entries(ops)) {
+      const have = (o.parameters || []).map((x) => resolve(x.$ref)).filter((x) => x.in === 'path').map((x) => x.name).sort();
+      assert.deepStrictEqual(have, want, `path parameters of ${method} ${p}`);
+    }
+  }
+  assert.strictEqual(spec.openapi, '3.1.0');
+  assert.strictEqual(spec.components.securitySchemes.apiKey.scheme, 'bearer');
+});
 
 test('moving from DKS sign-in: gates with a saved DKS login, adopted by the first account', withStore(async (store) => {
   const enc = (v) => dk.encrypt(store, v);

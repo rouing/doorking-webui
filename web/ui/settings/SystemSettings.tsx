@@ -67,7 +67,7 @@ function RoleSelect({ value, onChange }: { value: GateRole; onChange: (r: GateRo
 
 // Who may use this gate (admins): roles, removing access, creating an account for the gate, and sharing it with an
 // existing account. A gate always keeps at least one admin; nobody can see or set another user's password.
-function GateUsersCard({ gapi, me, onSessionChange }: { gapi: GateApi; me: string; onSessionChange: () => void }) {
+function GateUsersCard({ gapi, me, emailEnabled, onSessionChange }: { gapi: GateApi; me: string; emailEnabled: boolean; onSessionChange: () => void }) {
   const [users, setUsers] = useState<GateUser[]>([]);
   const [info, setInfo] = useState('');
   const [create, setCreate] = useState({ username: '', password: '', email: '', role: 'readonly' as GateRole });
@@ -94,14 +94,19 @@ function GateUsersCard({ gapi, me, onSessionChange }: { gapi: GateApi; me: strin
   const createUser = async () => {
     setExists('');
     try {
-      setUsers((await gapi<{ users: GateUser[] }>('POST', '/users', create)).users);
-      setCreateInfo(`Account ${create.username.trim().toLowerCase()} created. Give them the username and temporary password; they choose their own at their first sign-in.`);
+      const r = await gapi<{ users: GateUser[]; invited: boolean }>('POST', '/users', create);
+      setUsers(r.users);
+      const who = create.username.trim().toLowerCase();
+      setCreateInfo(r.invited ? `Invitation sent to ${create.email.trim()}. ${who} chooses their password with the link (valid 72 hours).`
+        : `Account ${who} created. Give them the username and temporary password; they choose their own at their first sign-in.`);
       setCreate({ username: '', password: '', email: '', role: 'readonly' });
     } catch (e) {
       setCreateInfo(errorText(e));
       if (e instanceof ApiError && e.body.exists) setExists(create.username.trim().toLowerCase());
     }
   };
+  const resendInvite = (u: GateUser) => act(() => gapi('POST', `/users/${encodeURIComponent(u.username)}/invite`, {}), setInfo,
+    `Invitation sent again to ${u.pendingEmail}.`);
   const shareWith = (username: string, role: GateRole, set: (t: string) => void) =>
     act(() => gapi('POST', '/share', { username, role }), set, `Shared with ${username.trim().toLowerCase()}.`);
   return (
@@ -121,7 +126,11 @@ function GateUsersCard({ gapi, me, onSessionChange }: { gapi: GateApi; me: strin
             {users.map((u) => (
               <Table.Row key={u.username} align="center">
                 <Table.Cell>{u.username}{u.username === me && <Badge ml="2" color="gray">you</Badge>}</Table.Cell>
-                <Table.Cell>{u.email}</Table.Cell>
+                <Table.Cell>
+                  {u.email || (u.pendingEmail ? <Text color="gray">{u.pendingEmail} (unconfirmed)</Text> : '')}
+                  {u.invited && <Flex gap="2" align="center" mt="1"><Badge color="amber">invited</Badge>
+                    {emailEnabled && <Button size="1" variant="ghost" onClick={() => resendInvite(u)}>Send again</Button>}</Flex>}
+                </Table.Cell>
                 <Table.Cell><RoleSelect value={u.role} onChange={(r) => changeRole(u, r)} /></Table.Cell>
                 <Table.Cell>{u.grantedBy}</Table.Cell>
                 <Table.Cell>{u.lastSignIn ? fmtTime(u.lastSignIn) : 'never'}</Table.Cell>
@@ -132,11 +141,15 @@ function GateUsersCard({ gapi, me, onSessionChange }: { gapi: GateApi; me: strin
         </Table.Root>
         {info && <Text size="2" color="gray">{info}</Text>}
         <Heading size="2">Create an account for this gate</Heading>
+        <Text size="2" color="gray">
+          {emailEnabled ? 'With an email and no password, they get an invitation link to choose their own password. Without an email, set a temporary password; they choose their own at their first sign-in.'
+            : 'Set a temporary password; they choose their own at their first sign-in. (Email invitations need email set up on the server.)'}
+        </Text>
         <Grid columns={{ initial: '1', sm: '4' }} gap="3">
           <Field label="Username"><TextField.Root value={create.username} autoComplete="off" onChange={(e) => setCreate({ ...create, username: e.target.value })} /></Field>
-          <Field label="Temporary password (12+ characters)"><TextField.Root type="password" value={create.password} autoComplete="new-password"
+          <Field label={emailEnabled ? "Temporary password (only without an invitation)" : "Temporary password (12+ characters)"}><TextField.Root type="password" value={create.password} autoComplete="new-password"
             onChange={(e) => setCreate({ ...create, password: e.target.value })} /></Field>
-          <Field label="Email (optional)"><TextField.Root type="email" value={create.email} onChange={(e) => setCreate({ ...create, email: e.target.value })} /></Field>
+          <Field label={emailEnabled ? "Email (sends an invitation)" : "Email (optional)"}><TextField.Root type="email" value={create.email} onChange={(e) => setCreate({ ...create, email: e.target.value })} /></Field>
           <Field label="Role"><RoleSelect value={create.role} onChange={(r) => setCreate({ ...create, role: r })} /></Field>
         </Grid>
         <Flex gap="3" align="center" wrap="wrap">
@@ -191,7 +204,8 @@ function ApiKeysCard({ phone, gapi }: { phone: string; gapi: GateApi }) {
           Keys let scripts and other systems use this gate's API without a username or password. A key belongs to the gate (it keeps working if
           the person who made it leaves) and works only on this gate. <strong>Read only</strong> keys can view and pull; <strong>Admin</strong> keys
           can also make changes and send. No key can change the gate login, users, API keys, or delete the gate's data. Send it as the header{' '}
-          <code>Authorization: Bearer &lt;key&gt;</code> to <code>/api/gates/{phone}/…</code>.
+          <code>Authorization: Bearer &lt;key&gt;</code> to <code>/api/gates/{phone}/…</code>.{' '}
+          <Link href="/api/docs" target="_blank" rel="noopener">API documentation ↗</Link> (try calls there with a key).
         </Text>
         {created && (
           <Callout.Root color="green">
@@ -329,9 +343,9 @@ function WorkingCopyFiles({ phone, available }: { phone: string; available: bool
 // System Settings: gate login and users (admins), gate configuration, gate settings (working copy), working copy
 // files, device association, cameras, debug logs and deleting the gate's stored data. Relay names are on the
 // Relays page; dark mode is in User Settings. Read-only users see the gate's configuration and settings, disabled.
-export function SystemSettings({ phone, gapi, prefs, defaults, list, cameras, user, onReload, onSessionChange, onJobStarted }: {
+export function SystemSettings({ phone, gapi, prefs, defaults, list, cameras, user, emailEnabled, onReload, onSessionChange, onJobStarted }: {
   phone: string; gapi: GateApi; prefs: GatePrefs; defaults: Config; list: ResidentsReply | null; cameras: CameraSettings | null;
-  user: string; onReload: () => Promise<void>; onSessionChange: () => void; onJobStarted: () => void;
+  user: string; emailEnabled: boolean; onReload: () => Promise<void>; onSessionChange: () => void; onJobStarted: () => void;
 }) {
   const gs = useGateSettings(gapi);
   const readOnly = useReadOnly();
@@ -363,7 +377,7 @@ export function SystemSettings({ phone, gapi, prefs, defaults, list, cameras, us
     <Flex direction="column" gap="4">
       <Heading>System Settings</Heading>
       <GateLoginCard gapi={gapi} onJobStarted={onJobStarted} />
-      <GateUsersCard gapi={gapi} me={user} onSessionChange={onSessionChange} />
+      <GateUsersCard gapi={gapi} me={user} emailEnabled={emailEnabled} onSessionChange={onSessionChange} />
       <ApiKeysCard phone={phone} gapi={gapi} />
       {shared}
       <WorkingCopyFiles phone={phone} available={Boolean(gs.reply)} />

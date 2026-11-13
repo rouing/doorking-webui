@@ -3,6 +3,11 @@
 Every action in the web page goes through this API. Scripts and other systems use it with a gate's **API key**
 (below); the routes are defined in the `ROUTES` table in `web/server.ts`.
 
+**OpenAPI:** the routes an API key can use are described in [`openapi.json`](openapi.json) (OpenAPI 3.1), served at
+`GET /api/openapi.json` and browsable at **`/api/docs`** (Swagger UI: **Authorize** with a key, then **Try it out**).
+Both are public; they contain no data. A test keeps the file in step with `ROUTES` (every API-key route, method and
+role); update `docs/openapi.json` with any change to those routes.
+
 ## Conventions
 
 - **Address:** `http://localhost:8080/api` (`server.port`). The server listens on `127.0.0.1` only; with
@@ -64,13 +69,26 @@ A user whose password was set by someone else (a new account, or the CLI's `rese
 | Method | Path | Level | Body | Result |
 |---|---|---|---|---|
 | GET | `/help` | public | | the user guide (`MANUAL.md`) as an HTML page (not under `/api`) |
-| GET | `/api/session` | public | | `{ loggedIn: false, setup? }` (`setup`: no account exists yet), or `{ loggedIn: true, user, email, dark, mustChangePassword, gate, defaults, holidayList }`; `gate`: `{ phoneNumber, siteName, addedAt, role }` |
+| GET | `/api/session` | public | | `{ loggedIn: false, setup?, emailEnabled }` (`setup`: no account exists yet), or `{ loggedIn: true, user, email, pendingEmail, dark, notifyAccess, notifyAlerts, mustChangePassword, emailEnabled, gate, defaults, holidayList }`; `gate`: `{ phoneNumber, siteName, addedAt, role }` |
 | POST | `/api/session` | public | `{ user, password }` | local account; 200 `{ ok: true }` and the `sid` cookie; 401 wrong username or password; 429 too many failures |
 | DELETE | `/api/session` | public | | sign out: `{ ok: true }` |
 | POST | `/api/setup` | public | `{ setupCode, username, password, email? }` | only while no account exists: creates the first account (admin of every gate without an admin) and signs it in: 201 `{ ok, gates }`; 403 wrong setup code (printed in the server's console at start); 409 once an account exists |
-| GET | `/api/me` | user | | `{ username, email, dark }` |
-| PUT | `/api/me` | user | `{ email?, dark? }` | your own settings; `email: ""` removes it; 409 when the email belongs to another account |
+| GET | `/api/me` | user | | `{ username, email, pendingEmail, dark, notifyAccess, notifyAlerts }` (`email`: confirmed; `pendingEmail`: waiting for its link) |
+| PUT | `/api/me` | user | `{ email?, dark?, notifyAccess?, notifyAlerts? }` | your own settings; a new `email` becomes `pendingEmail` and gets a confirmation link (the old confirmed address is told); `""` removes it; 409 when another account has confirmed it |
+| POST | `/api/me/email/resend` | user | | sends the confirmation link again; 503 when email is off |
+| POST | `/api/email/verify` | public | `{ token }` | confirms the email from a link (`#verify=<token>`): `{ username, email }`; 400 invalid, used or expired |
+| POST | `/api/password-reset/request` | public | `{ identifier }` (username or confirmed email) | always 200 with the same message; a reset link (`#reset=`, 1 hour) goes to the account's confirmed email if there is one. 3 per account and 50 in total per 15 minutes; 503 when email is off |
+| POST | `/api/password-reset` | public | `{ token, password }` | sets the new password, ends all the account's sessions, sends a security alert: `{ username }` |
+| POST | `/api/invite/check` | public | `{ token }` | `{ username }` of an invitation link (`#invite=`), without using it up |
+| POST | `/api/invite` | public | `{ token, password }` | accepts the invitation: sets the password, confirms the email, signs in (`sid` cookie) |
 | PUT | `/api/me/password` | user | `{ current, password }` | change your own password (12+ characters); ends your other sessions; 403 wrong current password |
+| GET | `/api/me/passkeys` | user | | `{ passkeys: [{ id, name, site, synced, createdAt, lastUsedAt }] }` |
+| POST | `/api/me/passkeys/options` | user | `{ password }` (your current one) | WebAuthn creation options for `startRegistration()`; 403 wrong password (5 tries per 15 minutes, then 429); 400 when the page isn't on the public name or `localhost` |
+| POST | `/api/me/passkeys` | user | `{ name?, response }` (the browser's registration answer) | 201 `{ passkeys }`; 400 when the check fails; 409 already registered |
+| PUT | `/api/me/passkeys/{id}` | user | `{ name }` | rename: `{ passkeys }` |
+| DELETE | `/api/me/passkeys/{id}` | user | | remove: `{ passkeys }` |
+| POST | `/api/passkey/options` | public | | WebAuthn request options for `startAuthentication()` (no username: any passkey for this site) |
+| POST | `/api/passkey/session` | public | `{ response }` (the browser's answer) | signs in like `POST /api/session`: 200 and the `sid` cookie; 401 unknown passkey, bad signature, used or expired challenge, or a counter that went back |
 | PUT | `/api/session/gate` | user | `{ phoneNumber }` | the gate the page shows (kept across reloads): `{ gate }` |
 | DELETE | `/api/session/gate` | user | | back to the gate list |
 | GET | `/api/gates` | user | | `{ gates: [{ phoneNumber, siteName, addedAt, role }] }`: the gates you have access to; never master codes or DKS logins |
@@ -85,8 +103,9 @@ A user whose password was set by someone else (a new account, or the CLI's `rese
 |---|---|---|---|---|
 | GET | `/login` | gate-admin | | `{ dksUser, dksPasswordSet }` (the password and master code are never returned) |
 | PUT | `/login` | gate-admin | `{ dksUser?, dksPassword? (empty keeps), masterCode? (empty keeps) }` | a new DKS login is checked with DKS Cloud, then saved: 200 `{ changed }`; a new master code starts a residents pull with it: 202 `{ checking: true }`, saved when the pull succeeds (progress via `/job`) |
-| GET | `/users` | gate-admin | | `{ users: [{ username, email, role, grantedBy, grantedAt, lastSignIn }] }` |
-| POST | `/users` | gate-admin | `{ username, password, email?, role? ("readonly" default \| "admin") }` | creates an account (temporary password, changed at first sign-in) with access to this gate: 201 `{ users }`; 409 `{ exists: true }` when the username is taken (share instead) |
+| GET | `/users` | gate-admin | | `{ users: [{ username, email, pendingEmail, invited, role, grantedBy, grantedAt, lastSignIn }] }` |
+| POST | `/users` | gate-admin | `{ username, password?, email?, role? ("readonly" default \| "admin") }` | creates an account with access to this gate: with `email` and no `password` (and email on), an **invitation** link goes to the email; otherwise `password` is a temporary one (changed at first sign-in) and an `email` gets a confirmation link. 201 `{ users, invited }`; 409 `{ exists: true }` when the username is taken (share instead) |
+| POST | `/users/{username}/invite` | gate-admin | | sends the invitation again (new link): `{ users }`; 409 already accepted |
 | POST | `/share` | gate-admin | `{ username, role? }` | gives an existing account access: `{ users }`; 404 no such user; 409 already has access |
 | PUT | `/users/{username}` | gate-admin | `{ role }` | changes a role: `{ users }`; 409 when it would leave the gate without an admin |
 | DELETE | `/users/{username}` | gate-admin | | takes the user off this gate (the account stays): `{ users }`; 409 for the last admin |
@@ -141,7 +160,7 @@ card numbers are 00001–65407.
 | GET | `/files/{name}` | gate-admin | | download the working copy's `names.bin`, `phone.bin`, `cards.bin` or their `.map` (built from the database) |
 | GET | `/prefs` | gate | | the gate's preferences (see below) |
 | PUT | `/prefs` | gate-admin | any preference keys | saves; changing `gateConfig.areaCodes` converts the working copy (409 when it can't) |
-| GET | `/history` | gate | | `{ events, users }` (`users`: the gate's users with their last sign-in, as `/users`): up to 500 events, newest first, `{ id, time, user, action, summary, result?, error?, details, revertible, revertedBy }`; `signIns: [{ user, last, count }]` |
+| GET | `/history` | gate | | `{ events, users }` (`users`: the gate's users with their last sign-in, as `/users`): up to 500 events, newest first, `{ id, time, user, action, summary, result?, error?, details, revertible, revertedBy }` |
 | POST | `/history/{id}/revert` | gate-admin | | undoes that change in the working copy (and prefs); 409 if already reverted or a later change touched the same data |
 | GET | `/relays` | gate | | live relay state (DKS `GetRelays`): `{ checkedAt, relays }`, all 19 relays |
 | PUT | `/relays` | gate-admin | `{ "<relay>": true\|false, … }` | **changes the gate now** (DKS `SetRelays`); `true` = Active (held open). Allowed: relays 0–2 except a Tracker command relay, plus 3–10 with Tracker 2 and 11–18 with Tracker 1 (400 otherwise) |

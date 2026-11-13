@@ -53,29 +53,44 @@ Sign in (local account) ──> Your gates (admin / read only) ──> Open a ga
    gate admins create accounts (with a temporary password the user must replace at their first sign-in). Nobody
    can read or set another user's password from the web; whoever runs the server can (`node cli.ts reset-password`).
    After 5 failed sign-ins within 15 minutes a username is refused for the rest of that time.
-2. **Sessions.** A random token in the `sid` cookie (HttpOnly, SameSite=Strict, Secure over HTTPS); the database keeps
+2. **Passkeys** (`src/passkeys.ts`, table `passkeys`, `@simplewebauthn/server` and `/browser`): another way to sign in.
+   Added under User Settings after re-entering the password; discoverable (no username at sign-in), user verification
+   required. Each is tied to the site name it was made on: `server.publicHost` (over HTTPS) or `localhost` on the
+   server; 127.0.0.1 can't use passkeys. Challenges are kept in memory for 5 minutes and used once; the signature
+   counter must rise. Only public keys are stored.
+3. **Email** (`src/email.ts`, nodemailer over SMTP; `config.json` → `email`; off without a host). Outbox table
+   `emails` (bodies encrypted, removed once sent; retries 1/5/15/60/240 min) sent every 30 s. One-use links
+   (`email_tokens`, SHA-256 only, in the URL fragment `#verify=`/`#reset=`/`#invite=` so they never reach the server's
+   logs): confirm an address (24 h; only confirmed addresses count and must be unique), reset a password (1 h; the
+   request page never says whether an account exists; 3 per account and 50 in total per 15 min), accept an invitation
+   (72 h; a gate admin can invite by email instead of setting a temporary password). Notifications: gate access
+   granted/changed/removed (opt-out), security alerts (password changed or reset, passkey added/removed, email change to
+   the old address; always), gate alerts to the gate's admins (Send to gate or scheduled transfer failed; opt-out).
+4. **Sessions.** A random token in the `sid` cookie (HttpOnly, SameSite=Strict, Secure over HTTPS); the database keeps
    only its SHA-256 hash (table `sessions`), so sessions survive a restart. They end after **30 minutes idle**, on
    **Sign out**, or when the user changes their password (other sessions). The open gate is kept in the session.
-3. **First start.** While no account exists, the page offers to create the first one, which needs the one-time
+5. **First start.** While no account exists, the page offers to create the first one, which needs the one-time
    **setup code** the server prints in its console (journalctl) at start, or `node cli.ts create-admin <username>`.
    The first account becomes admin of every gate without an admin (gates moved over from DKS sign-in on 2026-11-13).
-4. **Gates** (`src/gate-list.ts`, table `managed_gates`). A gate is added once: phone, master code, its **DKS login**
+6. **Gates** (`src/gate-list.ts`, table `managed_gates`). A gate is added once: phone, master code, its **DKS login**
    and gate configuration. The server checks the DKS login (`CheckLogin`), then pulls residents with these values;
    only when that succeeds is the gate saved, with the adder as its admin (so nobody can claim a gate by typing its
    phone number). Adding a gate already managed here is refused: "ask one of its gate admins to add you". The DKS
    login and master code are encrypted and never sent back; every pull, send, relay call and scheduled transfer of
    the gate uses them. Admins change them under System Settings → Gate login (a new login is checked with DKS
    Cloud; a new master code by a residents pull, saved only when it succeeds).
-5. **Roles** (table `gate_access`). Per gate: **admin** (everything, including the gate's users and login) or
+7. **Roles** (table `gate_access`). Per gate: **admin** (everything, including the gate's users and login) or
    **read only** (view, pull, camera pictures and live view). Routes are scoped `gate` (any role) or `gate-admin`.
    Admins create accounts for their gate, share it with existing accounts, change roles and remove users; a gate
    always keeps at least one admin. **Leave** removes your own access.
-6. **API keys** (`src/api-keys.ts`, table `api_keys`). Scripts don't sign in: a gate admin creates a key under System
+8. **API keys** (`src/api-keys.ts`, table `api_keys`). Scripts don't sign in: a gate admin creates a key under System
    Settings → API keys (name, role, optional expiry of 30/90/365 days); it is shown once and stored as a SHA-256
    hash. A key belongs to its gate (it keeps working if its creator leaves) and is sent as
    `Authorization: Bearer <key>`. It reaches only that gate's routes, with its role; web-only routes (gate login,
    users, API keys, deleting the gate's data, leaving) refuse it. History shows key actions as `api:<key name>`.
-   Revoking deletes it at once. See [API.md](docs/API.md).
+   Revoking deletes it at once. See [API.md](docs/API.md); the key routes are also an OpenAPI 3.1 spec
+   ([`docs/openapi.json`](docs/openapi.json), `GET /api/openapi.json`) with a Swagger UI page at `/api/docs` (served
+   from `swagger-ui-dist`; a test keeps the spec in step with the routes).
 
 ## Features
 Every page works on the open gate. Edits to gate data go to the **working copy** first (blue = unsaved on this
@@ -387,6 +402,8 @@ against changes observed on the gate. The database tests use the `doorking_test`
 - Each gate's DKS login and master code are encrypted with AES-256-GCM in the database; the key is `doorking.key`,
   so anyone with the key and the database (or a dump of it) can decrypt them. They are never sent to the browser or
   logged. Pull/send logs mask credentials. The debug log (all gates) is open only to users who are admin of a gate.
+- Passkeys: WebAuthn with user verification required, origin and site name checked, one-use challenges, rising
+  signature counter; adding one needs the current password (5 wrong tries pause it, like sign-in).
 - API keys: 256-bit random secrets, stored only as SHA-256 hashes, limited to one gate and its role, never accepted
   on web-only routes; requests with an `Authorization` header never use a cookie session, so a browser page on
   another site can't use them (no CORS).
@@ -430,6 +447,8 @@ against changes observed on the gate. The database tests use the `doorking_test`
     users.ts             local accounts (scrypt passwords) and sessions
     gate-list.ts         managed gates (DKS login, master code, encrypted), access roles, the move from DKS sign-in
     api-keys.ts          per-gate API keys (hashed), role and expiry
+    passkeys.ts          passkey (WebAuthn) registration and sign-in
+    email.ts             SMTP outbox, one-use email links, the email texts
     prefs.ts             gate-scoped preferences, Device Association
     notes.ts             resident/vendor notes (database only, not on the gate)
     tx-history.ts        transaction history: merges each pulled rcv_out.bin into tx_history

@@ -116,6 +116,10 @@ Relative paths are relative to the folder `config.json` is in. Unknown names and
 | `schedules.checkSeconds` | `30` | how often scheduled transfers are checked |
 | `cameras.ffmpeg` | `""` | the ffmpeg program: a path (relative to `config.json`'s folder, e.g. `tools/bin/ffmpeg-linux-x64`), or a name looked up on the PATH (`ffmpeg`); empty = the copy in `tools/bin` if there is one, else `ffmpeg` on the PATH |
 | `cameras.tidyMinutes` | `60` | how often old snapshots and leftover pieces are cleaned up |
+| `email.host`, `.port`, `.security` | `""`, `587`, `starttls` | SMTP server for account emails and gate alerts; empty host = email off. `security`: `starttls` (port 587), `tls` (465) or `none` |
+| `email.user`, `.password` | `""` | SMTP login (for Amazon SES: the SMTP credentials, not your AWS keys) |
+| `email.from` | | sender, e.g. `DoorKing Gate Manager <gate@yourdomain.com>`; required when `email.host` is set |
+| `email.appUrl` | `https://<server.publicHost>` | the address links in emails open |
 | `gateDefaults.*` | `GATE_DEFAULTS` in `src/gate-pull.ts` | gate-match defaults (`siteName`, `memorySize`, `areaCodes`, `modelNumber`, `antiPassBack`, `interface1816`, `dialDelay`), used when a gate's Gate configuration leaves a value empty |
 
 **Overrides**, highest first: command-line flags (`--port`, `--public-host`, `--media`, `--logs`, `--site-name`,
@@ -150,6 +154,11 @@ going to the server on port 8080), `npm run typecheck`, `npm test`.
 
 Repeat step 3 for each gate.
 
+**Email** (optional, but needed for password resets, email invitations, confirming addresses and alerts): fill in the
+`email` section, restart, and check it with `node cli.ts test-email you@yourdomain.com` (it shows the SMTP error,
+if any). Send from a domain you control and set up its SPF and DKIM records as your mail provider describes, or the
+emails may land in spam. `node cli.ts emails` lists recent emails and their delivery status.
+
 **Account commands** (for whoever runs the server; they use `config.json`'s database and ask for the password, so it
 never appears on the command line):
 
@@ -157,6 +166,8 @@ never appears on the command line):
 |---|---|
 | `node cli.ts create-admin <username>` | creates an account that becomes admin of every gate without an admin |
 | `node cli.ts reset-password <username>` | sets a temporary password for someone who forgot theirs (they choose a new one at sign-in); ends their sessions |
+| `node cli.ts test-email <address>` | sends a test email with the `email` settings |
+| `node cli.ts emails` | the last 20 emails: to, subject, sent / queued / failed, the error |
 | `node cli.ts grant <username> <gate phone> <admin\|readonly>` | gives an account access to a gate, or changes its role (keeps at least one admin) |
 
 **Moving from an install with DKS sign-in** (before 2026-11-13): on the first start, each gate someone had
@@ -204,6 +215,9 @@ The app itself never listens on a public address. A reverse proxy serves HTTPS o
 requests to `127.0.0.1:8080`; `server.publicHost` in `config.json` is set to the name. Anyone who reaches the page can
 try to sign in; the local accounts (with the sign-in failure limit) protect it, and the first account needs the
 setup code from the server's console, so create it before (or right after) making the site public.
+
+**Passkeys** (sign-in with fingerprint, face or PIN) need this HTTPS name: they are tied to `server.publicHost`, and
+also work at `http://localhost:<port>` on the server itself, but not at `http://127.0.0.1` or another name.
 
 With **Caddy** (Ubuntu: `sudo apt install caddy`), which gets and renews Let's Encrypt certificates itself:
 1. Create a DNS **A record** for the name pointing to the machine's public IP. Open ports **80 and 443** to the

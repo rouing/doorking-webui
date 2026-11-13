@@ -63,7 +63,8 @@ case-insensitively). Times are `TIMESTAMPTZ`; the app reads and writes them as I
 
 Keys: `debugLogs` (`1` = Debug logs on, `0` = off), `jsonImported` (time the pre-database JSON files were
 imported; the import code was removed 2026-11-13), `gatesVerifiedBackfill` (time gates were marked connected from history, once;
-removed 2026-11-13), `localAccountsMigrated` (time the move from DKS sign-in to local accounts ran, once).
+removed 2026-11-13), `localAccountsMigrated` (time the move from DKS sign-in to local accounts ran, once), `emailsUnconfirmed`
+(time earlier saved emails were made pending, once).
 
 ### `users`: local accounts (`src/users.ts`)
 
@@ -75,7 +76,12 @@ removed 2026-11-13), `localAccountsMigrated` (time the move from DKS sign-in to 
 | `dark` | BOOLEAN | dark mode |
 | `must_change` | BOOLEAN | the password was set by someone else (a gate admin or the CLI): the user must choose their own |
 | `created_at`, `created_by` | TIMESTAMPTZ, TEXT | when and by whom (`setup`, `cli` or a username) |
-| `last_sign_in`, `sign_ins` | TIMESTAMPTZ null, INTEGER | last sign-in and the count |
+| `last_sign_in`, `sign_ins` | TIMESTAMPTZ null, INTEGER | last sign-in (password or passkey) and the count |
+| `webauthn_id` | TEXT, null | random WebAuthn user handle (base64url) given to passkeys, so they don't hold the username |
+| `pending_email` | TEXT, null | an address waiting for its confirmation link (not unique; `email` holds only confirmed addresses since 2026-11-13) |
+| `notify_access`, `notify_alerts` | BOOLEAN | the user's email notifications: gate access changes; gate alerts as an admin |
+
+`password_hash` is `!` for an invited account that hasn't accepted its invitation (nothing matches it).
 
 ### `sessions`: sign-in sessions (`src/users.ts`)
 
@@ -85,6 +91,41 @@ removed 2026-11-13), `localAccountsMigrated` (time the move from DKS sign-in to 
 | `username` | TEXT | references `users` (deleted with it) |
 | `created_at`, `last_seen` | TIMESTAMPTZ | `last_seen` is written at most once a minute; idle sessions are deleted |
 | `gate` | TEXT, null | the gate the page has open |
+
+### `email_tokens`: one-use links in emails (`src/email.ts`)
+
+| Column | Type | Meaning |
+|---|---|---|
+| `token_hash` | TEXT, primary key | SHA-256 of the token in the link (the token itself is not stored) |
+| `kind` | TEXT | `verify` (24 h), `reset` (1 h) or `invite` (72 h) |
+| `username` | TEXT | references `users` (deleted with it) |
+| `data` | TEXT | for `verify`/`invite`: the address being confirmed |
+| `created_at`, `expires_at` | TIMESTAMPTZ | a new token of the same kind replaces the user's older one; using one deletes it |
+
+### `emails`: the outbox (`src/email.ts`)
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | BIGINT, identity | |
+| `to_addr`, `subject`, `kind` | TEXT | `kind`: `verify`, `reset`, `invite`, `access`, `security` or `alert` |
+| `body` | TEXT, null | the text, **encrypted**; set to null once sent or given up |
+| `status` | TEXT | `queued`, `sent` or `failed` (after 6 tries: waits of 1, 5, 15, 60 and 240 minutes) |
+| `attempts`, `next_try`, `error` | INTEGER, TIMESTAMPTZ, TEXT | delivery tries, when the next one is due, the last SMTP error |
+| `created_at`, `sent_at` | TIMESTAMPTZ | |
+
+### `passkeys`: passkeys (WebAuthn) for signing in (`src/passkeys.ts`)
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | TEXT, primary key | credential id (base64url) |
+| `username` | TEXT | references `users` (deleted with it) |
+| `rp_id` | TEXT | the site name it works on (the public name, or `localhost`) |
+| `public_key` | BYTEA | COSE public key (not secret) |
+| `counter` | BIGINT | signature counter; a sign-in must raise it (0 for authenticators that don't count) |
+| `transports` | JSONB | how the browser reaches it (`internal`, `usb`, `hybrid`, …) |
+| `name` | TEXT | the user's label |
+| `device_type`, `backed_up` | TEXT, BOOLEAN | `singleDevice`/`multiDevice`, and whether a provider syncs it |
+| `created_at`, `last_used_at` | TIMESTAMPTZ | added, last sign-in |
 
 ### `managed_gates`: the gates this server manages (`src/gate-list.ts`)
 

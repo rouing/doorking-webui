@@ -73,6 +73,9 @@ try {
 // The Debug logs setting, kept in memory so writing a line never waits for the database.
 let debugOn = await dk.debugLogEnabled(STORE);
 const DEBUG = dk.createDebugLog(path.join(LOG_DIR, 'debug.log'), { enabled: () => debugOn });
+// Once: emails saved before confirmation links existed must be confirmed.
+const unconfirmed = await dk.unconfirmOldEmails(STORE);
+if (unconfirmed) console.log(`${unconfirmed} account email(s) now need confirming (User Settings)`);
 // Once: gates from the DKS sign-in era become managed gates; the first local account becomes their admin.
 const migrated = await dk.migrateToLocalAccounts(STORE);
 if (migrated && migrated.gates.length) {
@@ -110,6 +113,58 @@ function staticFile(pathname: string): [string, string] | null {
 const defaults = CONFIG.gateDefaults;
 const client = () => new dk.DksCloudClient({ url: CONFIG.dks.url, log: (m) => DEBUG.write('dks', m) });
 const CAMERAS = dk.createCameraRunner({ ffmpegPath: CONFIG.cameras.ffmpeg, log: (m) => DEBUG.write('camera', m) });
+
+// Email (src/email.ts): off when config.json has no email.host. Emails go through the outbox; sendEmails() runs every
+// 30 s and right after an email is queued. APP is the address links point to.
+const MAILER = dk.createMailer(CONFIG.email);
+const APP = CONFIG.email.appUrl;
+const NO_EMAIL = 'Email isn\'t set up on this server (config.json → email). Ask the person who runs it.';
+let sending: Promise<unknown> | null = null;
+function sendEmails(): void {
+  if (!MAILER || sending) return;
+  sending = dk.sendQueued(STORE, MAILER, CONFIG.email.from, (m) => DEBUG.write('email', m))
+    .catch((e) => DEBUG.write('email', `Outbox failed: ${(e as Error).message}`))
+    .finally(() => { sending = null; });
+}
+// Queues a message to an address (nothing when email is off).
+async function mailTo(to: string, msg: { subject: string; text: string }, kind: string): Promise<void> {
+  if (!MAILER || !to) return;
+  try { await dk.queueEmail(STORE, { to, ...msg, kind }); sendEmails(); } catch (e) { DEBUG.write('email', `Not queued (${kind}): ${(e as Error).message}`); }
+}
+// A security alert to the user's confirmed email (always sent; it can't be turned off).
+async function securityAlert(username: string, what: string): Promise<void> {
+  const u = await dk.getUser(STORE, username);
+  if (u && u.email) await mailTo(u.email, dk.messages.security(APP, u.username, what), 'security');
+}
+// A gate-access email to the user (only to a confirmed email, and only if they haven't turned these off).
+async function accessEmail(username: string, msg: (u: dk.User) => { subject: string; text: string }): Promise<void> {
+  const u = await dk.getUser(STORE, username);
+  if (u && u.email && u.notifyAccess) await mailTo(u.email, msg(u), 'access');
+}
+const gateName = async (phone: string) => (await siteNameOf(phone)) || `the gate ${phone}`;
+// A gate alert to the gate's admins who have alerts on.
+async function gateAlert(phone: string, what: string, detail: string): Promise<void> {
+  if (!MAILER) return;
+  const name = await gateName(phone);
+  for (const r of await dk.alertRecipients(STORE, phone)) await mailTo(r.email, dk.messages.gateAlert(APP, r.username, name, what, detail), 'alert');
+}
+// Sends a new invitation link to the invited user's email (from `by`, for gate `phone`).
+async function sendInvite(username: string, by: string, phone: string): Promise<void> {
+  const u = await dk.getUser(STORE, username);
+  if (!u || !u.pendingEmail) return;
+  const token = await dk.createToken(STORE, 'invite', u.username, u.pendingEmail);
+  await mailTo(u.pendingEmail, dk.messages.invite(APP, u.username, by, await gateName(phone), token), 'invite');
+}
+// Sends the confirmation link for the user's pending email.
+async function sendVerification(username: string): Promise<void> {
+  const u = await dk.getUser(STORE, username);
+  if (!u || !u.pendingEmail || !MAILER) return;
+  await mailTo(u.pendingEmail, dk.messages.verify(APP, u.username, await dk.createToken(STORE, 'verify', u.username, u.pendingEmail)), 'verify');
+}
+// Password-reset requests per username/email and in total, so the form can't be used to flood mailboxes.
+const resetRequests = new Map<string, number[]>();
+const RESET_PER_ID = 3;
+const RESET_TOTAL = 50;
 
 // While no account exists, creating the first one needs this code, printed only to the server's console (journalctl),
 // so a stranger reaching a fresh public install can't claim it first.
@@ -168,6 +223,18 @@ async function currentSession(req: IncomingMessage): Promise<Session | null> {
 }
 
 const NO_GATE = 'Gate not found, or you have no access to it';
+const meReply = (u: dk.User) => ({ username: u.username, email: u.email, pendingEmail: u.pendingEmail, dark: u.dark,
+  notifyAccess: u.notifyAccess, notifyAlerts: u.notifyAlerts });
+
+// The site name passkeys are tied to for this request: the public name (over HTTPS), or localhost on the server
+// itself; null for any other host (such as 127.0.0.1, which WebAuthn doesn't accept).
+function relyingParty(req: IncomingMessage): dk.RelyingParty | null {
+  const host = (req.headers.host || '').toLowerCase();
+  if (PUBLIC_HOST && host === PUBLIC_HOST) return { rpID: PUBLIC_HOST, origin: `https://${PUBLIC_HOST}` };
+  if (host === `localhost:${PORT}`) return { rpID: 'localhost', origin: `http://localhost:${PORT}` };
+  return null;
+}
+const NO_PASSKEY_SITE = `Passkeys work only at ${PUBLIC_HOST ? `https://${PUBLIC_HOST}` : 'this site\'s public name'} or http://localhost:${PORT}`;
 const ADMIN_ONLY = 'Only a gate admin can do this. Your access to this gate is read only.';
 
 // The managed gate as `actor` sees it, with their role ('admin' for scheduled runs).
@@ -246,6 +313,9 @@ function startJob(g: Gate, what: string, makeRequest: () => Promise<SessionReque
       j.finishedAt = finishedAt;
       DEBUG.write('gate', `Gate ${g.phoneNumber}: ${what} ${info.scheduled ? '(scheduled) ' : ''}${j.state} after ${Math.round((finishedAt.getTime() - startedAt.getTime()) / 1000)} s`);
       if (info.adding && !await finishAdding(g, j, log)) return j;
+      if (what === 'send' && j.state === 'failed' && !info.scheduled) {
+        await gateAlert(g.phoneNumber, 'Send to gate failed', `Started by ${g.actor}. Error: ${j.error}`).catch(() => {});
+      }
       const { adding, ...rest } = info;
       const action = what === 'send' ? 'send' : 'pull';
       const summary = `${what === 'send' ? 'Sent working copy to gate' : `Pulled ${what}`}${info.scheduled ? ' (scheduled)' : ''}${adding ? ' (gate added)' : ''}`;
@@ -904,20 +974,54 @@ const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const scheduleText = (x: Schedule) => `${x.enabled ? '' : 'off, '}${x.days.map((d) => DAY_NAMES[d]).join(' ')} ${x.time}: ${x.actions.join(', ')}`;
 
 const MANUAL = path.join(HERE, '..', 'docs', 'MANUAL.md');
+// The API-key routes as OpenAPI 3.1 (docs/openapi.json, kept in step with ROUTES by a test) and a Swagger UI page
+// for it at /api/docs, served from node_modules/swagger-ui-dist (no CDN, so the CSP stays 'self').
+const OPENAPI = path.join(HERE, '..', 'docs', 'openapi.json');
+const SWAGGER_DIR = path.join(HERE, '..', 'node_modules', 'swagger-ui-dist');
+const SWAGGER_FILES: Record<string, string> = {
+  'swagger-ui.css': 'text/css', 'swagger-ui-bundle.js': 'text/javascript', 'favicon-32x32.png': 'image/png', 'favicon-16x16.png': 'image/png',
+};
+const DOCS_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DoorKing Gate Manager API</title><link rel="icon" type="image/png" href="/api/docs/favicon-32x32.png">
+<link rel="stylesheet" href="/api/docs/swagger-ui.css"></head>
+<body><div id="swagger-ui"></div><script src="/api/docs/swagger-ui-bundle.js"></script><script src="/api/docs/init.js"></script></body></html>`;
+const DOCS_INIT = `window.ui = SwaggerUIBundle({ url: '/api/openapi.json', dom_id: '#swagger-ui', deepLinking: true, persistAuthorization: false,
+  tryItOutEnabled: false, displayRequestDuration: true, defaultModelsExpandDepth: 0 });`;
+// Like send(), with images from data: URLs allowed (Swagger UI's icons).
+function sendDocs(res: ServerResponse, body: string | Buffer, type: string) {
+  res.writeHead(200, {
+    'Content-Type': type.startsWith('image/') ? type : `${type}; charset=utf-8`, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
+    'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:",
+  });
+  res.end(body);
+}
 const DEBUG_ADMIN = 'Only gate admins can use the debug log';
 
 const ROUTES = [
   // The user guide (docs/MANUAL.md) as a page, read on each request so edits show at once. Public: it holds no gate data.
   route('GET', '/help', 'public', ({ res }) => { send(res, 200, helpPage(fs.readFileSync(MANUAL, 'utf8')), 'text/html'); return undefined; }),
 
+  // The API-key routes as OpenAPI (public: it holds no data) and the browsable docs page.
+  route('GET', '/api/openapi.json', 'public', ({ res }) => { sendDocs(res, fs.readFileSync(OPENAPI, 'utf8'), 'application/json'); return undefined; }),
+  route('GET', '/api/docs', 'public', ({ res }) => { sendDocs(res, DOCS_PAGE, 'text/html'); return undefined; }),
+  route('GET', '/api/docs/:file', 'public', ({ params, res }) => {
+    if (params.file === 'init.js') { sendDocs(res, DOCS_INIT, 'text/javascript'); return undefined; }
+    const type = SWAGGER_FILES[params.file];
+    if (!type) return [404, { error: 'Not found' }];
+    sendDocs(res, fs.readFileSync(path.join(SWAGGER_DIR, params.file)), type);
+    return undefined;
+  }),
+
   // Session: sign in with a local account; the sid cookie authenticates every later call. setup: no account exists
   // yet (POST /api/setup creates the first one).
   route('GET', '/api/session', 'public', async ({ s }) => {
-    if (!s) return [200, { loggedIn: false, ...(await dk.userCount(STORE) === 0 && { setup: true }) }];
+    if (!s) return [200, { loggedIn: false, emailEnabled: Boolean(MAILER), ...(await dk.userCount(STORE) === 0 && { setup: true }) }];
     const u = (await dk.getUser(STORE, s.user))!;
     const open = s.gate ? await dk.accessOf(STORE, s.gate, s.user) : null;
     const rec = open && s.gate ? await dk.getGate(STORE, s.gate) : null;
-    return [200, { loggedIn: true, user: u.username, email: u.email, dark: u.dark, mustChangePassword: u.mustChangePassword,
+    return [200, { loggedIn: true, user: u.username, email: u.email, pendingEmail: u.pendingEmail, dark: u.dark,
+      notifyAccess: u.notifyAccess, notifyAlerts: u.notifyAlerts, mustChangePassword: u.mustChangePassword, emailEnabled: Boolean(MAILER),
       gate: rec && open ? await gateInfo({ ...rec, role: open }) : null, defaults, holidayList: dk.FIXED_HOLIDAYS }];
   }),
 
@@ -968,18 +1072,141 @@ const ROUTES = [
   }),
 
   // The signed-in user's own settings: GET { username, email, dark }; PUT { email?, dark? }.
-  route('GET', '/api/me', 'user', async ({ s }) => {
-    const u = (await dk.getUser(STORE, s.user))!;
-    return [200, { username: u.username, email: u.email, dark: u.dark }];
-  }),
+  route('GET', '/api/me', 'user', async ({ s }) => [200, meReply((await dk.getUser(STORE, s.user))!)]),
+  // { email?, dark?, notifyAccess?, notifyAlerts? }. A new email waits for its confirmation link (sent to it); the
+  // old confirmed address is told about the change.
   route('PUT', '/api/me', 'user', async ({ s, body }) => {
-    const u = await dk.updateUserSettings(STORE, s.user, { email: body.email, dark: body.dark });
-    return [200, { username: u.username, email: u.email, dark: u.dark }];
+    const was = (await dk.getUser(STORE, s.user))!;
+    const u = await dk.updateUserSettings(STORE, s.user, { email: body.email, dark: body.dark, notifyAccess: body.notifyAccess, notifyAlerts: body.notifyAlerts });
+    if (u.pendingEmail && u.pendingEmail !== was.pendingEmail) {
+      await sendVerification(u.username);
+      if (u.email) await mailTo(u.email, dk.messages.emailChanged(u.username, u.pendingEmail), 'security');
+      DEBUG.write('session', `${u.username} asked to change their email (confirmation ${MAILER ? 'sent' : 'not sent: email is off'})`);
+    }
+    return [200, meReply(u)];
+  }),
+  // Sends the confirmation link for the pending email again.
+  route('POST', '/api/me/email/resend', 'user', async ({ s }) => {
+    if (!MAILER) return [503, { error: NO_EMAIL }];
+    const u = (await dk.getUser(STORE, s.user))!;
+    if (!u.pendingEmail) return [400, { error: 'There is no email waiting to be confirmed' }];
+    await sendVerification(u.username);
+    return [200, { ok: true }];
+  }),
+
+  // Email links (public: they work without being signed in). verify { token }: confirms the address. Password reset:
+  // request { identifier } (username or confirmed email; the reply is the same whether or not it exists), then
+  // { token, password }. Invitation: check { token } -> { username }, then { token, password } (sets the password, confirms
+  // the email and signs in).
+  route('POST', '/api/email/verify', 'public', async ({ body }) => {
+    const t = await dk.useToken(STORE, 'verify', body.token);
+    if (!t) return [400, { error: 'This confirmation link is invalid, used or expired. Ask for a new one in User Settings.' }];
+    const u = await dk.confirmEmail(STORE, t.username, t.data);
+    DEBUG.write('session', `${u.username} confirmed their email`);
+    return [200, { username: u.username, email: u.email }];
+  }),
+  route('POST', '/api/password-reset/request', 'public', async ({ body }) => {
+    if (!MAILER) return [503, { error: NO_EMAIL }];
+    const id = String(body.identifier || '').trim().toLowerCase();
+    if (!id) return [400, { error: 'Enter your username or email' }];
+    const now = Date.now();
+    const recent = (k: string) => (resetRequests.get(k) || []).filter((t) => now - t < SIGN_IN_WINDOW_MS);
+    const reply: Reply = [200, { ok: true, message: 'If that account exists and has a confirmed email, a reset link is on its way. It works for 1 hour.' }];
+    if (recent(id).length >= RESET_PER_ID || recent('*').length >= RESET_TOTAL) { DEBUG.write('session', `Password reset for "${id}" not sent: too many requests`); return reply; }
+    resetRequests.set(id, [...recent(id), now]);
+    resetRequests.set('*', [...recent('*'), now]);
+    const u = await dk.userForReset(STORE, id);
+    if (u) {
+      await mailTo(u.email, dk.messages.reset(APP, u.username, await dk.createToken(STORE, 'reset', u.username)), 'reset');
+      DEBUG.write('session', `Password reset link sent to ${u.username}`);
+    } else DEBUG.write('session', `Password reset for "${id}": no account with a confirmed email`);
+    return reply;
+  }),
+  route('POST', '/api/password-reset', 'public', async ({ body }) => {
+    dk.checkPassword(body.password);
+    const t = await dk.useToken(STORE, 'reset', body.token);
+    if (!t) return [400, { error: 'This reset link is invalid, used or expired. Ask for a new one.' }];
+    await dk.setPassword(STORE, t.username, body.password);
+    failedSignIns.delete(t.username);
+    await securityAlert(t.username, 'Your password was reset');
+    DEBUG.write('session', `${t.username} reset their password with an email link`);
+    return [200, { username: t.username }];
+  }),
+  route('POST', '/api/invite/check', 'public', async ({ body }) => {
+    const t = await dk.useToken(STORE, 'invite', body.token, { peek: true });
+    return t ? [200, { username: t.username }] : [400, { error: 'This invitation link is invalid, used or expired. Ask the gate admin to send a new one.' }];
+  }),
+  route('POST', '/api/invite', 'public', async ({ req, res, body }) => {
+    dk.checkPassword(body.password);
+    const t = await dk.useToken(STORE, 'invite', body.token);
+    if (!t) return [400, { error: 'This invitation link is invalid, used or expired. Ask the gate admin to send a new one.' }];
+    const u = await dk.acceptInvite(STORE, t.username, body.password);
+    await dk.recordSignIn(STORE, u.username);
+    const tok = await dk.createSession(STORE, u.username);
+    DEBUG.write('session', `${u.username} accepted their invitation and signed in`);
+    res.setHeader('Set-Cookie', `sid=${tok}${cookieAttrs(req)}`);
+    return [200, { ok: true }];
   }),
   // Changes the user's own password ({ current, password }); their other sessions end.
   route('PUT', '/api/me/password', 'user', async ({ s, body }) => {
     await dk.changeOwnPassword(STORE, s.user, body.current, body.password, s.tokenHash);
+    await securityAlert(s.user, 'Your password was changed');
     DEBUG.write('session', `${s.user} changed their password`);
+    return [200, { ok: true }];
+  }),
+
+  // Passkeys of the signed-in user (another way to sign in). Adding one: POST options { password } (the current
+  // password, checked like a sign-in: 5 wrong tries pause it), then POST { name, response } with the browser's answer.
+  route('GET', '/api/me/passkeys', 'user', async ({ s }) => [200, { passkeys: await dk.listPasskeys(STORE, s.user) }]),
+  route('POST', '/api/me/passkeys/options', 'user', async ({ s, req, body }) => {
+    const rp = relyingParty(req);
+    if (!rp) return [400, { error: NO_PASSKEY_SITE }];
+    if (recentFailures(s.user).length >= MAX_FAILED_SIGN_INS) {
+      return [429, { error: `Too many wrong passwords. Try again in ${SIGN_IN_WINDOW_MS / 60000} minutes.` }];
+    }
+    if (!await dk.checkOwnPassword(STORE, s.user, body.password)) {
+      failedSignIns.set(s.user, [...recentFailures(s.user), Date.now()]);
+      return [403, { error: 'Your password is wrong' }];
+    }
+    return [200, await dk.registrationOptions(STORE, s.user, rp)];
+  }),
+  route('POST', '/api/me/passkeys', 'user', async ({ s, req, body }) => {
+    const rp = relyingParty(req);
+    if (!rp) return [400, { error: NO_PASSKEY_SITE }];
+    const pk = await dk.addPasskey(STORE, s.user, body.response, body.name, rp);
+    DEBUG.write('session', `${s.user} added passkey "${pk.name}" for ${rp.rpID}`);
+    await securityAlert(s.user, `A passkey ("${pk.name}") was added`);
+    return [201, { passkeys: await dk.listPasskeys(STORE, s.user) }];
+  }),
+  route('PUT', '/api/me/passkeys/:id', 'user', async ({ s, params, body }) => {
+    await dk.renamePasskey(STORE, s.user, params.id, body.name);
+    return [200, { passkeys: await dk.listPasskeys(STORE, s.user) }];
+  }),
+  route('DELETE', '/api/me/passkeys/:id', 'user', async ({ s, params }) => {
+    const name = await dk.removePasskey(STORE, s.user, params.id);
+    DEBUG.write('session', `${s.user} removed passkey "${name}"`);
+    await securityAlert(s.user, `A passkey ("${name}") was removed`);
+    return [200, { passkeys: await dk.listPasskeys(STORE, s.user) }];
+  }),
+
+  // Passkey sign-in: POST options (no username: the browser offers this site's passkeys), then POST session
+  // { response }; sets the sid cookie like a password sign-in.
+  route('POST', '/api/passkey/options', 'public', async ({ req }) => {
+    const rp = relyingParty(req);
+    return rp ? [200, await dk.authenticationOptions(rp)] : [400, { error: NO_PASSKEY_SITE }];
+  }),
+  route('POST', '/api/passkey/session', 'public', async ({ req, res, body }) => {
+    const rp = relyingParty(req);
+    if (!rp) return [400, { error: NO_PASSKEY_SITE }];
+    let username: string;
+    try { username = await dk.signInWithPasskey(STORE, body.response, rp); } catch (e) {
+      DEBUG.write('session', `Passkey sign-in refused: ${(e as Error).message}`);
+      throw e;
+    }
+    await dk.recordSignIn(STORE, username);
+    const tok = await dk.createSession(STORE, username);
+    DEBUG.write('session', `${username} signed in with a passkey`);
+    res.setHeader('Set-Cookie', `sid=${tok}${cookieAttrs(req)}`);
     return [200, { ok: true }];
   }),
 
@@ -1073,15 +1300,31 @@ const ROUTES = [
     if (await dk.getUser(STORE, body.username)) {
       return [409, { error: `The username "${dk.userKey(body.username)}" already exists. Share this gate with them instead.`, exists: true }];
     }
-    const u = await dk.createUser(STORE, { username: body.username, password: body.password, email: body.email, createdBy: s.user });
+    // With an email (and email set up) and no password: an invitation link; otherwise a temporary password (and a
+    // confirmation link to the email, if one is given).
+    const invite = Boolean(MAILER && body.email && !body.password);
+    const u = await dk.createUser(STORE, { username: body.username, password: body.password, email: body.email, createdBy: s.user, invite });
     await dk.grantAccess(STORE, g.phoneNumber, u.username, role, s.user);
-    await dk.addEvent(STORE, g.phoneNumber, { user: s.user, action: 'access', summary: `Created user ${u.username} (${roleText(role)})` });
-    DEBUG.write('gates', `${s.user} created user ${u.username} with ${role} access to gate ${g.phoneNumber}`);
-    return [201, { users: await dk.gateUsers(STORE, g.phoneNumber) }];
+    if (invite) await sendInvite(u.username, s.user, g.phoneNumber);
+    else await sendVerification(u.username);
+    await dk.addEvent(STORE, g.phoneNumber, { user: s.user, action: 'access', summary: `${invite ? 'Invited' : 'Created'} user ${u.username} (${roleText(role)})` });
+    DEBUG.write('gates', `${s.user} ${invite ? 'invited' : 'created'} user ${u.username} with ${role} access to gate ${g.phoneNumber}`);
+    return [201, { users: await dk.gateUsers(STORE, g.phoneNumber), invited: invite }];
+  })),
+  // Sends a user's invitation again (new link; the old one stops working).
+  webOnly(route('POST', `${G}/users/:username/invite`, 'gate-admin', async ({ s, g, params }) => {
+    if (!MAILER) return [503, { error: NO_EMAIL }];
+    const u = await dk.getUser(STORE, params.username);
+    if (!u || !await dk.accessOf(STORE, g.phoneNumber, u.username)) return [404, { error: `"${dk.userKey(params.username)}" has no access to this gate` }];
+    if (!u.invited) return [409, { error: `${u.username} has already accepted their invitation` }];
+    await sendInvite(u.username, s.user, g.phoneNumber);
+    return [200, { users: await dk.gateUsers(STORE, g.phoneNumber) }];
   })),
   webOnly(route('POST', `${G}/share`, 'gate-admin', async ({ s, g, body }) => {
     const role = dk.checkRole(body.role || 'readonly');
     await dk.grantAccess(STORE, g.phoneNumber, body.username, role, s.user);
+    const gn = await gateName(g.phoneNumber);
+    await accessEmail(dk.userKey(body.username), (u) => dk.messages.accessGranted(APP, u.username, s.user, gn, roleText(role)));
     await dk.addEvent(STORE, g.phoneNumber, { user: s.user, action: 'access', summary: `Shared the gate with ${dk.userKey(body.username)} (${roleText(role)})` });
     DEBUG.write('gates', `${s.user} shared gate ${g.phoneNumber} with ${dk.userKey(body.username)} (${role})`);
     return [200, { users: await dk.gateUsers(STORE, g.phoneNumber) }];
@@ -1089,11 +1332,15 @@ const ROUTES = [
   webOnly(route('PUT', `${G}/users/:username`, 'gate-admin', async ({ s, g, params, body }) => {
     const role = dk.checkRole(body.role);
     await dk.setRole(STORE, g.phoneNumber, params.username, role);
+    const gn = await gateName(g.phoneNumber);
+    if (dk.userKey(params.username) !== s.user) await accessEmail(dk.userKey(params.username), (u) => dk.messages.roleChanged(APP, u.username, s.user, gn, roleText(role)));
     await dk.addEvent(STORE, g.phoneNumber, { user: s.user, action: 'access', summary: `Changed ${dk.userKey(params.username)} to ${roleText(role)}` });
     return [200, { users: await dk.gateUsers(STORE, g.phoneNumber) }];
   })),
   webOnly(route('DELETE', `${G}/users/:username`, 'gate-admin', async ({ s, g, params }) => {
     await dk.revokeAccess(STORE, g.phoneNumber, params.username);
+    const gn = await gateName(g.phoneNumber);
+    if (dk.userKey(params.username) !== s.user) await accessEmail(dk.userKey(params.username), (u) => dk.messages.accessRemoved(u.username, s.user, gn));
     await dk.addEvent(STORE, g.phoneNumber, { user: s.user, action: 'access', summary: `Removed ${dk.userKey(params.username)} from the gate` });
     DEBUG.write('gates', `${s.user} removed ${dk.userKey(params.username)} from gate ${g.phoneNumber}`);
     return [200, { users: await dk.gateUsers(STORE, g.phoneNumber) }];
@@ -1512,6 +1759,9 @@ async function runSchedule(sch: Schedule) {
     }
   } catch (e) { errors.push((e as Error).message); }
   DEBUG.write('schedule', `Gate ${sch.phoneNumber}: schedule ${sch.id} ${errors.length ? `failed: ${errors.join('; ')}` : 'done'}${notes.length ? ` (${notes.join('; ')})` : ''}`);
+  if (errors.length) {
+    await gateAlert(sch.phoneNumber, 'Scheduled transfer failed', `Schedule ${sch.days.map((d) => DAY_NAMES[d]).join(' ')} ${sch.time} (${sch.actions.join(', ')}).\nErrors: ${errors.join('; ')}`).catch(() => {});
+  }
   try {
     await dk.updateScheduleRun(STORE, sch.id, {
       lastRun: new Date().toISOString(),
@@ -1628,6 +1878,9 @@ server.listen(PORT, HOST, () => {
   checkSchedules();
   setInterval(checkSchedules, SCHEDULE_TICK_MS);
   setInterval(sweepSessions, 60000);
+  sendEmails();
+  setInterval(sendEmails, 30000);
+  setInterval(() => { dk.deleteExpiredTokens(STORE).catch(() => {}); }, 3600000);
   tidyAllSnapshots().catch(() => {});
   setInterval(() => { tidyAllSnapshots().catch(() => {}); }, SNAPSHOT_TIDY_MS);
 });

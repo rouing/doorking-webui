@@ -43,11 +43,16 @@ Open the app in your browser at the address you were given (for example **https:
 - Accounts are created by gate admins (see [Gate users and roles](#gate-users-and-roles)). There is no sign-up page.
 - **The first time** you sign in with a password someone else set, the app asks you to choose your own (at least
   12 characters). Nobody else can see or change it.
+- **Sign in with a passkey:** once you've added a passkey (see [User Settings](#user-settings)), click it and use your
+  fingerprint, face or device PIN. No username or password needed. Your password keeps working too.
 - **Remember user** keeps only your username in this browser, never your password.
 - You are signed out after **30 minutes** without activity, or when you click **Sign out**.
 - After 5 wrong passwords in a row, sign-in for that username is paused for 15 minutes.
-- **Forgot your password?** Ask the person who runs the server; they can set a temporary one for you. (Recovery by
-  email is planned.)
+- **Forgot your password?** Click **Forgot your password?** on the sign-in page and enter your username or email. If your
+  account has a confirmed email, you get a link (valid 1 hour, usable once) to choose a new one; you are then signed
+  out everywhere. Without a confirmed email, ask the person who runs the server for a temporary password.
+- **Invitation email:** if a gate admin invited you by email, open the link in it (valid 72 hours) and choose your
+  password; you're signed in straight away.
 - **Brand-new installation:** the very first visit asks to create the first account. It needs a **setup code** that
   the server prints in its log when it starts, so only the person running the server can do it. That first account
   becomes the admin of every gate already on the server.
@@ -74,8 +79,11 @@ Each person has one of two roles on each gate:
 | **Read only** | look at everything, pull from the gate, see camera pictures and the live view; can't change anything |
 
 Gate admins manage people under **System Settings → Gate users**:
-- **Create an account for this gate:** username, a temporary password (12+ characters), optional email, and the
-  role. Give the person their username and temporary password; they choose their own at their first sign-in.
+- **Create an account for this gate:** username, role and either
+  - their **email** (and no password): they get an **invitation** email with a link to choose their own password
+    (marked "invited" in the list until they do; **Send again** sends a new link), or
+  - a **temporary password** (12+ characters): give it to them; they choose their own at their first sign-in.
+  (Invitations need email to be set up on the server.)
 - If the username **already exists**, the app says so and offers **Share this gate with them instead**.
 - **Share with an existing account:** type their username and pick the role. This is how one person gets access to
   several gates, each with its own role.
@@ -86,8 +94,24 @@ Gate admins manage people under **System Settings → Gate users**:
 ### User Settings
 
 **User settings** (on the gate list, or under your name at the bottom of the left-hand menu) holds your own settings,
-which follow you to any browser: **Dark mode**, your **email** (optional; each email belongs to one account only) and
-**changing your password** (asks for your current one, and signs you out everywhere else).
+which follow you to any browser: **Dark mode**, your **email**, **email notifications**, **Passkeys** and **changing
+your password** (asks for your current one, and signs you out everywhere else).
+
+**Email:** after you type a new address, the app sends it a **confirmation link** (valid 24 hours); it shows "check
+your inbox" until you open it, and **Send the link again** if needed. Only a confirmed email is used. Each email can
+belong to one account only. If you had a confirmed email, it is told about the change.
+
+**Email notifications** (to your confirmed email):
+- when you're given access to a gate, removed from one, or your role changes (you can turn this off);
+- **gate alerts** for gates you're admin of: a Send to gate or a scheduled transfer failed (you can turn this off);
+- security emails, always: your password was changed or reset, or a passkey was added or removed.
+
+**Passkeys** let you sign in with your fingerprint, face or device PIN instead of your password:
+- **Add a passkey:** give it a name (such as "iPhone"), type your current password, click **Add a passkey** and follow
+  your browser's prompt. Phones and password managers often sync passkeys to your other devices ("synced").
+- A passkey works on the address you added it on (for example **https://gate.yourdomain.com**). Add another one if
+  you also use a different address.
+- **Rename** or **Remove** a passkey any time. If you lose a device, remove its passkey here (sign in with your password).
 
 ## 4. How changes reach the gate
 
@@ -257,8 +281,8 @@ For connecting other systems or scripts (for example home automation) to this ga
 - A key belongs to the gate, not to you: it keeps working if you leave. It only works on this gate, and it can never
   change the gate login, users or API keys, or delete the gate's data.
 - The list shows when each key was last used. **Revoke** stops a key at once.
-- Whoever sets up the other system needs the key and the address shown on the card; details are in the API guide
-  (`docs/API.md`).
+- Whoever sets up the other system needs the key and the address shown on the card. **API documentation** (the link
+  on the card, or `/api/docs`) lists everything a key can do, and lets you try calls with the key.
 
 ### Gate configuration
 These settings tell DKS Cloud what kind of gate it is talking to, so they **must match how the gate is set up**:
@@ -335,8 +359,13 @@ same ones as in the DMSS or SmartPSS app), and the camera channels to use. Click
 
 | Message or problem | What to do |
 |---|---|
-| "Wrong username or password" | Check them. If you've forgotten your password, ask the person who runs the server for a temporary one. |
+| "Wrong username or password" | Check them. If you've forgotten your password, use **Forgot your password?** (needs a confirmed email), or ask the person who runs the server for a temporary one. |
+| "This … link is invalid, used or expired" | Links work once and expire (confirmation 24 hours, reset 1 hour, invitation 72 hours). Ask for a new one. |
+| No email arrives | Check spam. Make sure your email is confirmed (User Settings). If nothing ever arrives, tell the person who runs the server. |
 | "Choose a new password first" | Your password was set by someone else; choose your own on the page shown. |
+| "The passkey request was cancelled or timed out" | Try again and complete the fingerprint, face or PIN prompt. |
+| "Passkey sign-in failed: this passkey is not registered here" | It was removed, or added on a different address. Sign in with your password. |
+| "Passkeys work only at …" | Open the app at the address shown (passkeys need the site's proper name). |
 | "Only a gate admin can do this" | Your access to this gate is read only. Ask a gate admin. |
 | "This gate is already managed here" | Ask one of the gate's admins to add you to it. |
 | "DKS Cloud refused that DKS user and password" | The gate's DKS login is wrong. Check it (gate admins: **System Settings → Gate login**). |

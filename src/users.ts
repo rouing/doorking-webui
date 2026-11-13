@@ -4,27 +4,31 @@
 // random tokens kept as SHA-256 hashes, so a copy of the database can't be used to sign in.
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
-import { all, one, run, transaction, type Store } from './db.ts';
+import { all, getMeta, one, run, setMeta, transaction, type Store } from './db.ts';
 
 export const PASSWORD_MIN = 12;
 const PASSWORD_MAX = 200;
 const SCRYPT = { N: 32768, r: 8, p: 1, keylen: 64 };
 const scrypt = promisify(crypto.scrypt) as (pw: string, salt: Buffer, len: number, o: crypto.ScryptOptions) => Promise<Buffer>;
 
+// email: the verified address ('' none); pendingEmail: an address waiting for its confirmation link. invited: the
+// account was created with an email invitation that hasn't been accepted yet (it has no password).
 export interface User {
-  username: string; email: string; dark: boolean; mustChangePassword: boolean;
-  createdAt: string; createdBy: string; lastSignIn: string | null; signIns: number;
+  username: string; email: string; pendingEmail: string; dark: boolean; mustChangePassword: boolean; notifyAccess: boolean;
+  notifyAlerts: boolean; invited: boolean; createdAt: string; createdBy: string; lastSignIn: string | null; signIns: number;
 }
 interface UserRow {
-  username: string; password_hash: string; email: string | null; dark: boolean; must_change: boolean;
-  created_at: string; created_by: string; last_sign_in: string | null; sign_ins: number;
+  username: string; password_hash: string; email: string | null; pending_email: string | null; dark: boolean; must_change: boolean;
+  notify_access: boolean; notify_alerts: boolean; created_at: string; created_by: string; last_sign_in: string | null; sign_ins: number;
 }
+// The password hash of an invited account that hasn't chosen a password yet: nothing can match it.
+const NO_PASSWORD = '!';
 
 const bad = (msg: string, status = 400) => Object.assign(new Error(msg), { status });
 export const userKey = (u: unknown): string => String(u || '').trim().toLowerCase();
 const fromRow = (r: UserRow): User => ({
-  username: r.username, email: r.email || '', dark: r.dark, mustChangePassword: r.must_change,
-  createdAt: r.created_at, createdBy: r.created_by, lastSignIn: r.last_sign_in, signIns: r.sign_ins,
+  username: r.username, email: r.email || '', pendingEmail: r.pending_email || '', dark: r.dark, mustChangePassword: r.must_change,
+  notifyAccess: r.notify_access, notifyAlerts: r.notify_alerts, invited: r.password_hash === NO_PASSWORD, createdAt: r.created_at, createdBy: r.created_by, lastSignIn: r.last_sign_in, signIns: r.sign_ins,
 });
 
 // 3-32 letters, digits, '.', '_' or '-', starting with a letter or digit; returned lower case.
@@ -81,28 +85,89 @@ export async function getUser(store: Store, username: unknown): Promise<User | n
 const emailTaken = async (store: Store, email: string, except = '') =>
   Boolean(email && await one(store, 'SELECT 1 AS x FROM users WHERE email = $1 AND username <> $2', [email, except]));
 
-// Creates an account. mustChangePassword: the password was set by someone else (a gate admin or the CLI), so the
-// user picks their own at the next sign-in. Throws 409 when the username or email is taken.
-export async function createUser(store: Store, { username, password, email = '', createdBy, mustChangePassword = true }:
-  { username: unknown; password: unknown; email?: unknown; createdBy: string; mustChangePassword?: boolean }): Promise<User> {
+// Creates an account. The email given starts unconfirmed (pendingEmail). mustChangePassword: the password was set by
+// someone else (a gate admin or the CLI), so the user picks their own at the next sign-in. invite: no password yet;
+// the user sets one through their invitation link (acceptInvite). Throws 409 when the username or email is taken.
+export async function createUser(store: Store, { username, password, email = '', createdBy, mustChangePassword = true, invite = false }:
+  { username: unknown; password?: unknown; email?: unknown; createdBy: string; mustChangePassword?: boolean; invite?: boolean }): Promise<User> {
   const name = checkUsername(username);
-  const pw = checkPassword(password);
   const mail = checkEmail(email);
+  if (invite && !mail) throw bad('An invitation needs an email address');
+  const hash = invite ? NO_PASSWORD : await hashPassword(checkPassword(password));
   if (await getUser(store, name)) throw bad(`The username "${name}" is already taken`, 409);
   if (await emailTaken(store, mail)) throw bad('That email address is already used by another account', 409);
-  await run(store, `INSERT INTO users (username, password_hash, email, dark, must_change, created_at, created_by, sign_ins)
+  await run(store, `INSERT INTO users (username, password_hash, pending_email, dark, must_change, created_at, created_by, sign_ins)
     VALUES ($1, $2, $3, false, $4, $5, $6, 0) ON CONFLICT (username) DO NOTHING`,
-  [name, await hashPassword(pw), mail || null, mustChangePassword, new Date().toISOString(), userKey(createdBy)]);
+  [name, hash, mail || null, invite ? false : mustChangePassword, new Date().toISOString(), userKey(createdBy)]);
   return (await getUser(store, name))!;
+}
+
+// Sets the password of an invited account and confirms its email (the invitation went to it). Returns the user.
+export async function acceptInvite(store: Store, username: string, password: unknown): Promise<User> {
+  const name = userKey(username);
+  const hash = await hashPassword(checkPassword(password));
+  const r = await one<UserRow>(store, 'SELECT * FROM users WHERE username = $1', [name]);
+  if (!r || r.password_hash !== NO_PASSWORD) throw bad('This invitation was already used. Sign in instead.', 409);
+  await run(store, 'UPDATE users SET password_hash = $2, must_change = false WHERE username = $1', [name, hash]);
+  if (r.pending_email) await confirmEmail(store, name, r.pending_email);
+  return (await getUser(store, name))!;
+}
+
+// Makes `address` the user's confirmed email, if it is still their pending one and no other account has confirmed
+// it meanwhile. Returns the user, or throws (409 taken, 400 no longer pending).
+export async function confirmEmail(store: Store, username: string, address: string): Promise<User> {
+  const name = userKey(username);
+  const mail = userKey(address);
+  await transaction(store, async (tx) => {
+    const r = await one<{ pending_email: string | null }>(tx, 'SELECT pending_email FROM users WHERE username = $1 FOR UPDATE', [name]);
+    if (!r || r.pending_email !== mail) throw bad('This link is for an address that is no longer waiting to be confirmed');
+    if (await emailTaken(tx, mail, name)) throw bad('That email address is already used by another account', 409);
+    await run(tx, 'UPDATE users SET email = $2, pending_email = NULL WHERE username = $1', [name, mail]);
+  });
+  return (await getUser(store, name))!;
+}
+
+// The account for a password reset: by username or confirmed email; null when there is none, or it has no confirmed email.
+export async function userForReset(store: Store, identifier: unknown): Promise<User | null> {
+  const id = userKey(identifier);
+  if (!id) return null;
+  const r = await one<UserRow>(store, 'SELECT * FROM users WHERE (username = $1 OR email = $1) AND email IS NOT NULL', [id]);
+  return r && r.password_hash !== NO_PASSWORD ? fromRow(r) : null;
+}
+
+// The accounts that should get this gate's alerts: its admins with a confirmed email and alerts on.
+export async function alertRecipients(store: Store, phone: string): Promise<{ username: string; email: string }[]> {
+  return all(store, `SELECT u.username, u.email FROM gate_access a JOIN users u ON u.username = a.username
+    WHERE a.phone = $1 AND a.role = 'admin' AND u.email IS NOT NULL AND u.notify_alerts`, [phone]);
+}
+
+// Once (2026-11-13): emails saved before confirmation links existed become unconfirmed (pending).
+export async function unconfirmOldEmails(store: Store): Promise<number | null> {
+  if (await getMeta(store, 'emailsUnconfirmed')) return null;
+  const n = await run(store, 'UPDATE users SET pending_email = email, email = NULL WHERE email IS NOT NULL AND pending_email IS NULL');
+  await setMeta(store, 'emailsUnconfirmed', new Date().toISOString());
+  return n;
 }
 
 // The user when the password is right (and records the sign-in), else null.
 export async function authenticate(store: Store, username: unknown, password: unknown): Promise<User | null> {
   const r = await one<UserRow>(store, 'SELECT * FROM users WHERE username = $1', [userKey(username)]);
-  const ok = await verifyPassword(String(password ?? ''), r ? r.password_hash : await DUMMY_HASH);
+  const usable = r && r.password_hash !== NO_PASSWORD;
+  const ok = await verifyPassword(String(password ?? ''), usable ? r.password_hash : await DUMMY_HASH) && usable;
   if (!r || !ok) return null;
-  await run(store, 'UPDATE users SET last_sign_in = $2, sign_ins = sign_ins + 1 WHERE username = $1', [r.username, new Date().toISOString()]);
+  await recordSignIn(store, r.username);
   return getUser(store, r.username);
+}
+
+// Counts a sign-in (password or passkey).
+export async function recordSignIn(store: Store, username: string): Promise<void> {
+  await run(store, 'UPDATE users SET last_sign_in = $2, sign_ins = sign_ins + 1 WHERE username = $1', [userKey(username), new Date().toISOString()]);
+}
+
+// True when `password` is the user's current one (to confirm a sensitive change, such as adding a passkey).
+export async function checkOwnPassword(store: Store, username: unknown, password: unknown): Promise<boolean> {
+  const r = await one<UserRow>(store, 'SELECT * FROM users WHERE username = $1', [userKey(username)]);
+  return Boolean(r) && verifyPassword(String(password ?? ''), r!.password_hash);
 }
 
 // Sets a new password and ends the user's other sessions (keepSession: the token hash to keep, or none).
@@ -127,15 +192,24 @@ export async function changeOwnPassword(store: Store, username: unknown, current
   await setPassword(store, r.username, next, { keepSession });
 }
 
-// The user's own settings: email ('' removes it) and dark mode.
-export async function updateUserSettings(store: Store, username: unknown, { email, dark }: { email?: unknown; dark?: unknown }): Promise<User> {
+// The user's own settings: dark mode, the two email notifications, and email: '' removes it (confirmed and pending);
+// the confirmed address clears a pending change; any other address becomes pending until its link is opened.
+export async function updateUserSettings(store: Store, username: unknown, { email, dark, notifyAccess, notifyAlerts }:
+  { email?: unknown; dark?: unknown; notifyAccess?: unknown; notifyAlerts?: unknown }): Promise<User> {
   const name = userKey(username);
   if (email !== undefined) {
     const mail = checkEmail(email);
-    if (await emailTaken(store, mail, name)) throw bad('That email address is already used by another account', 409);
-    await run(store, 'UPDATE users SET email = $2 WHERE username = $1', [name, mail || null]);
+    const cur = await getUser(store, name);
+    if (!mail) await run(store, 'UPDATE users SET email = NULL, pending_email = NULL WHERE username = $1', [name]);
+    else if (cur && mail === cur.email) await run(store, 'UPDATE users SET pending_email = NULL WHERE username = $1', [name]);
+    else {
+      if (await emailTaken(store, mail, name)) throw bad('That email address is already used by another account', 409);
+      await run(store, 'UPDATE users SET pending_email = $2 WHERE username = $1', [name, mail]);
+    }
   }
   if (dark !== undefined) await run(store, 'UPDATE users SET dark = $2 WHERE username = $1', [name, dark === true]);
+  if (notifyAccess !== undefined) await run(store, 'UPDATE users SET notify_access = $2 WHERE username = $1', [name, notifyAccess !== false]);
+  if (notifyAlerts !== undefined) await run(store, 'UPDATE users SET notify_alerts = $2 WHERE username = $1', [name, notifyAlerts !== false]);
   const u = await getUser(store, name);
   if (!u) throw bad(`No user "${name}"`, 404);
   return u;

@@ -9,6 +9,10 @@
   "security": { "sessionIdleMinutes": 30, "maxFailedSignIns": 5, "signInWindowMinutes": 15 },
   "schedules": { "checkSeconds": 30 },
   "cameras": { "ffmpeg": "", "tidyMinutes": 60 },
+  "email": {
+    "host": "", "port": 587, "security": "starttls", "user": "", "password": "",
+    "from": "DoorKing Gate Manager <gate@example.com>", "appUrl": ""
+  },
   "gateDefaults": {
     "siteName": "Site", "memorySize": "3000", "areaCodes": "255 Area Codes", "modelNumber": "1833/1835/1837/1838",
     "antiPassBack": "N", "interface1816": "N", "dialDelay": "3"

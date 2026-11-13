@@ -74,6 +74,22 @@ CREATE TABLE IF NOT EXISTS api_keys (id TEXT PRIMARY KEY, phone TEXT NOT NULL RE
   name TEXT NOT NULL, role TEXT NOT NULL CHECK (role IN ('admin', 'readonly')), secret_hash TEXT NOT NULL,
   created_by TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ, last_used_at TIMESTAMPTZ);
 CREATE INDEX IF NOT EXISTS api_keys_phone ON api_keys (phone);
+CREATE TABLE IF NOT EXISTS passkeys (id TEXT PRIMARY KEY, username TEXT NOT NULL REFERENCES users ON DELETE CASCADE,
+  rp_id TEXT NOT NULL, public_key BYTEA NOT NULL, counter BIGINT NOT NULL, transports JSONB, name TEXT NOT NULL,
+  device_type TEXT NOT NULL, backed_up BOOLEAN NOT NULL, created_at TIMESTAMPTZ NOT NULL, last_used_at TIMESTAMPTZ);
+CREATE INDEX IF NOT EXISTS passkeys_username ON passkeys (username);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS webauthn_id TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_email TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_access BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_alerts BOOLEAN NOT NULL DEFAULT true;
+CREATE TABLE IF NOT EXISTS email_tokens (token_hash TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('verify', 'reset', 'invite')),
+  username TEXT NOT NULL REFERENCES users ON DELETE CASCADE, data TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL);
+CREATE INDEX IF NOT EXISTS email_tokens_username ON email_tokens (username, kind);
+CREATE TABLE IF NOT EXISTS emails (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, to_addr TEXT NOT NULL, subject TEXT NOT NULL,
+  kind TEXT NOT NULL, body TEXT, status TEXT NOT NULL CHECK (status IN ('queued', 'sent', 'failed')), attempts INTEGER NOT NULL,
+  next_try TIMESTAMPTZ NOT NULL, error TEXT, created_at TIMESTAMPTZ NOT NULL, sent_at TIMESTAMPTZ);
+CREATE INDEX IF NOT EXISTS emails_due ON emails (status, next_try);
 ALTER TABLE gate_cards ADD COLUMN IF NOT EXISTS raw_code TEXT;
 ALTER TABLE gate_working ADD COLUMN IF NOT EXISTS area_codes JSONB NOT NULL DEFAULT '[]';
 ALTER TABLE gate_working ADD COLUMN IF NOT EXISTS middle_pointer TEXT NOT NULL DEFAULT 'ffffff';

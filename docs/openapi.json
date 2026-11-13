@@ -1,0 +1,3387 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "DoorKing Gate Manager API",
+    "version": "1.0.0",
+    "description": "The routes a **gate API key** can use. A gate admin creates keys in the web page (System Settings → API keys); each key belongs to one gate and has a role: **read only** (view, pull, cameras) or **admin** (also changes, sends and relays).\n\nSend the key as `Authorization: Bearer <key>` (click **Authorize**). `{phone}` must be the key's gate. Changes to residents and settings go to the **working copy**; nothing reaches the gate until `POST /send`. Only `POST /send` and `PUT /relays` change the gate itself.\n\nGate login, gate users, API keys, deleting the gate's data and accounts are web-page only. Full reference: `docs/API.md` in the repository."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "This server"
+    }
+  ],
+  "security": [
+    {
+      "apiKey": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "Gate"
+    },
+    {
+      "name": "Gate connection"
+    },
+    {
+      "name": "Residents"
+    },
+    {
+      "name": "Transactions"
+    },
+    {
+      "name": "Settings"
+    },
+    {
+      "name": "History"
+    },
+    {
+      "name": "Relays"
+    },
+    {
+      "name": "Schedules"
+    },
+    {
+      "name": "Cameras"
+    }
+  ],
+  "paths": {
+    "/api/gates/{phone}": {
+      "get": {
+        "tags": [
+          "Gate"
+        ],
+        "summary": "The gate",
+        "x-role": "readonly",
+        "description": "**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The gate as this key sees it (role: the key's role).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/job": {
+      "get": {
+        "tags": [
+          "Gate connection"
+        ],
+        "summary": "Current gate connection",
+        "x-role": "readonly",
+        "description": "Poll this after `POST /pull` or `POST /send` (every few seconds) until `state` is done or failed. One connection runs at a time across all gates.\n\n**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The job.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/pull": {
+      "post": {
+        "tags": [
+          "Gate connection"
+        ],
+        "summary": "Pull from the gate",
+        "x-role": "readonly",
+        "description": "Reads residents or transactions from the gate through DKS Cloud (takes a minute or more). Progress: `GET /job`.\n\n**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "what": {
+                    "enum": [
+                      "residents",
+                      "transactions"
+                    ]
+                  }
+                },
+                "required": [
+                  "what"
+                ]
+              },
+              "example": {
+                "what": "transactions"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Started.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/send": {
+      "get": {
+        "tags": [
+          "Gate connection"
+        ],
+        "summary": "Preview a send",
+        "x-role": "readonly",
+        "description": "What `POST /send` would change.\n\n**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Changed blocks.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SendPreview"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Gate connection"
+        ],
+        "summary": "Send the working copy to the gate",
+        "x-role": "admin",
+        "description": "**Changes the gate.** Sends the changed blocks, then pulls residents to check the gate holds them. Refused (409) with duplicates, a newer pull, or a missing working copy.\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "confirm": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "confirm"
+                ]
+              },
+              "example": {
+                "confirm": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Started.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/data": {
+      "get": {
+        "tags": [
+          "Transactions"
+        ],
+        "summary": "Transactions",
+        "x-role": "readonly",
+        "description": "The transaction history, newest first, with names from the working copy.\n\n**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transactions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataReply"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/residents": {
+      "get": {
+        "tags": [
+          "Residents"
+        ],
+        "summary": "Residents and vendors",
+        "x-role": "readonly",
+        "description": "The working copy (what the gate holds plus unsent changes).\n\n**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rows.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResidentsReply"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Residents"
+        ],
+        "summary": "Add a resident or vendor",
+        "x-role": "admin",
+        "description": "Fills a vacant code or inserts a new one in the working copy (sent with `POST /send`).\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/ResidentFields"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "directoryCode": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "directoryCode",
+                      "name"
+                    ]
+                  }
+                ]
+              },
+              "example": {
+                "directoryCode": "105",
+                "name": "Doe, Jane",
+                "areaCode": "214",
+                "phone": "5550142",
+                "entryCode": "4821"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Added.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditReply"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/residents/{code}": {
+      "get": {
+        "tags": [
+          "Residents"
+        ],
+        "summary": "One resident or vendor",
+        "x-role": "readonly",
+        "description": "**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          },
+          {
+            "$ref": "#/components/parameters/code"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The row.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Resident"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Residents"
+        ],
+        "summary": "Change a resident or vendor",
+        "x-role": "admin",
+        "description": "Only the fields given change (working copy). An entry code or card held by another code is refused (409).\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          },
+          {
+            "$ref": "#/components/parameters/code"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResidentFields"
+              },
+              "example": {
+                "name": "Doe, J",
+                "entryCode": "4821"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditReply"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Residents"
+        ],
+        "summary": "Blank a resident's slot",
+        "x-role": "admin",
+        "description": "The code stays as an empty unit.\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          },
+          {
+            "$ref": "#/components/parameters/code"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditReply"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/residents/{code}/note": {
+      "put": {
+        "tags": [
+          "Residents"
+        ],
+        "summary": "Set the local note",
+        "x-role": "admin",
+        "description": "Up to 500 characters, kept in this app only (never on the gate). Blank clears it.\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          },
+          {
+            "$ref": "#/components/parameters/code"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "note"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "note": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/directory-codes/{code}": {
+      "delete": {
+        "tags": [
+          "Residents"
+        ],
+        "summary": "Remove a directory code",
+        "x-role": "admin",
+        "description": "Takes the code off the gate entirely (working copy).\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          },
+          {
+            "$ref": "#/components/parameters/code"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditReply"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/dir-digits": {
+      "put": {
+        "tags": [
+          "Residents"
+        ],
+        "summary": "Change the number of digits in directory codes",
+        "x-role": "admin",
+        "description": "Decreasing **wipes all residents** and needs `confirm: true`.\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "digits": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4
+                  },
+                  "confirm": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "digits"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditReply"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/settings": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Gate settings",
+        "x-role": "readonly",
+        "description": "Every decoded setting: working-copy value and the gate's value. Secret values are masked.\n\n**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsReply"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Change gate settings",
+        "x-role": "admin",
+        "description": "Saves editable fields to the working copy (sent with `POST /send`). Keys as in `GET /settings`.\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "field key -> value"
+              },
+              "example": {
+                "talkTime": "1:30"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "changed": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "from": {
+                            "type": "string"
+                          },
+                          "to": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "changedBlocks": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/working-copy": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Working copy status",
+        "x-role": "readonly",
+        "description": "**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "exists": {
+                      "type": "boolean"
+                    },
+                    "edited": {
+                      "type": "boolean"
+                    },
+                    "newerPull": {
+                      "type": "boolean"
+                    },
+                    "files": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Reset to gate",
+        "x-role": "admin",
+        "description": "Throws away unsent changes: the working copy becomes the last pull.\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reset.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/files/{name}": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Download a board file",
+        "x-role": "admin",
+        "description": "The working copy's names.bin (contains the master code), phone.bin, cards.bin or a .map.\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          },
+          {
+            "$ref": "#/components/parameters/fileName"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/prefs": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Preferences",
+        "x-role": "readonly",
+        "description": "Kept in this app only, never sent to the gate.\n\n**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Preferences.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Prefs"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Change preferences",
+        "x-role": "admin",
+        "description": "Any of the keys; `relayLabels` changes only the relays given. Changing `gateConfig.areaCodes` converts the working copy (409 when it can't).\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Prefs"
+              },
+              "example": {
+                "relayLabels": {
+                  "1": "Entry"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The merged preferences.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Prefs"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/history": {
+      "get": {
+        "tags": [
+          "History"
+        ],
+        "summary": "History",
+        "x-role": "readonly",
+        "description": "Up to 500 events, newest first, and the gate's users. Key actions show as `api:<key name>`.\n\n**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/HistoryEvent"
+                      }
+                    },
+                    "users": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/GateUser"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/history/{id}/revert": {
+      "post": {
+        "tags": [
+          "History"
+        ],
+        "summary": "Revert a change",
+        "x-role": "admin",
+        "description": "Undoes that change in the working copy; refused (409) when a later change touched the same data or it was reverted already.\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          },
+          {
+            "$ref": "#/components/parameters/historyId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reverted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "cache": {
+                      "$ref": "#/components/schemas/Cache"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/relays": {
+      "get": {
+        "tags": [
+          "Relays"
+        ],
+        "summary": "Relay states (live)",
+        "x-role": "readonly",
+        "description": "Asks the gate now (DKS GetRelays). Each call reaches the gate: don't poll it often.\n\n**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "All 19 relays.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "checkedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "relays": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Relay"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "502": {
+            "$ref": "#/components/responses/Upstream"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Relays"
+        ],
+        "summary": "Hold open or release relays",
+        "x-role": "admin",
+        "description": "**Changes the gate now** (DKS SetRelays). `true` = Active (held open) until set back to `false`. Allowed: relays 0-2 (except a Tracker command relay), 3-10 with Tracker 2, 11-18 with Tracker 1.\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "boolean"
+                },
+                "description": "relay number -> true (hold open) / false (release)"
+              },
+              "example": {
+                "1": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Done.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "checkedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "before": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Relay"
+                      }
+                    },
+                    "after": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Relay"
+                      }
+                    },
+                    "settings": {
+                      "type": "string"
+                    },
+                    "reply": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "502": {
+            "$ref": "#/components/responses/Upstream"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/schedules": {
+      "get": {
+        "tags": [
+          "Schedules"
+        ],
+        "summary": "Scheduled transfers",
+        "x-role": "readonly",
+        "description": "**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Entries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "schedules": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Schedule"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Schedules"
+        ],
+        "summary": "Add a scheduled transfer",
+        "x-role": "admin",
+        "description": "Runs on the server at the given days and time (server local time), with the gate's DKS login.\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleInput"
+              },
+              "example": {
+                "days": [
+                  1,
+                  2,
+                  3,
+                  4,
+                  5
+                ],
+                "time": "02:00",
+                "actions": [
+                  "transactions"
+                ],
+                "enabled": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Added.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Schedule"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/schedules/{id}": {
+      "put": {
+        "tags": [
+          "Schedules"
+        ],
+        "summary": "Replace a scheduled transfer",
+        "x-role": "admin",
+        "description": "**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          },
+          {
+            "$ref": "#/components/parameters/scheduleId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Schedule"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Schedules"
+        ],
+        "summary": "Delete a scheduled transfer",
+        "x-role": "admin",
+        "description": "**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          },
+          {
+            "$ref": "#/components/parameters/scheduleId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/schedules/{id}/run": {
+      "post": {
+        "tags": [
+          "Schedules"
+        ],
+        "summary": "Run a scheduled transfer now",
+        "x-role": "admin",
+        "description": "Queues it after any running connection; its next time is unchanged.\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          },
+          {
+            "$ref": "#/components/parameters/scheduleId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {}
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/cameras": {
+      "get": {
+        "tags": [
+          "Cameras"
+        ],
+        "summary": "Camera settings",
+        "x-role": "readonly",
+        "description": "Never includes the recorder password.\n\n**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Settings, or null.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "settings": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/CameraSettings"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Cameras"
+        ],
+        "summary": "Save camera settings",
+        "x-role": "admin",
+        "description": "A blank `password` keeps the saved one.\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/CameraSettings"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "password": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CameraSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Cameras"
+        ],
+        "summary": "Remove camera settings",
+        "x-role": "admin",
+        "description": "Saved pictures are kept.\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "removed": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/cameras/test": {
+      "post": {
+        "tags": [
+          "Cameras"
+        ],
+        "summary": "Test: a live picture per channel",
+        "x-role": "admin",
+        "description": "Pictures are then at `/snapshots/live/ch<N>.jpg`.\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Per channel.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "channels": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "channel": {
+                            "type": "integer"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "file": {
+                            "type": "string"
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "502": {
+            "$ref": "#/components/responses/Upstream"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/cameras/live/{channel}": {
+      "get": {
+        "tags": [
+          "Cameras"
+        ],
+        "summary": "Live view (MJPEG)",
+        "x-role": "readonly",
+        "description": "A multipart MJPEG stream (for an `<img>`); `?quality=high` for the main stream.\n\n**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          },
+          {
+            "$ref": "#/components/parameters/channel"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "MJPEG stream.",
+            "content": {
+              "multipart/x-mixed-replace": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "502": {
+            "$ref": "#/components/responses/Upstream"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/snapshots": {
+      "get": {
+        "tags": [
+          "Cameras"
+        ],
+        "summary": "Snapshot log and run",
+        "x-role": "readonly",
+        "description": "Per transaction minute (match a transaction's `minute`), and the current or last run.\n\n**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "snapshots": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "$ref": "#/components/schemas/SnapshotMinute"
+                      }
+                    },
+                    "run": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/SnapshotRun"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Cameras"
+        ],
+        "summary": "Delete every saved picture",
+        "x-role": "admin",
+        "description": "And the snapshot log.\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "minutes": {
+                      "type": "integer"
+                    },
+                    "files": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/snapshots/run": {
+      "post": {
+        "tags": [
+          "Cameras"
+        ],
+        "summary": "Fetch pictures",
+        "x-role": "readonly",
+        "description": "For pending transactions, or only `minute`.\n\n**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "minute": {
+                    "type": "string"
+                  }
+                }
+              },
+              "example": {}
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Started.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/snapshots/stop": {
+      "post": {
+        "tags": [
+          "Cameras"
+        ],
+        "summary": "Stop the snapshot run",
+        "x-role": "readonly",
+        "description": "**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stopped (or none running).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "stopped": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/snapshots/{minute}/{file}": {
+      "get": {
+        "tags": [
+          "Cameras"
+        ],
+        "summary": "A picture or video",
+        "x-role": "readonly",
+        "description": "JPEG, or MP4 (supports Range requests).\n\n**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          },
+          {
+            "$ref": "#/components/parameters/minute"
+          },
+          {
+            "$ref": "#/components/parameters/file"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file.",
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "video/mp4": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/gates/{phone}/snapshots/{minute}/{file}/refresh": {
+      "post": {
+        "tags": [
+          "Cameras"
+        ],
+        "summary": "Fetch one picture again",
+        "x-role": "readonly",
+        "description": "**Read-only or admin key.**",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          },
+          {
+            "$ref": "#/components/parameters/minute"
+          },
+          {
+            "$ref": "#/components/parameters/file"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The minute's log entry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "snapshot": {
+                      "$ref": "#/components/schemas/SnapshotMinute"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "502": {
+            "$ref": "#/components/responses/Upstream"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "apiKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "dkg_<id>_<secret>",
+        "description": "A gate API key from System Settings → API keys."
+      }
+    },
+    "parameters": {
+      "phone": {
+        "name": "phone",
+        "in": "path",
+        "required": true,
+        "description": "The gate's system phone number, digits only. Must be the key's gate.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9]{4,15}$"
+        },
+        "example": "2145550100"
+      },
+      "code": {
+        "name": "code",
+        "in": "path",
+        "required": true,
+        "description": "Directory code; shorter codes get leading zeros to the gate's digit count.",
+        "schema": {
+          "type": "string"
+        },
+        "example": "101"
+      },
+      "historyId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "History event id.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "scheduleId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Schedule id.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "minute": {
+        "name": "minute",
+        "in": "path",
+        "required": true,
+        "description": "Transaction minute YYYYMMDD-HHMM (a transaction's `minute`), or `live`.",
+        "schema": {
+          "type": "string"
+        },
+        "example": "20261113-0915"
+      },
+      "file": {
+        "name": "file",
+        "in": "path",
+        "required": true,
+        "description": "Picture or video name, e.g. `ch1-00.jpg`, `ch1.mp4`.",
+        "schema": {
+          "type": "string"
+        },
+        "example": "ch1-00.jpg"
+      },
+      "fileName": {
+        "name": "name",
+        "in": "path",
+        "required": true,
+        "description": "names.bin, phone.bin, cards.bin, or their .map",
+        "schema": {
+          "type": "string"
+        },
+        "example": "names.bin"
+      },
+      "channel": {
+        "name": "channel",
+        "in": "path",
+        "required": true,
+        "description": "Camera channel number.",
+        "schema": {
+          "type": "string"
+        },
+        "example": "1"
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "No, wrong, expired or revoked API key.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The key is for another gate, or a read-only key tried an admin operation.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Not found (e.g. no working copy yet: pull residents first).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "BadRequest": {
+        "description": "Invalid input; `error` says what.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "Conflict: a gate connection or snapshot run is running, duplicates, a revert refused, …",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Upstream": {
+        "description": "DKS Cloud, the gate or the camera recorder didn't answer as expected.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "GateInfo": {
+        "type": "object",
+        "properties": {
+          "phoneNumber": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "addedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "role": {
+            "enum": [
+              "admin",
+              "readonly"
+            ]
+          }
+        }
+      },
+      "Job": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "enum": [
+              "idle",
+              "running",
+              "done",
+              "failed"
+            ]
+          },
+          "what": {
+            "enum": [
+              "residents",
+              "transactions",
+              "send"
+            ]
+          },
+          "phoneNumber": {
+            "type": "string"
+          },
+          "user": {
+            "type": "string",
+            "description": "who started it (username, or api:<key name>)"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "log": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "type": "string"
+          },
+          "busyElsewhere": {
+            "type": "boolean",
+            "description": "another gate's connection is running"
+          }
+        },
+        "required": [
+          "state",
+          "log"
+        ]
+      },
+      "SendPreview": {
+        "type": "object",
+        "properties": {
+          "changedBlocks": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            },
+            "description": "128-byte blocks that would be sent, per file"
+          },
+          "residentCounts": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      "Resident": {
+        "type": "object",
+        "properties": {
+          "directoryCode": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "Resident",
+              "Vendor"
+            ]
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "areaCode": {
+            "type": "string"
+          },
+          "areaCodeIndex": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "phone": {
+            "type": "string",
+            "example": "555-0142"
+          },
+          "entryCode": {
+            "type": "string"
+          },
+          "securityLevel": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "const": ""
+              }
+            ],
+            "description": "1 = Enabled, 0 = Disabled, 2-30 = time zones"
+          },
+          "elevatorRef": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "const": ""
+              }
+            ]
+          },
+          "floor": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "const": ""
+              }
+            ]
+          },
+          "cards": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "example": "00042"
+            }
+          },
+          "entryOffset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recordOffset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "type": "string",
+            "description": "local note, never on the gate"
+          }
+        }
+      },
+      "ResidentFields": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 15
+          },
+          "vendor": {
+            "type": "boolean"
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "areaCode": {
+            "type": "string",
+            "description": "3 digits, or 4 as 1 + area code for long distance"
+          },
+          "phone": {
+            "type": "string",
+            "description": "7 digits (or 10 with area code)"
+          },
+          "entryCode": {
+            "type": "string"
+          },
+          "securityLevel": {
+            "type": "integer"
+          },
+          "elevatorRef": {
+            "type": "integer"
+          },
+          "floor": {
+            "type": "integer"
+          },
+          "cards": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "00001-65407"
+            }
+          }
+        }
+      },
+      "Cache": {
+        "type": "object",
+        "properties": {
+          "exists": {
+            "type": "boolean"
+          },
+          "edited": {
+            "type": "boolean",
+            "description": "the working copy has changes not sent to the gate"
+          },
+          "newerPull": {
+            "type": "boolean",
+            "description": "a pull newer than the working copy's base differs from it"
+          }
+        }
+      },
+      "ResidentsReply": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Resident"
+            }
+          },
+          "unassignedCards": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "areaCodes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": {
+                  "type": "integer"
+                },
+                "code": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "uses": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "emptyCodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "dirDigits": {
+            "type": "integer"
+          },
+          "cache": {
+            "$ref": "#/components/schemas/Cache"
+          },
+          "pulled": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "saved": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "duplicates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "directoryCode",
+                    "entryCode",
+                    "card"
+                  ]
+                },
+                "value": {
+                  "type": "string"
+                },
+                "holders": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "text": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "EditReply": {
+        "type": "object",
+        "properties": {
+          "changed": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            },
+            "description": "changed 128-byte blocks per file"
+          },
+          "cache": {
+            "$ref": "#/components/schemas/Cache"
+          }
+        }
+      },
+      "SettingField": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "value": {
+            "type": "string",
+            "description": "working copy"
+          },
+          "gate": {
+            "type": "string",
+            "description": "as last pulled"
+          },
+          "editable": {
+            "type": "boolean"
+          },
+          "secret": {
+            "type": "boolean",
+            "description": "value masked"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maxLength": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "SettingsReply": {
+        "type": "object",
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettingField"
+            }
+          },
+          "pulled": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "saved": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cache": {
+            "type": "object"
+          }
+        }
+      },
+      "Transaction": {
+        "type": "object",
+        "properties": {
+          "ts": {
+            "type": "integer",
+            "description": "milliseconds since 1970"
+          },
+          "minute": {
+            "type": "string",
+            "description": "YYYYMMDD-HHMM: the snapshot folder"
+          },
+          "date": {
+            "type": "string"
+          },
+          "time": {
+            "type": "string"
+          },
+          "eventType": {
+            "type": "string"
+          },
+          "number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lookup": {
+            "anyOf": [
+              {
+                "enum": [
+                  "directory",
+                  "entryCode",
+                  "card"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "access": {
+            "type": "string",
+            "example": "Admit"
+          },
+          "relay": {
+            "type": "string"
+          },
+          "apb": {
+            "type": "string"
+          },
+          "directoryCode": {
+            "type": "string"
+          },
+          "raw": {
+            "type": "string"
+          }
+        }
+      },
+      "DataReply": {
+        "type": "object",
+        "properties": {
+          "transactions": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "updated": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "rows": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Transaction"
+                    }
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "Prefs": {
+        "type": "object",
+        "properties": {
+          "gateConfig": {
+            "type": "object",
+            "properties": {
+              "siteName": {
+                "type": "string"
+              },
+              "memorySize": {
+                "enum": [
+                  "1000",
+                  "2000",
+                  "3000"
+                ]
+              },
+              "areaCodes": {
+                "enum": [
+                  "10 Area Codes",
+                  "255 Area Codes"
+                ]
+              },
+              "modelNumber": {
+                "type": "string"
+              },
+              "antiPassBack": {
+                "enum": [
+                  "Y",
+                  "N"
+                ]
+              },
+              "interface1816": {
+                "enum": [
+                  "Y",
+                  "N"
+                ]
+              }
+            }
+          },
+          "relayLabels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 24
+            },
+            "description": "relay number (0-18) -> name"
+          },
+          "deviceAssociation": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "maxLength": 12
+                },
+                "from": {
+                  "type": "string"
+                },
+                "to": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "features": {
+            "type": "object",
+            "properties": {
+              "floors": {
+                "type": "boolean"
+              },
+              "elevators": {
+                "type": "boolean"
+              }
+            }
+          },
+          "tracker": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "tracker1": {
+                "type": "boolean"
+              },
+              "tracker2": {
+                "type": "boolean"
+              },
+              "prevTime1": {
+                "type": "string"
+              },
+              "prevTime2": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "HistoryEvent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "user": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "example": "change"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "change": {
+                  "type": "string"
+                },
+                "fields": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "field": {
+                        "type": "string"
+                      },
+                      "from": {
+                        "type": "string"
+                      },
+                      "to": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "revertible": {
+            "type": "boolean"
+          },
+          "revertedBy": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "user": {
+                    "type": "string"
+                  },
+                  "time": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "GateUser": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "pendingEmail": {
+            "type": "string"
+          },
+          "invited": {
+            "type": "boolean"
+          },
+          "role": {
+            "enum": [
+              "admin",
+              "readonly"
+            ]
+          },
+          "grantedBy": {
+            "type": "string"
+          },
+          "grantedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastSignIn": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "Relay": {
+        "type": "object",
+        "properties": {
+          "relay": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 18
+          },
+          "code": {
+            "type": "string",
+            "description": "0 off, 1 on, 2 unknown"
+          },
+          "state": {
+            "type": "string",
+            "example": "Off"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "ScheduleInput": {
+        "type": "object",
+        "properties": {
+          "days": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6,
+              "description": "0 = Sunday"
+            }
+          },
+          "time": {
+            "type": "string",
+            "example": "02:00"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "send",
+                "residents",
+                "transactions",
+                "snapshots"
+              ]
+            }
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "days",
+          "time",
+          "actions"
+        ]
+      },
+      "Schedule": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ScheduleInput"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "phoneNumber": {
+                "type": "string"
+              },
+              "user": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "nextRun": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "lastRun": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "lastResult": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "lastError": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "queued": {
+                "type": "boolean"
+              }
+            }
+          }
+        ]
+      },
+      "CameraSettings": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "serial": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "clockOffset": {
+            "type": "integer"
+          },
+          "mode": {
+            "enum": [
+              "snapshots",
+              "video"
+            ]
+          },
+          "frames": {
+            "type": "integer"
+          },
+          "framesAfter": {
+            "type": "integer"
+          },
+          "clipTries": {
+            "type": "integer"
+          },
+          "events": {
+            "enum": [
+              "access",
+              "all"
+            ]
+          },
+          "backfillHours": {
+            "type": "integer"
+          },
+          "keepDays": {
+            "enum": [
+              0,
+              15,
+              30,
+              60,
+              90
+            ]
+          },
+          "savedBy": {
+            "type": "string"
+          },
+          "savedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SnapshotMinute": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "enum": [
+              "done",
+              "partial",
+              "failed",
+              "removed"
+            ]
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "videoAttempts": {
+            "type": "integer"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "shifts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "short": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      "SnapshotRun": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "enum": [
+              "running",
+              "done",
+              "stopped",
+              "failed"
+            ]
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "log": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "minute": {
+            "type": "string"
+          },
+          "stopping": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          },
+          "progress": {
+            "type": "object"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

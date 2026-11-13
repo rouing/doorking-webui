@@ -65,7 +65,21 @@ Working, tested end-to-end against live gate pulls:
     SHA-256 stored, role, optional expiry, `last_used_at`. The request handler authenticates a `Bearer` key before
     sessions; keys reach only `gate`/`gate-admin` routes of their own gate and never `webOnly(...)` routes (gate
     login, users, share, API keys, delete-data, leave). The handler's `s.user` is `api:<name>` (History, logs).
-  - UI: `Account.tsx` (first setup, forced password change, User Settings: dark mode, email, password), `Gates.tsx`
+  - **Passkeys (2026-11-13):** `src/passkeys.ts` with `@simplewebauthn/server` 14 / `browser` 14; table `passkeys`,
+    `users.webauthn_id`. Relying party from the request's Host (`relyingParty()` in server.ts): `server.publicHost`
+    with `https://` origin, or `localhost:<port>` with `http://`; other hosts get 400. Discoverable credentials,
+    `userVerification: 'required'`, attestation `none`; challenges in memory (5 min, one use, bound to user and
+    site). Adding needs the current password (`checkOwnPassword`, counted in `failedSignIns`). The test suite drives
+    it with a software ES256 authenticator (`softAuthenticator()` in test/gate-cache.test.ts).
+  - **Email (2026-11-13):** `src/email.ts` (nodemailer 10 SMTP; `createMailer` from `config.email`, null = off).
+    Outbox `emails` (encrypted body, nulled after sending; `sendQueued` every 30 s and after each `queueEmail`),
+    tokens `email_tokens` (hash, kind, expiry, one use; new one replaces the old). `users.email` = confirmed only
+    (unique); `pending_email` until the `#verify=` link (`confirmEmail` re-checks uniqueness). Invited accounts have
+    password hash `!` until `acceptInvite`. Server helpers: `mailTo`, `securityAlert`, `accessEmail` (respects
+    `notify_access`), `gateAlert` (`alertRecipients`: admins with a confirmed email and `notify_alerts`; sent for a
+    failed non-scheduled send and a failed scheduled run). Reset request rate limits in memory (`resetRequests`).
+    UI: `EmailLink` (App reads `#verify|reset|invite=` once and clears it), `ForgotPassword`. CLI `test-email`, `emails`.
+  - UI: `Account.tsx` (first setup, forced password change, User Settings: dark mode, email, notifications, passkeys, password), `Gates.tsx`
     (roles, Leave, Add a gate with DKS login + configuration and progress), System Settings → Gate login / Gate
     users, read-only via `ReadOnlyContext` (edit buttons hidden; settings pages in a disabled `<fieldset>`).
 - **Pull residents** and **Pull transactions** (read from the gate into the database).
@@ -450,6 +464,7 @@ DELETE G                            leave the gate (not for its last admin)
 GET/PUT G/login                     the gate's DKS login / master code (admins)
 GET/POST G/users, POST G/share, PUT/DELETE G/users/:username   gate users and roles (admins)
 GET/POST G/api-keys, DELETE G/api-keys/:id   per-gate API keys (admins; key shown once on POST)
+GET    /api/openapi.json, /api/docs  OpenAPI 3.1 of the API-key routes (docs/openapi.json) + Swagger UI (public)
 POST   G/delete-data                { confirm: true }  delete everything stored about the gate (all users' lists, DB rows,
                                     media/<phone>/); 409 while a job/snapshot run/schedule for it runs
 GET    G/job                        this gate's pull/send job; another gate's job shows idle + busyElsewhere

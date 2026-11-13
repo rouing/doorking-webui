@@ -29,6 +29,8 @@ command line):
   create-admin <username>           Create an account that becomes admin of every gate without an admin
   reset-password <username>         Set a temporary password (the user must choose a new one at sign-in)
   grant <username> <gate phone> <admin|readonly>   Give an account access to a gate (or change its role)
+  test-email <address>              Send a test email now with config.json's email settings (shows the SMTP error, if any)
+  emails                            The last 20 emails in the outbox (to, subject, status, error)
 
 Web UI and REST API: node web/server.ts [--config config.json] [--check-config] [--port 8080] [--public-host <name>]
                            [--media media] [--logs logs]
@@ -141,6 +143,22 @@ const COMMANDS: Record<string, (positional: string[], args: string[]) => void | 
     if (!u) throw new Error(`There is no user "${dk.userKey(username)}"`);
     await dk.setPassword(store, u.username, await newPassword(), { mustChange: true });
     console.error(`Password of ${u.username} reset; they must choose a new one at their next sign-in. Their sessions were ended.`);
+  }),
+
+  'test-email': async ([to]) => {
+    if (!to) throw new Error('Usage: test-email <address>');
+    const cfg = dk.loadConfig({ args: process.argv.slice(2).filter((a, i, all) => a === '--config' || all[i - 1] === '--config') });
+    const mailer = dk.createMailer(cfg.email);
+    if (!mailer) throw new Error('Email is off: set email.host (and from, user, password) in config.json');
+    await mailer.sendMail({ from: cfg.email.from, to, subject: 'DoorKing Gate Manager test email',
+      text: `This is a test from DoorKing Gate Manager (${cfg.email.appUrl}). Email is working.` });
+    console.error(`Sent to ${to} through ${cfg.email.host}:${cfg.email.port} (${cfg.email.security})`);
+  },
+
+  emails: () => withDatabase(async (store) => {
+    for (const e of (await dk.listEmails(store, 20)).reverse()) {
+      console.log(`${e.createdAt}  ${e.status.padEnd(6)}  ${e.kind.padEnd(8)}  ${e.to}  "${e.subject}"${e.error ? `  (${e.attempts} tries: ${e.error})` : ''}`);
+    }
   }),
 
   grant: ([username, phone, role]) => withDatabase(async (store) => {

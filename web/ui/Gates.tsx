@@ -137,7 +137,7 @@ export function Gates({ session, onChange }: { session: SignedIn; onChange: () =
           <Button variant="soft" color="gray" onClick={() => setSettings(!settings)}>{settings ? 'Back to gates' : 'User settings'}</Button>
           <Button variant="soft" color="gray" onClick={signOut}>Sign out</Button>
         </Flex>
-        {settings ? <UserSettings user={session.user} email={session.email} dark={session.dark} onSaved={onChange} /> : (
+        {settings ? <UserSettings session={session} onSaved={onChange} /> : (
           <>
             {gates && !gates.length && <Text color="gray">No gates yet. Add one below, or ask a gate admin to add you to theirs.</Text>}
             <Flex direction="column" gap="2">

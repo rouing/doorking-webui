@@ -104,22 +104,32 @@ export interface SendPreview { changedBlocks: Record<string, number[]>; resident
 export type GateRole = 'admin' | 'readonly';
 export interface GateInfo { phoneNumber: string; siteName: string; addedAt: string; role: GateRole }
 // Someone with access to a gate (G/users, History).
-export interface GateUser { username: string; email: string; role: GateRole; grantedBy: string; grantedAt: string; lastSignIn: string | null }
+// email: confirmed; pendingEmail: waiting for its confirmation link; invited: hasn't accepted their invitation yet.
+export interface GateUser {
+  username: string; email: string; pendingEmail: string; invited: boolean; role: GateRole; grantedBy: string; grantedAt: string; lastSignIn: string | null;
+}
 // G/api-keys: an API key of the gate (never the key itself, which is shown once when created).
 export interface ApiKeyInfo {
   id: string; name: string; role: GateRole; createdBy: string; createdAt: string; expiresAt: string | null; lastUsedAt: string | null;
 }
+// /api/me/passkeys: one of the user's passkeys. site: the name it works on (the public name, or localhost); synced:
+// backed up by a passkey provider (iCloud Keychain, Google Password Manager, …), so it is on the user's other devices too.
+export interface PasskeyInfo { id: string; name: string; site: string; synced: boolean; createdAt: string; lastUsedAt: string | null }
 // G/login: the gate's DKS login (the password and master code are never sent back).
 export interface GateLogin { dksUser: string; dksPasswordSet: boolean }
 
 // setup: no account exists yet, so the page offers to create the first one.
 export type SessionReply =
-  | { loggedIn: false; setup?: boolean }
+  | { loggedIn: false; setup?: boolean; emailEnabled: boolean }
   | {
     loggedIn: true;
     user: string;
-    email: string;
+    email: string; // confirmed
+    pendingEmail: string; // waiting for its confirmation link
     dark: boolean;
+    notifyAccess: boolean; // emails when added to, removed from or changed on a gate
+    notifyAlerts: boolean; // gate alerts (as a gate admin)
+    emailEnabled: boolean; // the server can send email
     mustChangePassword: boolean;
     gate: GateInfo | null;
     defaults: GateConfig;

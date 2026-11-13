@@ -238,17 +238,25 @@ export async function migrateWorkingFiles(store: Store): Promise<string[]> {
   return phones;
 }
 
-// Settings the app learned to decode after a working copy was saved get their rows, decoded from the working copy's
-// names.bin (read-only settings come from the base there). Returns the gates that got rows.
-export async function addMissingSettings(store: Store): Promise<string[]> {
+// Values the app learned to store after a working copy was saved (setting rows, the extra bytes, the file sizes) are
+// added, decoded from the working copy's files (where such bytes still come from the base); the rest is kept.
+// Returns the gates that got values.
+export async function addMissingValues(store: Store): Promise<string[]> {
   const done: string[] = [];
-  for (const { phone } of await all<{ phone: string }>(store, 'SELECT phone FROM gate_working ORDER BY phone')) {
+  for (const { phone, complete } of await all<{ phone: string; complete: boolean }>(store,
+    'SELECT phone, extra IS NOT NULL AND sizes IS NOT NULL AS complete FROM gate_working ORDER BY phone')) {
     const have = new Set((await all<{ key: string }>(store, 'SELECT key FROM gate_settings WHERE phone = $1', [phone])).map((r) => r.key));
-    if (GATE_SETTING_FIELDS.every((f) => f.secret || have.has(f.key))) continue;
-    const names = (await loadCopies(store, phone, ['names.bin'])).working.get('names.bin');
-    if (!names) continue;
-    const missing = decodeGateSettings(names.data).filter((s) => !s.secret && !have.has(s.key));
-    if (await addSettingRows(store, phone, Object.fromEntries(missing.map((s) => [s.key, s.value])))) done.push(phone);
+    if (complete && GATE_SETTING_FIELDS.every((f) => f.secret || have.has(f.key))) continue;
+    const c = await loadCopies(store, phone);
+    if (!hasAll(c.working)) continue;
+    const w = decodeWorking(boardOf(c.working));
+    await transaction(store, async (tx) => {
+      const missing = decodeGateSettings(c.working.get('names.bin')!.data).filter((s) => !s.secret && !have.has(s.key));
+      await addSettingRows(tx, phone, Object.fromEntries(missing.map((s) => [s.key, s.value])));
+      await run(tx, 'UPDATE gate_working SET extra = COALESCE(extra, $2), sizes = COALESCE(sizes, $3) WHERE phone = $1',
+        [phone, JSON.stringify(w.extra), JSON.stringify(w.sizes)]);
+    });
+    done.push(phone);
   }
   return done;
 }

@@ -321,15 +321,21 @@ what the gate holds. The board files to show, compare or send are built from the
 |---|---|
 | `gate_residents` | `phone`, `seq` (order), `directory_code`, `type` (`Resident`/`Vendor`), `name`, `hidden`, `area_code`, `phone_number` (`555-0142`), `entry_code`, `security_level`, `floor`, `elevator_ref`, `entry_offset` / `record_offset` (where the entry is in `names.bin` / `phone.bin`). Primary key (`phone`, `seq`) |
 | `gate_cards` | `phone`, `slot` (record number in `cards.bin`), `card_number` (5 digits), `directory_code` (`''` = not assigned, null = not a directory code), `raw_code` (bytes 2-3 as hex when not a directory code, e.g. a mass-enabled `AB` record). Primary key (`phone`, `slot`) |
-| `gate_settings` | `phone`, `key` (as in `src/gate-settings.ts`), `grp` (page), `name`, `value` (e.g. `1:00`, `Off`, `0000001` = days Sun…Sat, `''` = not set). Read-only settings (dial type, multiple systems, system memory, memory chips, download stamps) are stored too; files are built with their bytes from the base. The master code is left out. Primary key (`phone`, `key`). At start, `addMissingSettings` adds the rows of settings decoded since a working copy was saved (from its `names.bin`), keeping the rest |
-| `gate_working` | `phone` (primary key), `dir_digits` (1-4), `area_code_mode` (255 or 10), `area_codes` (JSONB: the area-code table, one entry per slot, null = free), `middle_pointer` (`names.bin` `0xF8`-`0xFA` as hex), `base_ok` (the base passed the round-trip check; false locks editing), `saved_at` (last edit) |
-| `gate_state` | the round-trip check of the latest pull: `phone` (primary key), `pulled_at`, `checked_at`, `round_trip_ok`, `problems` (JSONB: `[{ file, bytes, offsets, settings?, error? }]`) |
+| `gate_settings` | `phone`, `key` (as in `src/gate-settings.ts`), `grp` (page), `name`, `value` (e.g. `1:00`, `Off`, `0000001` = days Sun…Sat, `''` = not set). Read-only settings (dial type, multiple systems, system memory, memory chips, download stamps) are stored and written back too; users can't change them. The master code is left out (it is in `managed_gates`). Primary key (`phone`, `key`) |
+| `gate_working` | `phone` (primary key), `dir_digits` (1-4), `area_code_mode` (255 or 10), `area_codes` (JSONB: the area-code table, one entry per slot, null = free), `middle_pointer` (`names.bin` `0xF8`-`0xFA` as hex), `base_ok` (the base passed the round-trip check; false locks editing), `saved_at` (last edit), `extra` (JSONB: the `names.bin` bytes before the directory that nothing decodes and that aren't blank, i.e. not `FF` or, at `100`-`113`, `144`, `179`-`18C`, a space; as `{ "037": "01" }`, hex offset to hex bytes), `sizes` (JSONB: `{ names, phone, cards }` file lengths) |
+| `gate_state` | the checks of the latest pull: `phone` (primary key), `pulled_at`, `checked_at`, `round_trip_ok`, `problems` (JSONB: `[{ file, bytes, offsets, settings?, error? }]`), `rebuild_ok`, `rebuild_problems` (the rebuild check, same shape; null for pulls checked before 2026-11-13) |
+
+At start, `addMissingValues` (`src/gate-cache.ts`) adds what a working copy saved before the app stored it (setting
+rows, `extra`, `sizes`), decoded from its files, and keeps everything else; otherwise the next edit would show them in
+History as added.
 
 **Building the files** (`buildFiles`): from the base copy, in this order: the directory code digits (if changed);
 the area-code table (if the layout is unchanged); codes removed, resident values that differ written, codes added;
-the area-code layout and its table (if changed); settings that differ; the directory order (by `entry_offset`) and
-the middle pointer; `cards.bin` from its slots. Everything else, including every byte nothing decodes, comes from
-the base copy. The steps use the same functions as the edit pages.
+the area-code layout and its table (if changed); settings that differ (read-only ones from their stored values);
+the `extra` bytes; the directory order (by `entry_offset`) and the middle pointer; the phone records' positions (by
+`record_offset`); `cards.bin` from its slots. A code with a blank name is added as the gate's empty slot (blank name,
+flag `00`, blank phone record), as deleting leaves it. The master code comes from the base copy. The steps use the
+same functions as the edit pages.
 
 **Saving an edit** (`writeCacheFiles`): the page's edit runs on the built files as before; the result is decoded into
 values, which are saved only if building from them gives the same files byte for byte. Otherwise the edit is refused
@@ -338,8 +344,16 @@ values, which are saved only if building from them gives the same files byte for
 **Round-trip check.** The decoded values are written back, with the app's own encoders, over a copy of the pull
 whose decoded bytes were overwritten first (settings, names and flag bits, phone record bytes 2-9; `cards.bin` is
 built from its slots). The copy must come out byte for byte the same as the pull, which shows the files can be built
-from values like these. Bytes nothing decodes are carried over. The directory's middle-entry pointer (`0xF8`) is kept
-from the pull when the directory rebuilt exactly, as edits do.
+from values like these. The directory's middle-entry pointer (`0xF8`) is kept from the pull when the directory
+rebuilt exactly, as edits do.
+
+**Rebuild check** (`checkRebuild`, `buildFromValues`). The files are built with no stored file at all: blank files
+of the recorded sizes (`FF`, spaces where DoorKing32 writes them, the directory code digits), then the values, every
+setting, and the master code from `managed_gates` (a `0` digit written as `0A`). The result must equal the pull byte
+for byte, so nothing is known only from a stored file. Run on every pull with the round-trip check; a difference is
+recorded (`rebuild_problems`) and logged but doesn't lock editing. What can't pass it: bytes after the directory or
+in unused phone records that aren't `FF`, a directory code digit count outside 1-4, and a gate whose `names.bin`
+length isn't 64000/63104 with an empty directory (the layout is told from the length then).
 
 ## Deleting a gate's data
 

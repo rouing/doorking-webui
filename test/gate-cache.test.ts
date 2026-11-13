@@ -98,6 +98,8 @@ function syntheticGate() {
     if (f.type.maxLength) names.fill(0x20, f.offset, f.offset + f.type.size);
     if (/^sec\d+tz\d(Relays|Floors)$/.test(f.key)) names.fill(0, f.offset, f.offset + f.type.size);
   }
+  for (const [from, to] of [[0x100, 0x114], [0x144, 0x145], [0x179, 0x18d]]) names.fill(0x20, from, to); // blank display text
+  names[0x40] = 3; // directory code digits
   for (const [o, n, code, flag] of [[0xf80, 'Smith, J', ' 101', 0x20], [0xf94, 'ACME Deliveries', ' 102', 0x01], [0xfa8, '', ' 103', 0x00]]) {
     names.write(n.padEnd(15, ' '), o, 15, 'latin1');
     names[o + 15] = flag;
@@ -191,7 +193,7 @@ test('a new code added after a rename keeps its place, and a digit-count decreas
 test('an edit that the values cannot describe is refused, and nothing is saved', withPull(async (store) => {
   await dk.ensureCache(store, PHONE);
   const names = Buffer.from((await working(store)).names);
-  names[0x006] ^= 0xff; // a byte nothing decodes
+  names[0x2000] ^= 0xff; // free space after the directory: no value describes it
   await assert.rejects(() => dk.writeCacheFile(store, PHONE, 'names.bin', names), (e) => e.status === 409 && /can't be stored/.test(e.message));
   assert.strictEqual((await dk.cacheStatus(store, PHONE)).edited, false);
   await assert.rejects(() => dk.writeCacheFile(store, PHONE, 'names.bin', Buffer.alloc(100)), /must stay 64000 bytes/);
@@ -294,10 +296,11 @@ test('verifySend reports matching files and the blocks that differ', withPull(as
   assert.deepStrictEqual(result.differentBlocks, { 'names.bin': [6], 'cards.bin': 'size differs' });
 }));
 
-test('addMissingSettings adds rows for settings decoded since the working copy was saved, once', withStore(async (store) => {
+test('addMissingValues adds setting rows, extra bytes and sizes stored since the working copy was saved, once', withStore(async (store) => {
   const gate = syntheticGate();
   gate.names[0x0f] = 0x0a;
   gate.names[0xfb] = 0x05;
+  gate.names[0x37] = 0x01;
   Buffer.from('00f9e0' + '0182b0', 'hex').copy(gate.names, 0xbf);
   await pullInto(store, gate);
   await dk.ensureCache(store, PHONE);
@@ -307,10 +310,15 @@ test('addMissingSettings adds rows for settings decoded since the working copy w
     .map((r) => [r.key, r.value]));
   const before = await rows();
   assert.deepStrictEqual(NEW.map((k) => before[k]), ['Tone', '', '3000', 'Anti-pass back', '', '']);
-  await store.db.query('DELETE FROM gate_settings WHERE key = ANY($1)', [NEW]); // as saved before these were decoded
-  assert.deepStrictEqual(await dk.addMissingSettings(store), [PHONE]);
-  assert.deepStrictEqual(await dk.addMissingSettings(store), []);
+  const head = async () => (await store.db.query('SELECT extra, sizes FROM gate_working WHERE phone = $1', [PHONE])).rows[0];
+  assert.deepStrictEqual(await head(), { extra: { '037': '01' }, sizes: { names: 64000, phone: 30080, cards: 32000 } });
+  // As saved before these were stored:
+  await store.db.query('DELETE FROM gate_settings WHERE key = ANY($1)', [NEW]);
+  await store.db.query('UPDATE gate_working SET extra = NULL, sizes = NULL');
+  assert.deepStrictEqual(await dk.addMissingValues(store), [PHONE]);
+  assert.deepStrictEqual(await dk.addMissingValues(store), []);
   assert.deepStrictEqual(await rows(), before);
+  assert.deepStrictEqual(await head(), { extra: { '037': '01' }, sizes: { names: 64000, phone: 30080, cards: 32000 } });
   assert.strictEqual((await rows()).talkTime, '2:30'); // the unsent edit stays
   const loaded = await dk.loadWorkingState(store, PHONE);
   assert.strictEqual(dk.diffStates(loaded.state, dk.decodeWorking(await working(store))), null);
@@ -340,6 +348,67 @@ test('importGateFiles and migrateWorkingFiles move the files kept on disk into t
   assert.strictEqual((await store.db.query("SELECT name FROM gate_residents WHERE directory_code = '101'")).rows[0].name, 'Edited, Unsent');
   assert.strictEqual((await dk.cacheStatus(store, PHONE)).edited, true);
   assert.strictEqual((await dk.readPulledFile(store, PHONE, 'rcv_out.bin')).data.length, 100);
+}));
+
+// The synthetic gate with what a real one also holds: a master code, read-only values, undecoded non-blank bytes.
+function fullGate() {
+  const gate = syntheticGate();
+  Buffer.from([1, 2, 0x0a, 9]).copy(gate.names, 0); // master code 1209 (0 stored as 0x0A)
+  Object.assign(gate.names, { [0x0f]: 0x0a, [0x06]: 0x0a, [0xfb]: 0x05, [0x37]: 0x01, [0x43]: 0x01, [0x230]: 0x12 });
+  Buffer.from('00f9e0' + '0182b0', 'hex').copy(gate.names, 0xbf);
+  Buffer.from('70bfec6a' + '75bfec6a', 'hex').copy(gate.names, 0x15);
+  return gate;
+}
+
+test('rebuild check: the files come out of the values alone, with the master code from managed_gates', () => {
+  const gate = fullGate();
+  const w = dk.decodeWorking(gate);
+  assert.deepStrictEqual(w.extra, { '037': '01', '043': '01', '230': '12' });
+  assert.deepStrictEqual(w.sizes, { names: 64000, phone: 30080, cards: 32000 });
+  assert.strictEqual(w.residents.find((r) => r.directoryCode === '103').name, ''); // the gate's empty slot
+  assert.deepStrictEqual(dk.checkRebuild(gate, { masterCode: '1209' }), { ok: true, problems: [] });
+  // Without the master code only its 4 bytes are missing.
+  assert.deepStrictEqual(dk.checkRebuild(gate).problems, [{ file: 'names.bin', bytes: 4, offsets: ['0x0', '0x1', '0x2', '0x3'], settings: ['masterCode'] }]);
+  // Phone records out of code order keep their positions.
+  const swapped = fullGate();
+  gate.phone.copy(swapped.phone, 0, 10, 20);
+  gate.phone.copy(swapped.phone, 10, 0, 10);
+  assert.ok(dk.checkRebuild(swapped, { masterCode: '1209' }).ok);
+  // The 10-area-code layout too.
+  assert.ok(dk.checkRebuild(dk.convertAreaCodeMode(gate, 10), { masterCode: '1209' }).ok);
+  // A byte no value describes (free space after the directory) is reported.
+  const junk = fullGate();
+  junk.names[0x2000] = 0;
+  assert.deepStrictEqual(dk.checkRebuild(junk, { masterCode: '1209' }).problems, [{ file: 'names.bin', bytes: 1, offsets: ['0x2000'] }]);
+  // Without recorded sizes there is nothing to build from.
+  assert.throws(() => dk.buildFromValues({ ...w, sizes: undefined }), /sizes are not recorded/);
+});
+
+test('buildFiles writes read-only settings and extra bytes from their stored values', () => {
+  const gate = fullGate();
+  const w = dk.decodeWorking(gate);
+  const built = dk.buildFiles(gate, { ...w, settings: { ...w.settings, dialType: 'Rotary', memoryChips: '? (0x7)' }, extra: { ...w.extra, '037': '02' } });
+  assert.deepStrictEqual([built.names[0x0f], built.names[0xfb], built.names[0x37]], [0x01, 0x07, 0x02]);
+  assert.ok(dk.buildFiles(gate, w).names.equals(gate.names));
+  // Every read-only value, including the raw "? (...)" form, writes back the bytes it came from.
+  for (const f of dk.WRITTEN_FIELDS.filter((x) => !x.editable)) {
+    for (const bytes of [gate.names.subarray(f.offset, f.offset + f.type.size), Buffer.alloc(f.type.size, 0xff), Buffer.alloc(f.type.size, 0x07)]) {
+      assert.ok(f.type.encode(f.type.decode(bytes)).equals(bytes), `${f.key} ${bytes.toString('hex')}`);
+    }
+  }
+  assert.throws(() => dk.applyGateSettings(gate.names, { dialType: 'Rotary' }), /read-only/);
+});
+
+test('checkPull records the rebuild check next to the round-trip check', withStore(async (store) => {
+  const gate = fullGate();
+  const check = await dk.checkPull(store, PHONE, gate, new Date(T1), { masterCode: '1209' });
+  assert.deepStrictEqual([check.ok, check.rebuild.ok, check.carried], [true, true, ['masterCode']]);
+  const s = await dk.getGateState(store, PHONE);
+  assert.deepStrictEqual([s.roundTripOk, s.rebuildOk, s.rebuildProblems], [true, true, []]);
+  gate.names[0x2000] = 0;
+  await dk.checkPull(store, PHONE, gate, new Date(T1));
+  const t = await dk.getGateState(store, PHONE);
+  assert.deepStrictEqual([t.roundTripOk, t.rebuildOk, t.rebuildProblems.map((p) => p.offsets)], [true, false, [['0x0', '0x1', '0x2', '0x3', '0x2000']]]);
 }));
 
 test('round-trip check: the files rebuild byte for byte from their decoded values, and a lost byte is caught', () => {

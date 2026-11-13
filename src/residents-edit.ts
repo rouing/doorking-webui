@@ -340,7 +340,7 @@ function insertDirectoryCode(buffers: BoardBuffers, code: string, name: string, 
   if (nEnd + NAMES_ENTRY_SIZE > names.length || !names.subarray(nEnd, nEnd + NAMES_ENTRY_SIZE).every((b) => b === 0xff)) {
     throw err('No room for another directory entry', 409);
   }
-  const group = flag & 0x01 ? 2 : 1;
+  const group = flag & 0x01 ? 2 : flag === 0 && !name.trim() ? 0 : 1;
   const key = nameKey(name);
   let at = dirStart(names);
   for (; at < nEnd; at += NAMES_ENTRY_SIZE) {
@@ -442,6 +442,20 @@ export function addEntry(buffers: BoardBuffers, entry: ResidentEdit, opts: EditO
     const name = String(entry.name).slice(0, 15).padEnd(15, ' ');
     start = insertDirectoryCode(buffers, code, name, vendor ? 0x01 : hidden ? 0x00 : 0x20);
   }
+  return withPointer(buffers.names, editBuffers(start, { ...entry, directoryCode: code, vendor, hidden }, opts));
+}
+
+// Adds a directory code exactly as given, for rebuilding files from stored values: a blank name with neither vendor
+// nor shown makes the gate's empty slot (as deleteResident leaves it). Users add through addEntry.
+export function addStoredEntry(buffers: BoardBuffers, entry: ResidentEdit, opts: EditOptions = {}): BoardBuffers {
+  const code = dirCode(buffers.names, entry && entry.directoryCode);
+  if (findNamesEntry(buffers.names, code) >= 0 || findPhoneRecord(buffers.phone, code) >= 0) {
+    throw err(`Directory code ${code} is already in use`, 409);
+  }
+  const vendor = Boolean(entry.vendor);
+  const hidden = Boolean(entry.hidden);
+  const name = String(entry.name ?? '').slice(0, 15).padEnd(15, ' ');
+  const start = insertDirectoryCode(buffers, code, name, vendor ? 0x01 : hidden ? 0x00 : 0x20);
   return withPointer(buffers.names, editBuffers(start, { ...entry, directoryCode: code, vendor, hidden }, opts));
 }
 

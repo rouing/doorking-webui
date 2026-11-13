@@ -545,11 +545,14 @@ async function recordGateState(phone: string): Promise<string> {
   const pulled = await dk.readPulledFiles(STORE, phone, dk.CACHE_FILES);
   if (dk.CACHE_FILES.some((n) => !pulled[n])) return 'Round-trip check skipped: the pull is missing a file';
   const prefs = await prefsOf(phone);
+  const gate = await dk.getGate(STORE, phone);
   const check = await dk.checkPull(STORE, phone,
     { names: pulled['names.bin'].data, phone: pulled['phone.bin'].data, cards: pulled['cards.bin'].data },
-    pulled['names.bin'].savedAt, { areaCodeSlots: dk.areaCodeLimit((prefs.gateConfig || {}).areaCodes || defaults.areaCodes) });
-  const line = check.ok ? 'Round-trip check passed: the files rebuild byte for byte from their values'
-    : `Round-trip check FAILED (editing stays locked after Reset to gate): ${JSON.stringify(check.problems).slice(0, 500)}`;
+    pulled['names.bin'].savedAt, { areaCodeSlots: dk.areaCodeLimit((prefs.gateConfig || {}).areaCodes || defaults.areaCodes),
+      masterCode: gate ? gate.masterCode : undefined });
+  const line = (check.ok ? 'Round-trip check passed: the files rebuild byte for byte from their values'
+    : `Round-trip check FAILED (editing stays locked after Reset to gate): ${JSON.stringify(check.problems).slice(0, 500)}`)
+    + (check.rebuild.ok ? '; rebuild from values alone passed' : `; rebuild from values alone differs: ${JSON.stringify(check.rebuild.problems).slice(0, 500)}`);
   DEBUG.write('gate', `Gate ${phone}: ${line}`);
   return line;
 }
@@ -1868,10 +1871,10 @@ for (const phone of await dk.migrateWorkingFiles(STORE)) {
   console.log(`Gate ${phone}: working copy moved into the values tables`);
   DEBUG.write('server', `Gate ${phone}: working copy moved into the values tables`);
 }
-// Settings decoded since a working copy was saved get their rows.
-for (const phone of await dk.addMissingSettings(STORE)) {
-  console.log(`Gate ${phone}: newly decoded settings added to the values tables`);
-  DEBUG.write('server', `Gate ${phone}: newly decoded settings added to the values tables`);
+// Values stored since a working copy was saved (settings, extra bytes, file sizes) are added.
+for (const phone of await dk.addMissingValues(STORE)) {
+  console.log(`Gate ${phone}: newly stored values added to the values tables`);
+  DEBUG.write('server', `Gate ${phone}: newly stored values added to the values tables`);
 }
 if (await dk.userCount(STORE) === 0) {
   SETUP_CODE = crypto.randomBytes(5).toString('hex');

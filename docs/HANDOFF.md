@@ -568,6 +568,16 @@ Per gate and file, rows in `gate_files` (data encrypted with `encryptBytes`):
   had to be stored rather than derived: the directory order (an add's position depends on the names at the time
   it was added, so entries are put back in `entry_offset` order) and the area-code table + middle pointer (a digit
   decrease wipes them). History stores each change as values and reverts them (§4.1).
+- **Rebuild from values alone (2026-11-13):** a build from blank files (`buildFromValues`) on the live gate first
+  differed in the master code (not in the values tables), the 17 bytes of read-only settings (`buildFiles` wrote only
+  editable ones), `0x37`/`0x43`, and 11 directory codes with a blank name (deleted slots; `addEntry` refuses blank
+  names). Now: read-only settings are written back from their stored values (their encoders take every decoded
+  value back, `? (...)` included); undecoded non-blank bytes before the directory are stored (`gate_working.extra`)
+  and written back; a blank-named code is added as an empty slot (`addStoredEntry`); phone records are put at their
+  stored `record_offset`; the file sizes are stored (`gate_working.sizes`). The master code comes from
+  `managed_gates` in the rebuild (normal builds keep the base's bytes, so saves don't need the secret; the two agree
+  on the live gate). `checkPull` runs `checkRebuild` on every pull (`gate_state.rebuild_ok`, not locking): the live
+  gate rebuilds byte for byte. The base copy stays: sends upload only the blocks that differ from it.
 
 Edit flow: `ensureCache` → `writeCacheFile` → `prepareSend`/`verifySend` (all async, `(store, phone, …)`). The server
 awaits `prepareGateSend` (duplicates, `prepareSend`, resident counts) before its synchronous busy check, so a send
@@ -758,7 +768,7 @@ byte, not only the one expected.
     software), `0xC5` (never written). The last download (2026-11-05 17:40 UTC) wasn't from this app, which hasn't
     sent yet; it also left these `01` bytes and `0xFB` = `05`, which DoorKing32's builders wouldn't write.
   - The settings existed only as raw bytes in the encrypted base `names.bin` (no `gate_settings` rows) until then;
-    `addMissingSettings` (startup) adds rows for settings decoded after a working copy was saved.
+    `addMissingValues` (startup) adds rows for settings decoded after a working copy was saved.
 - **Desktop-app trace leads (unconfirmed):** tracing `FUN_004aad40` put anti-pass back (mode, relays,
   reset counter, re-sync days, scheduled re-sync time) at `names.bin` **`0xA04`–`0xA40`**. That trace
   also guessed holidays at `0x243` and facility codes at `0x9C3`, and pull diffs later proved both wrong

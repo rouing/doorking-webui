@@ -6,10 +6,12 @@ Which bytes of the board files hold which setting. Offsets are hex. The source o
 
 - **Block:** the `.MAP` files flag changed 128-byte blocks, one byte per block. Block = offset ÷ 128 (offset `>> 7`).
 - **Key:** the setting's key in `gate-settings.ts`; the page is where the app edits it.
-- **Read-only:** decoded and shown (System Settings) but never written by the app; sent back exactly as pulled.
-  Taken from the decompiled DoorKing32 (`research/`, 2026-11-13) and checked against a pull, not by one-change diffs.
+- **Read-only:** decoded, shown (System Settings) and stored, but users can't change them; written back from the
+  stored value, so sent exactly as pulled. Taken from the decompiled DoorKing32 (`research/`, 2026-11-13) and checked
+  against a pull, not by one-change diffs.
 - **Blank:** DoorKing32 writes `FF` (spaces in display text) here on every send and nothing reads it.
-- **Unknown:** bytes nothing in the app reads or writes. They are sent back to the gate exactly as pulled.
+- **Unknown:** not decoded. Blank and unknown bytes before the directory that hold anything but their blank value are
+  stored as raw bytes (`gate_working.extra`, DB.md) and written back, so they are sent exactly as pulled.
 - **Samples:** the values in this gate's pull of 2026-11-13.
 
 ## Encodings

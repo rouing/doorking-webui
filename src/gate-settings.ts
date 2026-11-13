@@ -20,6 +20,13 @@ export interface GateSetting {
 const allFF = (b: Uint8Array): boolean => b.every((x) => x === 0xff);
 const toBcd = (n: number): number => ((Math.floor(n / 10) << 4) | (n % 10));
 const ft = (t: FieldType): FieldType => t;
+// The bytes of a "? (0x7)" or "? (005da0013491)" value (shown for bytes a type can't name), or null.
+function rawValue(v: string, size: number): Buffer | null {
+  const m = /^\? \((0x)?([0-9a-f]+)\)$/i.exec(v);
+  if (!m) return null;
+  if (m[1]) return size === 1 && m[2].length <= 2 ? Buffer.from([parseInt(m[2], 16)]) : null;
+  return m[2].length === size * 2 ? Buffer.from(m[2], 'hex') : null;
+}
 
 // Field types: size in bytes, decode(bytes) -> string, encode(string) -> Buffer (throws when invalid).
 const TYPES = {
@@ -233,15 +240,28 @@ const TYPES = {
       return Buffer.from([i === 0 ? 0xff : i]);
     },
   }),
-  // Read-only. A flag DoorKing32 writes like a digit: 0x01 = on, 0x0A (digit 0) = off.
+  // Read-only (written back only from the stored value, never edited). The read-only types encode every value
+  // they decode, "? (...)" included, so the files rebuild exactly. A flag DoorKing32 writes like a digit:
+  // 0x01 = on, 0x0A (digit 0) = off.
   digitFlag: (on: string, off: string): FieldType => ({
     size: 1,
     decode: (b) => (b[0] === 0x01 ? on : b[0] === 0x0a ? off : b[0] === 0xff ? '' : `? (0x${b[0].toString(16)})`),
+    encode: (v) => {
+      const b = v === on ? Buffer.from([0x01]) : v === off ? Buffer.from([0x0a]) : v === '' ? Buffer.from([0xff]) : rawValue(v, 1);
+      if (!b) throw new Error(`${on}, ${off} or blank`);
+      return b;
+    },
   }),
   // Read-only. One byte naming a value (names[byte]); 0xFF = none.
   named: (names: Record<number, string>): FieldType => ({
     size: 1,
     decode: (b) => (b[0] === 0xff ? '' : names[b[0]] ?? `? (0x${b[0].toString(16)})`),
+    encode: (v) => {
+      const i = Object.entries(names).find(([, n]) => n === v)?.[0];
+      const b = i !== undefined ? Buffer.from([Number(i)]) : v === '' ? Buffer.from([0xff]) : rawValue(v, 1);
+      if (!b) throw new Error(`one of ${Object.values(names).join(', ')}, or blank`);
+      return b;
+    },
   }),
   // Read-only. A Unix time, 4 bytes little-endian, shown as "YYYY-MM-DD HH:MM:SS UTC". All 0xFF = none.
   unixTime: ft({
@@ -252,6 +272,15 @@ const TYPES = {
       if (t < 946684800 || t >= 4102444800) return `? (${b.toString('hex')})`;
       return `${new Date(t * 1000).toISOString().slice(0, 19).replace('T', ' ')} UTC`;
     },
+    encode: (v) => {
+      if (v === '') return Buffer.alloc(4, 0xff);
+      const m = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) UTC$/.exec(v);
+      const t = m ? Date.parse(`${m[1]}T${m[2]}Z`) / 1000 : NaN;
+      const b = Number.isInteger(t) && t >= 946684800 && t < 4102444800 ? Buffer.alloc(4) : rawValue(v, 4);
+      if (!b) throw new Error('a time as YYYY-MM-DD HH:MM:SS UTC, or blank');
+      if (m) b.writeUInt32LE(t, 0);
+      return b;
+    },
   }),
   // Read-only. The system memory (number of directory codes), from the two 24-bit big-endian end addresses
   // DoorKing32 writes: the directory area's (0xF80 + memory * 20), then phone.bin's (0x10D80 + memory * 10).
@@ -261,6 +290,18 @@ const TYPES = {
       if (allFF(b)) return '';
       const n = (b.readUIntBE(0, 3) - 0xf80) / 20;
       return Number.isInteger(n) && n > 0 && b.readUIntBE(3, 3) === 0x10d80 + n * 10 ? String(n) : `? (${b.toString('hex')})`;
+    },
+    encode: (v) => {
+      if (v === '') return Buffer.alloc(6, 0xff);
+      if (/^\d{1,5}$/.test(v) && +v > 0) {
+        const b = Buffer.alloc(6);
+        b.writeUIntBE(0xf80 + +v * 20, 0, 3);
+        b.writeUIntBE(0x10d80 + +v * 10, 3, 3);
+        return b;
+      }
+      const b = rawValue(v, 6);
+      if (!b) throw new Error('a memory size such as 3000, or blank');
+      return b;
     },
   }),
   // Anti-pass back relay row: up to 10 relay numbers (0-18), sorted, 0xFF = empty. Value is a comma-separated list.
@@ -431,6 +472,9 @@ const FIELDS: GateSettingField[] = [
   { key: 'apbScheduleTime', group: 'Anti-Pass Back', name: 'Scheduled Re-Sync All time', offset: 0xa3f, type: TYPES.holdTime, editable: true },
 ];
 const BY_KEY = new Map(FIELDS.map((f) => [f.key, f]));
+// Fields the board files are built from: every setting with an encoder except the master code (kept out of the
+// values tables; see gate-state.ts). Users may change only the editable ones.
+export const WRITTEN_FIELDS = FIELDS.filter((f) => f.type.encode && !f.secret);
 const MIN_SIZE = Math.max(...FIELDS.map((f) => f.offset + f.type.size));
 
 function checkSize(buf: Buffer): void {

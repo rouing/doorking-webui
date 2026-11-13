@@ -338,20 +338,23 @@ serials, so `logs/` is in `.gitignore`.
 gate ──pull──> gate_files 'pulled' ──Reset/refresh──> 'base' (what the gate holds)
                    │                     └──decode──> working copy as values: gate_residents, gate_cards,
                    │                                  gate_settings, gate_working (edited by every page)
-                   └──round-trip check──> gate_state
+                   └──round-trip and rebuild checks──> gate_state
 base + values ──build──> files ──send──> gate ──verify pull──> base := what was sent when they match
 ```
 - The pulled board files are kept in the database table `gate_files` (encrypted: `names.bin` holds the master
   code): the latest pull and the base copy (what the gate holds).
 - The **working copy is values**: `gate_residents`, `gate_cards`, `gate_settings` and `gate_working` (the text the
   app shows; the master code left out). Its board files are built from the base copy plus these values whenever
-  they're needed (to show, compare or send); bytes nothing decodes come from the base copy. A file's change map
+  they're needed (to show, compare or send). Bytes nothing decodes are stored too when they aren't blank
+  (`gate_working.extra`), so only the master code (kept in `managed_gates`) comes from the base copy. A file's change map
   (1 byte per 128-byte block: 1 = changed, the `.map` a send uploads) compares the built file with the base.
 - An edit runs on the built files as before, then is stored as values, but only if building from those values
   gives the same files byte for byte; otherwise it's refused and nothing is saved.
 - After each residents pull (and each send's check pull) the **round-trip check** writes the pull's values back over
   a copy whose decoded bytes were overwritten first; it must come out byte for byte the same. The result is in
-  `gate_state` and the job log; a gate whose base fails it is locked for editing. Details in [DB.md](docs/DB.md).
+  `gate_state` and the job log; a gate whose base fails it is locked for editing. The **rebuild check** then builds
+  the files from blank ones with the values alone (and the master code from `managed_gates`) and compares them with
+  the pull, so nothing is known only from a stored file; a difference is recorded and logged. Details in [DB.md](docs/DB.md).
 - The gate's `.bin` memory images are the source of truth. The desktop app's `.DAT` files are not used.
 - Every edit (residents, settings, area codes, digits) changes only the **working copy**. Nothing reaches the
   gate until **Send**.

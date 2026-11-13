@@ -54,3 +54,6 @@ web/dist/
 Thumbs.db
 .vscode/
 .idea/
+
+# Serena (MCP) project settings, code index and memories: local only
+.serena/

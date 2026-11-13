@@ -389,6 +389,13 @@ async function tidyGateSnapshots(phone: string, dir: string, inRun = false): Pro
       summary: `Deleted camera snapshots older than ${keep} days (${r.files} pictures and videos, ${r.minutes} minutes, ${mb(r.bytes)})` });
     DEBUG.write('camera', `Gate ${phone}: deleted ${r.minutes} snapshot minutes older than ${keep} days (${r.files} files, ${mb(r.bytes)})`);
   }
+  const tx = (await gateData(phone)).transactions;
+  const n = await dk.removeNoFootageSnapshots(STORE, phone, dir, tx ? tx.rows : []);
+  if (n.minutes) {
+    await dk.addEvent(STORE, phone, { user: 'app', action: 'camera',
+      summary: `Deleted camera footage of ${n.minutes} minutes with only gate data transfers, hold-open events or other gate commands (${n.files} pictures and videos, ${mb(n.bytes)})` });
+    DEBUG.write('camera', `Gate ${phone}: deleted the footage of ${n.minutes} no-footage minutes (${n.files} files, ${mb(n.bytes)})`);
+  }
   if (r.leftovers) DEBUG.write('camera', `Gate ${phone}: deleted ${r.leftovers} leftover video pieces (${mb(r.leftoverBytes)})`);
   if (r.missing) DEBUG.write('camera', `Gate ${phone}: ${r.missing} snapshot log entries marked removed (their files are no longer on disk)`);
 }
@@ -1647,6 +1654,8 @@ const ROUTES = [
     const minute = body && body.minute ? String(body.minute) : undefined;
     if (minute) {
       if (dk.minuteStart(minute) === null) return [400, { error: 'Not a transaction minute' }];
+      const tx = (await gateData(g.phoneNumber)).transactions;
+      if (dk.noFootageMinute(tx ? tx.rows : [], minute)) return [400, { error: dk.NO_FOOTAGE_MSG }];
       const cur = snapRuns.get(g.phoneNumber);
       if (cur && cur.state === 'running') return [409, { error: 'Wait for the snapshot run to finish, or stop it' }];
     }

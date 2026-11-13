@@ -53,6 +53,7 @@ function SnapBar({ minute, snaps }: { minute: string; snaps: Snaps }) {
 // The Camera cell of a transaction: each channel's first saved frame, a progress bar while the run fetches its
 // minute, or a button that gets that minute's pictures (or video) only.
 export function SnapCell({ t, snaps, onOpen }: { t: TransactionRow; snaps: Snaps; onOpen: (t: TransactionRow) => void }) {
+  if (!t.camera) return <Text size="1" color="gray" title="Gate data transfers, hold-open events and other gate commands don't get camera footage">—</Text>;
   const s = snaps.snapshots[t.minute];
   const bar = snaps.byMinute[t.minute] ? <SnapBar minute={t.minute} snaps={snaps} /> : null;
   if (s && s.status === 'removed') return bar || <Text size="1" color="gray" title={s.error || ''}>Removed</Text>;

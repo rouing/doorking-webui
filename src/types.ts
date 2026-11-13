@@ -62,6 +62,7 @@ export interface TransactionRow {
   relay: string;
   apb: string;
   directoryCode: string;
+  camera: boolean; // camera footage can apply (never for gate data transfers, hold-open events or other gate commands)
   raw: string;
 }
 

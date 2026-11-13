@@ -78,7 +78,7 @@ export const HELP: Record<string, string> = {
   cameraMode: 'Save pictures (quick and small) or a 2-minute video of each visit (slow to fetch and large).',
   cameraFrames: 'How many pictures to take of the minute of each visit, evenly spaced.',
   cameraFramesAfter: 'Extra pictures from the minute after the visit, for example to see the car drive through.',
-  cameraEvents: 'Fetch pictures only for visits that were let in or refused, or for every event.',
+  cameraEvents: 'Fetch pictures only for visits that were let in or refused, or for every event. Gate events (data transfers, hold-open times, hold/release commands) never get pictures.',
   cameraLookBack: 'Only visits this many hours old or newer get pictures. Recorders keep footage for a limited number of days.',
   cameraKeep: 'How long saved pictures and videos stay on this computer. Older ones are deleted automatically. Forever keeps everything.',
 };

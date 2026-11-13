@@ -538,6 +538,10 @@ test('transactions take names from the working copy values: directory code, entr
   const tx = loadData(rcv.mtime, values, null, history).transactions;
   assert.deepStrictEqual(tx.rows.map((r) => [r.number, r.name, r.directoryCode]).reverse(),
     [['108', 'Lee, K', '108'], ['4821', 'Diaz, R', '201'], ['12345', '', '305'], ['04369', 'Unknown', '']]);
+  assert.ok(tx.rows.every((r) => r.camera));
+  const system = dk.orderRcvOut(Buffer.from('1112a35316000000ffff' + '1112e3530b000000ffff' + '1112e3530c000000ffff', 'hex'), rcv.mtime);
+  assert.deepStrictEqual(loadData(rcv.mtime, values, null, system).transactions.rows.map((r) => [r.eventType, r.camera]).reverse(),
+    [['RS232', false], ['Hold Begin', false], ['Hold End', false]]);
   assert.strictEqual(tx.updated, rcv.mtime);
   assert.strictEqual(loadData(null, values).transactions, null); // never pulled
   assert.deepStrictEqual(loadData(rcv.mtime, values, null, []).transactions.rows, []); // pulled, no events
@@ -1201,6 +1205,16 @@ test('cameras: snapshot times, pending minutes, masking and file names', withSto
   ];
   assert.deepStrictEqual(dk.pendingMinutes(cfg, rows, {}, now).map((p) => p.minute), ['20261019-0956', '20261019-0954']);
   assert.strictEqual(dk.pendingMinutes({ ...cfg, events: 'all' }, rows, {}, now).length, 3);
+  // RS232 transfers and hold-open events never get footage, even with events 'all'; a minute shared with a visit does.
+  const system = [{ ts: ts - 180000, eventType: 'RS232', access: '' }, { ts: ts - 240000, eventType: 'Hold Begin', access: 'Hold' },
+    { ts: ts - 300000, eventType: 'Hold End', access: 'Rels' }, { ts: ts - 300000, eventType: 'Directory', access: 'Admit' }];
+  assert.deepStrictEqual(dk.pendingMinutes({ ...cfg, events: 'all' }, system, {}, now).map((p) => p.minute), ['20261019-0951']);
+  assert.deepStrictEqual(['20261019-0953', '20261019-0952', '20261019-0951', '20261019-0900'].map((m) => dk.noFootageMinute(system, m)),
+    [true, true, false, false]);
+  // Also modem transfers, anti-pass back maintenance and System relay commands, but not a momentary open (System Admit).
+  assert.deepStrictEqual([['Modem-to-Modem', ''], ['Modem', ''], ['APB Re-Sync', ''], ['APB Counter', ''], ['System', 'Hold'],
+    ['System', 'H/U'], ['System', '1 Hour'], ['System', 'Admit'], ['Open Request', 'Admit'], ['Cards', 'Deny']]
+    .map(([eventType, access]) => dk.footageApplies({ eventType, access })), [false, false, false, false, false, false, false, true, true, true]);
   // With frames after the minute, a minute waits one more minute.
   assert.strictEqual(dk.pendingMinutes(cfg, [{ ts: now - 120000, access: 'Admit' }], {}, now).length, 1);
   assert.strictEqual(dk.pendingMinutes({ ...cfg, framesAfter: 1 }, [{ ts: now - 120000, access: 'Admit' }], {}, now).length, 0);
@@ -1441,6 +1455,18 @@ test('cameras: runSnapshots grabs each channel and frame with the clock offset',
     '/cam/playback?channel=1&starttime=2026_10_19_09_31_05', '/cam/playback?channel=1&starttime=2026_10_19_09_31_35']);
   assert.match((await dk.runSnapshots(store, runner, '5550100', dir, [], { now: ts + 600000, minute: '20261019-1005' })).error, /not be recorded yet/);
   await assert.rejects(dk.runSnapshots(store, runner, '5550100', dir, [], { minute: 'x' }), (e) => e.status === 400);
+  await assert.rejects(dk.runSnapshots(store, runner, '5550100', dir, [{ ts: new Date(2026, 9, 19, 9, 31).getTime(), eventType: 'RS232' }],
+    { now: ts + 600000, minute: '20261019-0931' }), (e) => e.status === 400 && /data transfers/.test(e.message));
+  // Saved footage of a minute whose transactions all never get footage is deleted and marked removed.
+  assert.ok(fs.readdirSync(path.join(dir, 'snapshots', '20261019-0930')).length);
+  const at930 = new Date(2026, 9, 19, 9, 30).getTime();
+  const kept = await dk.removeNoFootageSnapshots(store, '5550100', dir, [{ ts: at930, eventType: 'RS232' }, { ts: at930, eventType: 'Directory', access: 'Admit' }]);
+  assert.strictEqual(kept.minutes, 0); // a visit in the same minute keeps it
+  const gone = await dk.removeNoFootageSnapshots(store, '5550100', dir, [{ ts: at930, eventType: 'RS232' }, { ts: at930, eventType: 'Hold End', access: 'Rels' }]);
+  assert.deepStrictEqual([gone.minutes, gone.files > 0], [1, true]);
+  assert.strictEqual(fs.existsSync(path.join(dir, 'snapshots', '20261019-0930')), false);
+  const removed = (await dk.listSnapshots(store, '5550100'))['20261019-0930'];
+  assert.deepStrictEqual([removed.status, removed.files], ['removed', []]);
 
   // Video mode: one 2-minute video per channel, recorded raw then finished into .mp4 + first-frame picture.
   await dk.saveCameraSettings(store, '5550100', 'u1', { ...CAM, mode: 'video', clockOffset: 5 });

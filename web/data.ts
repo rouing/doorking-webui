@@ -1,6 +1,6 @@
 import { decodeRcvEvent, residentRows, type RcvRecord, type ResidentsData } from '../src/board-files.ts';
 import { DEFAULT_DEVICE_ASSOCIATION, deviceNameFor } from '../src/prefs.ts';
-import { minuteKey } from '../src/cameras.ts';
+import { footageApplies, minuteKey } from '../src/cameras.ts';
 import type { DeviceRange, TransactionRow } from '../src/types.ts';
 import type { WorkingState } from '../src/gate-state.ts';
 
@@ -58,6 +58,7 @@ function transactions(pulledAt: Date | null, values: WorkingState | null,
         relay: ev.relay,
         apb: ev.apb,
         directoryCode: who ? who.directoryCode : '',
+        camera: footageApplies(ev),
         raw: t.raw,
       };
     });

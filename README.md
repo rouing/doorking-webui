@@ -218,7 +218,7 @@ the database and never sent back to the browser):
 | Frames per transaction | pictures per minute in snapshot mode: 1, 2, 3 (default), 4 or 6, evenly spaced |
 | Frames after the minute | 0 (default) to 6 more pictures from the following minute |
 | Video tries | how many times a short video is downloaded again (1-5, default 2) |
-| Transactions | **Admitted and denied entries** (default) or **All** |
+| Transactions | **Admitted and denied entries** (default) or **All**; gate data transfers (RS232, modem), hold-open events (Hold Begin / Hold End), anti-pass back maintenance (Re-Sync, Counter) and System relay commands other than a momentary open (System Admit) never get footage |
 | Look back (hours) | only transactions this recent get footage (default 24, up to 720), since recorders keep only so many days |
 | Keep pictures | 15, 30, 60 or 90 days, or Forever (default): older minutes are deleted (see Clean-up) |
 | Save snapshots after transaction pulls | on/off for the automatic runs |
@@ -284,6 +284,9 @@ camera settings is recorded in History (never the password).
 - A transaction with no snapshots has a **Get pictures** button (**Get video** in video mode) in the Camera
   column. It runs a snapshot run for that transaction's minute only, whatever its transaction type, age or
   earlier tries (refused while a run is going; a minute less than about 2½ minutes old is not fetched yet).
+  Transactions that never get footage (see the Transactions setting above) have no button, and a minute with only
+  those is refused (`footageApplies`, `noFootageMinute` in `src/cameras.ts`). Footage already saved for such a minute
+  is deleted by the clean-up (`removeNoFootageSnapshots`, logged in History).
 
 ### Live view
 - The **camera button** at the top right of the page (shown when camera settings are saved) opens the **View

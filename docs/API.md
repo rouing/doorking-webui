@@ -213,7 +213,7 @@ listed in `src/gate-settings.ts`; [`BITMAP.md`](BITMAP.md) lists each key's addr
 | POST | `/cameras/test` | gate-admin | `{}` | a live picture per channel: `{ channels: [{ channel, name, file?, error? }] }` |
 | GET | `/cameras/live/{channel}` | gate | | live MJPEG stream for an `<img>`; `?quality=high` for the main stream; 502 when no picture comes |
 | GET | `/snapshots` | gate | | `{ snapshots: { "<YYYYMMDD-HHMM>": { status (done, partial, failed, removed), files, error, attempts, at, … } }, run }`; match a transaction's `minute` |
-| POST | `/snapshots/run` | gate | `{}` or `{ minute }` | 202, fetches pictures for pending transactions (or only that minute; 409 during a run) |
+| POST | `/snapshots/run` | gate | `{}` or `{ minute }` | 202, fetches pictures for pending transactions (or only that minute; 409 during a run; 400 when every transaction at that minute is one that never gets footage: gate data transfers (RS232, modem), hold-open events (Hold Begin / Hold End), anti-pass back maintenance (Re-Sync, Counter) and System relay commands other than a momentary open (System Admit)) |
 | POST | `/snapshots/stop` | gate | `{}` | stops the running snapshot run: `{ stopped }` |
 | DELETE | `/snapshots` | gate-admin | | deletes every saved picture and the snapshot log: `{ minutes, files }` (409 during a run) |
 | GET | `/snapshots/{minute}/{file}` | gate | | the JPEG, or the `.mp4` (supports `Range`); `{minute}` may be `live` |

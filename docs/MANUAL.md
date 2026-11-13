@@ -353,6 +353,9 @@ same ones as in the DMSS or SmartPSS app), and the camera channels to use. Click
   page, or by a schedule. **Stop snapshots** stops; the rest is fetched next time.
 - The **Camera** column shows a picture of each visit; click it to see all pictures or the video. The ↻ button on a
   picture fetches it again.
+- Gate events never get pictures: data transfers (**RS232**, **Modem**), the hold-open schedule (**Hold Begin** /
+  **Hold End**), anti-pass back upkeep and the gate's hold/release commands. Their Camera column shows a dash. A
+  momentary open by phone tone (**System**, **Admit**) still gets pictures, since someone was let in.
 - The **camera button** at the top right of the page shows the cameras live.
 - If the pictures are from the wrong moment, the recorder's clock differs from the gate's: change **Clock offset**.
 - **Keep pictures** sets how long pictures and videos stay: 15, 30, 60 or 90 days, or **Forever**. Older ones are

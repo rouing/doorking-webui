@@ -1946,7 +1946,7 @@
         ],
         "summary": "Fetch pictures",
         "x-role": "readonly",
-        "description": "For pending transactions, or only `minute`.\n\n**Read-only or admin key.**",
+        "description": "For pending transactions, or only `minute`. Never for gate data transfers (RS232, modem), hold-open events (Hold Begin / Hold End), anti-pass back maintenance (Re-Sync, Counter) and System relay commands other than a momentary open (System Admit): 400 for a minute with only those.\n\n**Read-only or admin key.**",
         "parameters": [
           {
             "$ref": "#/components/parameters/phone"
@@ -2935,6 +2935,10 @@
           },
           "directoryCode": {
             "type": "string"
+          },
+          "camera": {
+            "type": "boolean",
+            "description": "camera footage can apply: false for gate data transfers (RS232, modem), hold-open events (Hold Begin / Hold End), anti-pass back maintenance (Re-Sync, Counter) and System relay commands other than a momentary open (System Admit)"
           },
           "raw": {
             "type": "string"

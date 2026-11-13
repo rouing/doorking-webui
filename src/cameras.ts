@@ -24,7 +24,7 @@ type CodedError = Error & { code?: string; status?: number };
 type Shifts = Record<string, number>;
 type Log = (message: string) => void;
 // Transaction rows as read by transactions.ts (only the fields used here).
-interface TxRow { ts: number; access?: string }
+interface TxRow { ts: number; access?: string; eventType?: string }
 interface PendingMinute { minute: string; ts: number }
 interface FrameJob { channel: number; off: number; file: string; video?: boolean }
 
@@ -152,7 +152,22 @@ const afterMs = (cfg: CameraConfig): number => (cfg.mode === 'video' || cfg.fram
 // A video's first-frame picture: ch<N>.mp4 -> ch<N>.jpg.
 export const posterFile = (file: string): string => String(file).replace(/\.mp4$/, '.jpg');
 
-const wantsSnapshot = (cfg: CameraConfig, t: TxRow): boolean => cfg.events === 'all' || t.access === 'Admit' || t.access === 'Deny';
+// Transactions that never get camera footage: the gate's data transfers (RS232, modem), its hold-open schedule
+// (Hold Begin / Hold End), anti-pass back maintenance (Re-Sync, Counter) and the System relay commands (hold, release,
+// 1 hour, H/U) except a momentary open (System Admit, someone let in). They aren't fetched, even with events 'all',
+// nor for one minute on request.
+export const NO_FOOTAGE_EVENTS = new Set(['RS232', 'Modem-to-Modem', 'Modem', 'Hold Begin', 'Hold End', 'APB Re-Sync', 'APB Counter']);
+export const NO_FOOTAGE_MSG = 'Gate data transfers, hold-open events and other gate commands don\'t get camera footage';
+export const footageApplies = (t: { eventType?: string; access?: string }): boolean => !NO_FOOTAGE_EVENTS.has(t.eventType || '')
+  && !(t.eventType === 'System' && t.access !== 'Admit');
+// A minute whose transactions (rows) are all ones that never get footage (a minute with none isn't).
+export function noFootageMinute(rows: TxRow[], minute: string): boolean {
+  const at = rows.filter((t) => minuteKey(t.ts) === minute);
+  return at.length > 0 && !at.some(footageApplies);
+}
+
+const wantsSnapshot = (cfg: CameraConfig, t: TxRow): boolean => footageApplies(t)
+  && (cfg.events === 'all' || t.access === 'Admit' || t.access === 'Deny');
 
 interface SnapshotRow {
   phone: string; minute: string; status: string; files: string[]; error: string | null; attempts: number;
@@ -242,6 +257,29 @@ export async function tidySnapshots(store: Store, phone: unknown, dir: string, k
       await run(store, 'UPDATE snapshots SET files = $3, shifts = $4, short = $5 WHERE phone = $1 AND minute = $2',
         [p, r.minute, JSON.stringify(left), JSON.stringify(shiftsOf(left, r.shifts || {})), JSON.stringify(shiftsOf(left, r.short || {}))]);
     }
+  }
+  return out;
+}
+
+// Deletes the saved footage of minutes whose transactions (rows) all never get footage (noFootageMinute) and marks
+// them removed (error = why), so they are neither shown nor fetched again. Call only while no snapshot run or refresh
+// uses the folder. Returns { minutes, files, bytes }.
+export async function removeNoFootageSnapshots(store: Store, phone: unknown, dir: string, rows: TxRow[]):
+  Promise<{ minutes: number; files: number; bytes: number }> {
+  const p = phoneDigits(phone);
+  const out = { minutes: 0, files: 0, bytes: 0 };
+  for (const r of await all<SnapshotRow>(store, "SELECT * FROM snapshots WHERE phone = $1 AND status <> 'removed'", [p])) {
+    if (!noFootageMinute(rows, r.minute)) continue;
+    const sub = path.join(dir, 'snapshots', r.minute);
+    if (fs.existsSync(sub)) {
+      const m = mediaIn(sub);
+      out.files += m.files;
+      out.bytes += m.bytes;
+      fs.rmSync(sub, { recursive: true, force: true });
+    }
+    await run(store, `UPDATE snapshots SET status = 'removed', files = '[]', shifts = '{}', short = '{}', error = $3
+      WHERE phone = $1 AND minute = $2`, [p, r.minute, NO_FOOTAGE_MSG]);
+    out.minutes++;
   }
   return out;
 }
@@ -965,6 +1003,7 @@ export async function runSnapshots(store: Store, runner: CameraRunner, phone: un
   if (minute) {
     const start = minuteStart(minute);
     if (start === null) throw bad('Not a transaction minute');
+    if (noFootageMinute(rows, minute)) throw bad(NO_FOOTAGE_MSG);
     tooRecent = start > now - SETTLE_MS - afterMs(cfg);
     pending = tooRecent ? [] : [{ minute, ts: start }];
   } else pending = pendingMinutes(cfg, rows, known, now);

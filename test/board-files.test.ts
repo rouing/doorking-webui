@@ -222,6 +222,27 @@ test('Outside line digit at 0x1D: 9 -> 09, 0 -> 00, blank -> FF (matches DoorKin
   assert.throws(() => one('*'), /a digit 0-9/);
 });
 
+test('Read-only System fields from the decompiled DoorKing32: dial type, multiple systems, memory, chips, download stamps', () => {
+  const names = Buffer.alloc(64000, 0xff);
+  const get = () => dk.gateSettingsJson(names);
+  const keys = ['dialType', 'multipleSystems', 'systemMemory', 'memoryChips', 'downloadStamp1', 'downloadStamp2'];
+  assert.deepStrictEqual(keys.map((k) => get()[k]), ['', '', '', '', '', '']); // all 0xFF: nothing recorded
+  names[0x0f] = 0x0a; names[0x06] = 0x01; names[0xfb] = 0x05;
+  Buffer.from('00f9e0' + '0182b0', 'hex').copy(names, 0xbf); // memory 3000: 0xF80 + 3000 * 20, 0x10D80 + 3000 * 10
+  Buffer.from('70bfec6a' + '75bfec6a', 'hex').copy(names, 0x15);
+  assert.deepStrictEqual(keys.map((k) => get()[k]),
+    ['Tone', 'Yes', '3000', 'Anti-pass back', '2026-11-05 17:40:00 UTC', '2026-11-05 17:40:05 UTC']);
+  names[0x0f] = 0x01; names[0x06] = 0x0a; names[0xfb] = 0x00;
+  Buffer.from('005da0' + '013490', 'hex').copy(names, 0xbf); // memory 1000
+  assert.deepStrictEqual(['dialType', 'multipleSystems', 'systemMemory', 'memoryChips'].map((k) => get()[k]), ['Rotary', 'No', '1000', 'Standard']);
+  // Values that don't fit are shown raw rather than guessed.
+  names[0x0f] = 0x07; names[0xfb] = 0x02; names[0xc4] = 0x91;
+  assert.deepStrictEqual(['dialType', 'memoryChips', 'systemMemory'].map((k) => get()[k]), ['? (0x7)', '? (0x2)', '? (005da0013491)']);
+  Buffer.from('00000000', 'hex').copy(names, 0x15);
+  assert.strictEqual(get().downloadStamp1, '? (00000000)');
+  for (const k of keys) assert.throws(() => dk.applyGateSettings(names, { [k]: '' }), /read-only/);
+});
+
 test('Talk time at 0x10 is seconds (minutes * 60 + seconds); facility codes are 0-255', () => {
   const base = Buffer.alloc(64000, 0xff);
   const one = (changes) => dk.applyGateSettings(base, changes).buffer;

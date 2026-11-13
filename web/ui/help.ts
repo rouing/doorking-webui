@@ -26,6 +26,12 @@ export const HELP: Record<string, string> = {
   masterCode: "The gate's master code, used to connect. Shown hidden; it can't be changed here.",
   talkTime: 'The longest a call from the entry panel to a resident can last, as minutes:seconds (up to 4:14).',
   outsideLineDigit: 'A digit the gate dials before every phone number to reach an outside line (often 9). Leave blank if your phone line needs none.',
+  dialType: 'How the gate dials out: Tone for almost every phone line, Rotary only on an old rotary line. Read from the gate; it can\'t be changed here.',
+  multipleSystems: 'Yes when more than one entry system shares this resident list. Read from the gate; it can\'t be changed here.',
+  systemMemory: 'How many residents the gate\'s memory holds, as the gate itself records it. "System memory" under Gate configuration must be the same.',
+  memoryChips: 'The kind of memory chips the gate reports: Standard, MemPLUS, or Anti-pass back. Anti-pass back means "Anti-passback" under Gate configuration must be Y.',
+  downloadStamp1: 'When data was last sent to the gate by another program (for example DoorKing\'s own software), as that program recorded it. This app keeps it as it is.',
+  downloadStamp2: 'A second time written with the stamp above (a few seconds later). This app keeps it as it is.',
 
   // Relays
   liveRelays: 'These buttons switch the real relays right now, through DKS Cloud. Green = held open, red = released. A held-open gate stays open until you release it.',

@@ -292,6 +292,8 @@ For connecting other systems or scripts (for example home automation) to this ga
 These settings tell DKS Cloud what kind of gate it is talking to, so they **must match how the gate is set up**:
 site name, system memory, area codes, model, anti-passback and interface 1816/1820. If one is wrong, pulls fail with a
 message such as "Anti-Passback Mismatch"; fix the setting it names. Your installer can tell you the right values.
+If the gate's last pull records a different system memory, or anti-pass back memory chips while Anti-passback is N
+(or the other way round), a red note under the settings says so.
 - **Tracker**: tick only if Tracker expansion boards are fitted (adds relays 3–18 on the Relays page).
 - **Show on the page**: untick Floors or Elevators if your building has none, to hide those columns and pages.
 - **Num of digits in dir code**: how many digits directory codes have (1–4). **Making it smaller deletes all
@@ -300,6 +302,14 @@ message such as "Anti-Passback Mismatch"; fix the setting it names. Your install
 ### Gate settings
 Talk time (how long a call to a resident can last, up to 4 minutes 14 seconds) and the digit the gate dials first to
 get an outside line, if your phone line needs one. The master code is shown but can't be changed here.
+
+These are read from the gate and shown for information; they can't be changed here:
+- **Dial type**: Tone (almost every line) or Rotary.
+- **Multiple systems**: Yes when more than one entry system shares the resident list.
+- **System memory**: how many residents the gate's memory holds. It must match System memory under Gate configuration.
+- **Memory chips**: Standard, MemPLUS or Anti-pass back, as the gate reports them.
+- **Last download stamp 1 and 2**: when another program (for example DoorKing's own software) last sent data to the
+  gate. Sending from this app keeps them as they are.
 
 ### Device association
 Names for ranges of card numbers, for example "Residents 00001–00500". The name appears in the Transactions list for

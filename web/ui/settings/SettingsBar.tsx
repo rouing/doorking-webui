@@ -52,7 +52,8 @@ export function SettingInput({ gs, s, invalid }: { gs: GateSettings; s: GateSett
   const max = s.maxLength;
   const ref = useRef<HTMLInputElement>(null);
   const fit = useFitWidth(ref, max);
-  const width = fit ? `${fit}px` : max ? `calc(${max}ch + var(--space-4))` : '9ch';
+  const width = fit ? `${fit}px` : max ? `calc(${max}ch + var(--space-4))`
+    : s.editable ? '9ch' : `calc(${Math.max(9, gs.current(s).length)}ch + var(--space-4))`;
   return (
     <TextField.Root ref={ref} size="1" value={gs.current(s)} readOnly={!s.editable}
       title={invalid ? `${invalid}\n${settingTitle(gs, s)}` : settingTitle(gs, s)} color={invalid ? 'red' : undefined}

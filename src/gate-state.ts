@@ -303,6 +303,17 @@ export async function checkPull(store: Store, phone: unknown, pulled: BoardBuffe
   return check;
 }
 
+const FIELD_BY_KEY = new Map(GATE_SETTING_FIELDS.map((f) => [f.key, f]));
+const settingRows = (settings: Record<string, string>): string => JSON.stringify(Object.entries(settings)
+  .map(([key, value]) => ({ key, grp: FIELD_BY_KEY.get(key)!.group, name: FIELD_BY_KEY.get(key)!.name, value })));
+
+// Adds setting rows the working copy doesn't have yet; existing rows stay. Returns how many were added.
+export async function addSettingRows(store: Store, phone: unknown, settings: Record<string, string>): Promise<number> {
+  return run(store, `INSERT INTO gate_settings (phone, key, grp, name, value)
+    SELECT $1, key, grp, name, value FROM jsonb_to_recordset($2) AS t(key text, grp text, name text, value text)
+    ON CONFLICT (phone, key) DO NOTHING`, [phoneDigits(phone), settingRows(settings)]);
+}
+
 // Saves the working copy's values (replacing the gate's earlier rows). baseOk: the base passed the round-trip check.
 export async function saveWorkingState(store: Store, phone: unknown, w: WorkingState, { baseOk, savedAt = new Date() }:
   { baseOk: boolean; savedAt?: Date }): Promise<void> {
@@ -325,10 +336,9 @@ export async function saveWorkingState(store: Store, phone: unknown, w: WorkingS
       SELECT $1, slot, card_number, directory_code, raw_code
       FROM jsonb_to_recordset($2) AS t(slot int, card_number text, directory_code text, raw_code text)`,
     [p, JSON.stringify(w.cards.map((c) => ({ slot: c.slot, card_number: c.cardNumber, directory_code: c.directoryCode, raw_code: c.rawCode ?? null })))]);
-    const names = new Map(GATE_SETTING_FIELDS.map((f) => [f.key, f]));
     await run(tx, `INSERT INTO gate_settings (phone, key, grp, name, value)
       SELECT $1, key, grp, name, value FROM jsonb_to_recordset($2) AS t(key text, grp text, name text, value text)`,
-    [p, JSON.stringify(Object.entries(w.settings).map(([key, value]) => ({ key, grp: names.get(key)!.group, name: names.get(key)!.name, value })))]);
+    [p, settingRows(w.settings)]);
     await run(tx, `INSERT INTO gate_working (phone, dir_digits, area_code_mode, area_codes, middle_pointer, base_ok, saved_at)
       VALUES ($1, $2, $3, $4, $5, $6, $7)
       ON CONFLICT (phone) DO UPDATE SET dir_digits = excluded.dir_digits, area_code_mode = excluded.area_code_mode,

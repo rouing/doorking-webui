@@ -2715,7 +2715,8 @@
             "description": "as last pulled"
           },
           "editable": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "false = read-only: the master code and the settings decoded but not yet confirmed for writing (dialType, multipleSystems, systemMemory, memoryChips, downloadStamp1, downloadStamp2)"
           },
           "secret": {
             "type": "boolean",

@@ -354,6 +354,7 @@ export function SystemSettings({ phone, gapi, prefs, defaults, list, cameras, us
   const shared = (
     <>
       <GateConfig key={`${JSON.stringify(prefs.gateConfig)}-${list?.dirDigits}`} prefs={prefs} defaults={defaults} list={list} gapi={gapi}
+        gate={{ memory: gs.field('systemMemory')?.gate, chips: gs.field('memoryChips')?.gate }}
         onSaved={async () => { onSessionChange(); await reloadAll(); }} />
       <Card>
         <Flex direction="column" gap="3">

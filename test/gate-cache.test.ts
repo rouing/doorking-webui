@@ -294,6 +294,28 @@ test('verifySend reports matching files and the blocks that differ', withPull(as
   assert.deepStrictEqual(result.differentBlocks, { 'names.bin': [6], 'cards.bin': 'size differs' });
 }));
 
+test('addMissingSettings adds rows for settings decoded since the working copy was saved, once', withStore(async (store) => {
+  const gate = syntheticGate();
+  gate.names[0x0f] = 0x0a;
+  gate.names[0xfb] = 0x05;
+  Buffer.from('00f9e0' + '0182b0', 'hex').copy(gate.names, 0xbf);
+  await pullInto(store, gate);
+  await dk.ensureCache(store, PHONE);
+  await setTalkTime(store, '2:30');
+  const NEW = ['dialType', 'multipleSystems', 'systemMemory', 'memoryChips', 'downloadStamp1', 'downloadStamp2'];
+  const rows = async () => Object.fromEntries((await store.db.query('SELECT key, value FROM gate_settings WHERE phone = $1', [PHONE])).rows
+    .map((r) => [r.key, r.value]));
+  const before = await rows();
+  assert.deepStrictEqual(NEW.map((k) => before[k]), ['Tone', '', '3000', 'Anti-pass back', '', '']);
+  await store.db.query('DELETE FROM gate_settings WHERE key = ANY($1)', [NEW]); // as saved before these were decoded
+  assert.deepStrictEqual(await dk.addMissingSettings(store), [PHONE]);
+  assert.deepStrictEqual(await dk.addMissingSettings(store), []);
+  assert.deepStrictEqual(await rows(), before);
+  assert.strictEqual((await rows()).talkTime, '2:30'); // the unsent edit stays
+  const loaded = await dk.loadWorkingState(store, PHONE);
+  assert.strictEqual(dk.diffStates(loaded.state, dk.decodeWorking(await working(store))), null);
+}));
+
 test('importGateFiles and migrateWorkingFiles move the files kept on disk into the database once', withStore(async (store, dir) => {
   const root = path.join(dir, 'DOWNLOADED');
   const g = path.join(root, PHONE);

@@ -233,6 +233,36 @@ const TYPES = {
       return Buffer.from([i === 0 ? 0xff : i]);
     },
   }),
+  // Read-only. A flag DoorKing32 writes like a digit: 0x01 = on, 0x0A (digit 0) = off.
+  digitFlag: (on: string, off: string): FieldType => ({
+    size: 1,
+    decode: (b) => (b[0] === 0x01 ? on : b[0] === 0x0a ? off : b[0] === 0xff ? '' : `? (0x${b[0].toString(16)})`),
+  }),
+  // Read-only. One byte naming a value (names[byte]); 0xFF = none.
+  named: (names: Record<number, string>): FieldType => ({
+    size: 1,
+    decode: (b) => (b[0] === 0xff ? '' : names[b[0]] ?? `? (0x${b[0].toString(16)})`),
+  }),
+  // Read-only. A Unix time, 4 bytes little-endian, shown as "YYYY-MM-DD HH:MM:SS UTC". All 0xFF = none.
+  unixTime: ft({
+    size: 4,
+    decode: (b) => {
+      if (allFF(b)) return '';
+      const t = b.readUInt32LE(0);
+      if (t < 946684800 || t >= 4102444800) return `? (${b.toString('hex')})`;
+      return `${new Date(t * 1000).toISOString().slice(0, 19).replace('T', ' ')} UTC`;
+    },
+  }),
+  // Read-only. The system memory (number of directory codes), from the two 24-bit big-endian end addresses
+  // DoorKing32 writes: the directory area's (0xF80 + memory * 20), then phone.bin's (0x10D80 + memory * 10).
+  memorySize: ft({
+    size: 6,
+    decode: (b) => {
+      if (allFF(b)) return '';
+      const n = (b.readUIntBE(0, 3) - 0xf80) / 20;
+      return Number.isInteger(n) && n > 0 && b.readUIntBE(3, 3) === 0x10d80 + n * 10 ? String(n) : `? (${b.toString('hex')})`;
+    },
+  }),
   // Anti-pass back relay row: up to 10 relay numbers (0-18), sorted, 0xFF = empty. Value is a comma-separated list.
   relayList: ft({
     size: 10,
@@ -298,6 +328,20 @@ const FIELDS: GateSettingField[] = [
   // "Dial _ First, then Dial Phone Number": 0xFF = none, else the digit 0-9 (confirmed with 9, 0 and blank).
   { key: 'outsideLineDigit', group: 'System', name: 'Outside line digit (dialed before the phone number)', offset: 0x1d,
     type: TYPES.digit, editable: true },
+  // From the decompiled DoorKing32 (send builders FUN_004aad40 / FUN_004b0020, settings report FUN_0050e9d0, receive
+  // checks FUN_0045b490), checked against a pull; read-only until confirmed by one-change diffs.
+  { key: 'dialType', group: 'System', name: 'Dial type', offset: 0x0f, type: TYPES.digitFlag('Rotary', 'Tone') },
+  { key: 'multipleSystems', group: 'System', name: 'Multiple systems (sharing the resident database)', offset: 0x06,
+    type: TYPES.digitFlag('Yes', 'No') },
+  { key: 'systemMemory', group: 'System', name: 'System memory', offset: 0xbf, type: TYPES.memorySize },
+  // The board's memory chips; DoorKing32 writes its MemPLUS choice (0/1) here, and on a receive expects 0x05 for an
+  // anti-pass back account, 0x01 for MemPLUS, 0x00 otherwise.
+  { key: 'memoryChips', group: 'System', name: 'Memory chips (reported by the gate)', offset: 0xfb,
+    type: TYPES.named({ 0: 'Standard', 1: 'MemPLUS', 5: 'Anti-pass back' }) },
+  // Written by the program that last sent to the gate; DoorKing32 compares them on a receive and switches to
+  // "Send All Data because another PC has downloaded to this System" when they differ from its own copy.
+  { key: 'downloadStamp1', group: 'System', name: 'Last download stamp 1', offset: 0x15, type: TYPES.unixTime },
+  { key: 'downloadStamp2', group: 'System', name: 'Last download stamp 2', offset: 0x19, type: TYPES.unixTime },
   // Relay strike times (seconds). Confirmed by setting distinct values: relay 0 lives at 0x11 (after talk
   // time 0x10), relays 1 and 2 at 0x04/0x05.
   ...[[0, 0x11], [1, 0x04], [2, 0x05]].map(([r, offset]) => ({

@@ -152,7 +152,7 @@ card numbers are 00001–65407.
 
 | Method | Path | Level | Body | Result |
 |---|---|---|---|---|
-| GET | `/settings` | gate | | `{ fields: [{ key, group, name, offset, size, value, gate, editable, secret, note, maxLength }], pulled, saved, cache }`; secret values are masked |
+| GET | `/settings` | gate | | `{ fields: [{ key, group, name, offset, size, value, gate, editable, secret, note, maxLength }], pulled, saved, cache }`; secret values are masked. Read-only fields (`editable: false`) include `dialType` (`Tone`/`Rotary`), `multipleSystems` (`Yes`/`No`), `systemMemory` (e.g. `3000`), `memoryChips` (`Standard`/`MemPLUS`/`Anti-pass back`) and `downloadStamp1`/`2` (`2026-11-05 17:40:00 UTC`); a value that doesn't fit shows as `? (<hex>)` |
 | PUT | `/settings` | gate-admin | `{ "<field key>": value, … }` | saves editable fields to the working copy: `{ changed, changedBlocks }`; 400 when nothing changed, or when it changes a tone-open digit (`relay{0-2}Tone…`) and two tones of relays 0–2 would share a digit (Tracker command relays are left out) |
 | GET | `/data` | gate | | `{ transactions }`: the transaction history, with names looked up in the working copy's values (`gate_residents`, `gate_cards`) (until 2026-11-12 also `residents`, `holdOpen`, `holidays`, `securityLevels`, `facilityCodes`, `elevator`; use `/residents` and `/settings` for those) |
 | GET | `/working-copy` | gate | | `{ exists, edited, newerPull, files }` |

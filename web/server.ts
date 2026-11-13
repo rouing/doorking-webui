@@ -1868,6 +1868,11 @@ for (const phone of await dk.migrateWorkingFiles(STORE)) {
   console.log(`Gate ${phone}: working copy moved into the values tables`);
   DEBUG.write('server', `Gate ${phone}: working copy moved into the values tables`);
 }
+// Settings decoded since a working copy was saved get their rows.
+for (const phone of await dk.addMissingSettings(STORE)) {
+  console.log(`Gate ${phone}: newly decoded settings added to the values tables`);
+  DEBUG.write('server', `Gate ${phone}: newly decoded settings added to the values tables`);
+}
 if (await dk.userCount(STORE) === 0) {
   SETUP_CODE = crypto.randomBytes(5).toString('hex');
   console.log(`No account exists yet. First-account setup code: ${SETUP_CODE} (enter it on the page to create the first account, or run: node cli.ts create-admin <username>)`);

@@ -725,18 +725,40 @@ byte, not only the one expected.
 - The `BAK\ACCT0001_*` snapshots of DoorKing32's files cited in §3 and §8 (one-change diffs) were deleted on
   2026-11-12; the findings they back are recorded here and in byte-exact tests.
 - `research/DoorKing32.exe.c` / `.h`: decompiled DoorKing32 (Ghidra-style `FUN_xxxxxxxx` names). Useful functions:
-  `FUN_004aad40` (builds `names.bin` for a send, effectively a map of the settings area),
+  `FUN_004aad40` / `FUN_004b0020` (build `names.bin` for a send in 10 / 255 area-code mode, effectively a map of
+  the settings area; `param_1[0x99]` is the file's first byte), `FUN_0050e9d0` (printed settings report: labels
+  for account fields), `FUN_0045b490` (receive checks: master code, download stamp, memory chips),
   `FUN_004f7320` (send resident counts), `FUN_0046a0b0` (`ReceiveTransactionData` wrapper). The
-  transaction event decoder is around line 223450. Mass Enable / cards (2026-10-21): `FUN_0047cfb0` (apply an
+  transaction event decoder is `FUN_0053ebd0` (line ~223220; reads record bytes 0–7 only). Mass Enable / cards (2026-10-21): `FUN_0047cfb0` (apply an
   enabled range), `FUN_004a9660` (loop over enabled numbers 0-65405) → `FUN_004a9210` (unassigned `AB` record),
   `FUN_004a9300` (assigned record), Enable dialog checks around line 92460-92880.
-- `1835-066-K-4-10_V6-2c.pdf`: the DoorKing 1835 manual (79 pages). Extract text with Python `pdfplumber`
-  (installed; `pypdfium2` too), per the PDF skill.
+- `1835-066-K-4-10_V6-2c.pdf`: the DoorKing 1835 manual (79 pages). No PDF library is installed here
+  (checked 2026-11-13); decompressing its content streams with Python's `zlib` and joining the text in `( )` gives
+  searchable text (section 3.1 describes the System Information screen).
 - Deleted on 2026-10-16: `DkWebService.xml` (DKS Cloud WSDL), `export/` (including `ACCOUNT.txt`, the
   `ACCOUNT.DAT` field map), `TRANS002.CSV`, `BAK/` snapshots, and the root copies of the desktop app's
   `*.bin`/`*.DAT`/`*.MAP`/`*.TRA` files. Known `ACCOUNT.DAT` offsets from that map: anti-pass back re-sync all
   devices `0x19EB`, True APB mode `0x19EC` (0 Off, 1 Passive; Active/Trap assumed 2/3), facility counter
   `0x19F7`, IN/OUT relay tables `0x1A02`/`0x1A17` (19 bytes each, IN/OUT order assumed).
+- **Unknown `names.bin` ranges, 2026-11-13:** anchored on offsets pull diffs had confirmed (master code `0x00`,
+  strike times `0x04`/`0x05`/`0x11`, postal/rotary `0x41`/`0x42`), the two send builders write file offsets
+  directly. Results (BITMAP.md), each checked against the 2026-11-13 pull:
+  - **Read-only settings** (`src/gate-settings.ts`, System group): `0x06` Multiple Systems and `0x0F` Dial Type
+    (`01` on/Rotary, `0A` off/Tone; DoorKing32 writes `(flag ? 0xF7 : 0) + 10`); `0x15`/`0x19` two little-endian
+    Unix times, the last-download stamp (receive: "Changed to Send All Data because another PC has downloaded to
+    this System"); `0xBF`–`0xC4` end addresses `0xF80 + memory × 20` and `0x10D80 + memory × 10` (document `+0x180`
+    is the system memory; the gate's `0xF9E0`/`0x182B0` = 3000); `0xFB` memory chips (receive check on block 1, byte
+    `0x7B`: `00` standard, `01` MemPLUS, `05` anti-pass back; the gate holds `05`).
+  - **Blank:** every send ends by filling `0x12`, `0x33`–`0x3F`, `0x43`, `0x9F`–`0xAB`, `0xB8`–`0xBE`, `0xCE`–`0xF6`,
+    `0xFC`–`0xFF`, `0x18D`–`0x18F`, `0x983`–`0x9C2`, `0xA1A`–`0xA28` with `FF`, `0x100`–`0x113`, `0x144`,
+    `0x179`–`0x18C` with spaces, and the gap before the directory (`0xC3F`–`0xF7F` in 255 mode, `0xA41`–`0xBFF` in
+    10 mode) with `FF`. `rcv_out.bin` bytes 8–9 are never read (`FF FF` in every stored record).
+  - **Still unknown:** `0x13`–`0x14` (DoorKing32 writes relay 1's entry code range To there too, the gate holds
+    `FF FF`), `0x37` and `0x43` (`01` on the gate though DoorKing32 writes `FF`: set by the board or other
+    software), `0xC5` (never written). The last download (2026-11-05 17:40 UTC) wasn't from this app, which hasn't
+    sent yet; it also left these `01` bytes and `0xFB` = `05`, which DoorKing32's builders wouldn't write.
+  - The settings existed only as raw bytes in the encrypted base `names.bin` (no `gate_settings` rows) until then;
+    `addMissingSettings` (startup) adds rows for settings decoded after a working copy was saved.
 - **Desktop-app trace leads (unconfirmed):** tracing `FUN_004aad40` put anti-pass back (mode, relays,
   reset counter, re-sync days, scheduled re-sync time) at `names.bin` **`0xA04`–`0xA40`**. That trace
   also guessed holidays at `0x243` and facility codes at `0x9C3`, and pull diffs later proved both wrong
@@ -745,6 +767,8 @@ byte, not only the one expected.
 ---
 
 ## 8. Known limitations / pending work
+- **Read-only settings from the decompile (`dialType`, `multipleSystems`):** confirm with one-change diffs
+  (§7) before making them editable. `0x13`–`0x14`, `0x37`, `0x43` and `0xC5` are still unknown (§7.1).
 - **Gate values as the working copy (phases 1-3 of the 2026-11-12 plan): done** (§4.2). Not yet done: a real send
   built from the values (everything up to the send is tested; the first send should be a small change, then check
   the verify pull).

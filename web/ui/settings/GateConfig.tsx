@@ -18,9 +18,10 @@ export const CONFIG_LABELS: Record<keyof Config, string> = {
 };
 
 // Gate configuration (must match the gate; DKS Cloud uses it to connect), the working copy's area codes and the
-// directory code digits.
-export function GateConfig({ prefs, defaults, list, gapi, onSaved }: {
-  prefs: GatePrefs; defaults: Config; list: ResidentsReply | null; gapi: GateApi; onSaved: () => Promise<void>;
+// directory code digits. gate: what the gate's last pull records (system memory, memory chips), to point out a mismatch.
+export function GateConfig({ prefs, defaults, list, gapi, gate = {}, onSaved }: {
+  prefs: GatePrefs; defaults: Config; list: ResidentsReply | null; gapi: GateApi; gate?: { memory?: string; chips?: string };
+  onSaved: () => Promise<void>;
 }) {
   const [cfg, setCfg] = useState<Record<string, string>>(() => Object.fromEntries(CONFIG_KEYS.map((k) => [k, (prefs.gateConfig && prefs.gateConfig[k]) || defaults[k] || ''])));
   const [info, setInfo] = useState('');
@@ -33,6 +34,15 @@ export function GateConfig({ prefs, defaults, list, gapi, onSaved }: {
   const [dialog, confirm] = useConfirm();
   const areaCodes = list ? list.areaCodes : [];
   const from = list ? list.dirDigits : 3;
+  const saved = (k: keyof Config) => (prefs.gateConfig && prefs.gateConfig[k]) || defaults[k] || '';
+  const mismatches = [
+    ...(gate.memory && /^\d+$/.test(gate.memory) && saved('memorySize') !== gate.memory
+      ? [`The gate records a system memory of ${gate.memory}, but System memory here is ${saved('memorySize')}.`] : []),
+    ...(gate.chips === 'Anti-pass back' && saved('antiPassBack') !== 'Y'
+      ? ['The gate reports anti-pass back memory chips, but Anti-passback here is N.'] : []),
+    ...(gate.chips && gate.chips !== 'Anti-pass back' && !gate.chips.startsWith('?') && saved('antiPassBack') === 'Y'
+      ? [`The gate reports ${gate.chips} memory chips (no anti-pass back), but Anti-passback here is Y.`] : []),
+  ];
 
   async function save() {
     setInfo('Saving…');
@@ -99,6 +109,7 @@ export function GateConfig({ prefs, defaults, list, gapi, onSaved }: {
             </Field>
           ))}
         </Grid>
+        {mismatches.map((m) => <Text key={m} size="2" color="red" role="alert">{m} They must match, or pulls and sends fail.</Text>)}
         <Flex gap="3" align="center"><Button onClick={save}>Save gate configuration</Button><Text size="2" color="gray">{info}</Text></Flex>
         <Flex direction="column" gap="2">
           <Text as="label" size="2"><Flex gap="2" align="center">

@@ -102,3 +102,6 @@ video.snap-video { display: block; width: min(640px, 90vw); aspect-ratio: 16 / 9
   .app { flex-direction: column; }
   .sidebar { width: 100%; height: auto; position: static; border-right: 0; border-bottom: 1px solid var(--gray-a5); }
 }
+
+/* Read-only users: a gate settings page with every control disabled (GateApp). */
+fieldset.readonly-page { border: 0; margin: 0; padding: 0; min-width: 0; }

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Badge, Button, Flex, Text } from '@radix-ui/themes';
 import type { ResidentsReply, SendPreview } from '../../../src/types.ts';
-import { errorText, type GateApi } from '../api.ts';
+import { errorText, useReadOnly, type GateApi } from '../api.ts';
 import { useConfirm } from '../Confirm.tsx';
 import { HelpTip } from '../HelpTip.tsx';
 
@@ -15,6 +15,7 @@ export function WorkingCopyBar({ cache, gapi, onReload, onJobStarted }: {
 }) {
   const [info, setInfo] = useState('');
   const [dialog, confirm] = useConfirm();
+  const readOnly = useReadOnly();
   const edited = Boolean(cache && cache.edited);
   const newer = Boolean(cache && cache.newerPull);
   const [label, color] = !cache ? ['no working copy', 'gray'] as const
@@ -57,8 +58,8 @@ export function WorkingCopyBar({ cache, gapi, onReload, onJobStarted }: {
     <Flex gap="3" align="center" wrap="wrap">
       {dialog}
       <Flex align="center"><Badge color={color} size="2">{label}</Badge><HelpTip of="workingCopy" /></Flex>
-      <Button variant="soft" color="gray" onClick={reset} disabled={!cache}>Reset to gate</Button>
-      <Button variant="soft" onClick={send} disabled={!edited || newer}>Send to gate</Button>
+      {!readOnly && <Button variant="soft" color="gray" onClick={reset} disabled={!cache}>Reset to gate</Button>}
+      {!readOnly && <Button variant="soft" onClick={send} disabled={!edited || newer}>Send to gate</Button>}
       <Text size="2" color="gray">{info}</Text>
     </Flex>
   );

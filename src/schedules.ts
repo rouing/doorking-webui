@@ -1,9 +1,9 @@
 // Scheduled transfers (DoorKing32's Scheduled Transfers, reworked): each gate has its own list of entries, each
-// with days of the week, a time (server local time, 24-hour HH:MM) and the transfers to run. An entry runs with
-// the DKS password saved (encrypted, see db.ts) by the user who last saved it. A time missed while the server
-// was stopped runs once at the next check, like DoorKing32's past-due jobs.
+// with days of the week, a time (server local time, 24-hour HH:MM) and the transfers to run. Entries run with the
+// gate's DKS login (gate-list.ts); `user` is who last saved the entry. A time missed while the server was stopped
+// runs once at the next check, like DoorKing32's past-due jobs.
 import crypto from 'node:crypto';
-import { all, encrypt, decrypt, one, run } from './db.ts';
+import { all, one, run } from './db.ts';
 import type { Store } from './db.ts';
 import type { Schedule, ScheduleAction, ScheduleInput } from './types.ts';
 
@@ -19,30 +19,8 @@ interface ScheduleRow {
 type Timed = Pick<ScheduleInput, 'days' | 'time'>;
 type RunFields = Partial<Record<'lastDue' | 'lastRun' | 'lastResult' | 'lastError', unknown>>;
 
-const userKey = (user: unknown): string => String(user || '').trim().toLowerCase();
 const phoneDigits = (phone: unknown): string => String(phone || '').replace(/\D/g, '');
 const fail = (msg: string, status: number) => Object.assign(new Error(msg), { status });
-
-export async function saveCredential(store: Store, user: unknown, password: unknown): Promise<void> {
-  await run(store, `INSERT INTO credentials (username, login, password, saved_at) VALUES ($1, $2, $3, $4)
-    ON CONFLICT (username) DO UPDATE SET login = excluded.login, password = excluded.password, saved_at = excluded.saved_at`,
-  [userKey(user), String(user).trim(), encrypt(store, password), new Date().toISOString()]);
-}
-
-// { user, password }, or null when none is saved.
-export async function getCredential(store: Store, user: unknown): Promise<{ user: string; password: string } | null> {
-  const row = await one<{ login: string; password: string }>(store, 'SELECT login, password FROM credentials WHERE username = $1',
-    [userKey(user)]);
-  return row ? { user: row.login, password: decrypt(store, row.password) } : null;
-}
-
-export async function hasCredential(store: Store, user: unknown): Promise<boolean> {
-  return Boolean(await one(store, 'SELECT 1 AS x FROM credentials WHERE username = $1', [userKey(user)]));
-}
-
-export async function forgetCredential(store: Store, user: unknown): Promise<boolean> {
-  return (await run(store, 'DELETE FROM credentials WHERE username = $1', [userKey(user)])) > 0;
-}
 
 // Returns { schedule: { days, time, actions, enabled } } or { error }. days: 0-6 = Sun-Sat.
 export function normalizeSchedule(body: unknown): { schedule: ScheduleInput; error?: undefined } | { schedule?: undefined; error: string } {

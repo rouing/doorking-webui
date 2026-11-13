@@ -45,28 +45,37 @@ defaults), public HTTPS access and updating are in [`INSTALL.md`](docs/INSTALL.m
 
 ## Signing in and gate access
 ```
-Sign in (DKS Cloud user + password) ──> Your gates ──> Open a gate ──> first successful pull ──> gate's saved data opens
-          checked with CheckLogin       per user        phone + master code   ("connected")
+Sign in (local account) ──> Your gates (admin / read only) ──> Open a gate ──> every DKS call uses the gate's DKS login
+   users + sessions tables      gate_access                                   managed_gates (encrypted)
 ```
-1. **Sign in.** The page sends the user and password to this server, which asks DKS Cloud (`CheckLogin`) and
-   accepts only the reply `OK`. The server then creates a random session and sets it in the `sid` cookie
-   (HttpOnly, SameSite=Strict). The DKS password stays **in server memory** for the session, because every pull,
-   send and relay call to DKS Cloud needs it; it is written to disk only if you save a scheduled transfer (then
-   encrypted, and updated each time you sign in). The session ends after **30 minutes idle**, on **Sign out**, or
-   when the server restarts. Each sign-in is counted under History → Last sign-in. **Remember user** keeps only the
-   user name in this browser.
-2. **Your gates.** Each DKS user has their own gate list (user names compare case-insensitively). **Add a gate**
-   takes the system phone number (4-15 digits) and the 4-digit master code; the master code is stored encrypted
-   and is never sent back to the browser. It is not checked when added: DKS Cloud checks it on the first pull.
-   **Remove** takes the gate off your list only; its files, preferences, history and schedules are kept.
-3. **Open a gate.** The open gate is kept in your session, so reloading the page returns to it. **All gates** at the
-   top of the sidebar goes back to the list.
-4. **Connected or not.** A gate you have added but not yet pulled from or sent to (with the master code in your
-   list) shows "not connected yet": its site name is hidden and its saved data (residents, transactions, settings,
-   history, schedules, cameras) stays closed. You can still pull, and set its Gate configuration while no account
-   has connected to that gate yet. The first successful pull or send connects you. Changing the master code closes
-   the data again until the next successful connection. This keeps someone who only knows a gate's phone number from
-   reading what another account has downloaded for it.
+1. **Accounts** (`src/users.ts`). People sign in with a local username and password; usernames and emails are
+   case-insensitive and unique. Passwords are scrypt hashes (minimum 12 characters). There is no sign-up page:
+   gate admins create accounts (with a temporary password the user must replace at their first sign-in). Nobody
+   can read or set another user's password from the web; whoever runs the server can (`node cli.ts reset-password`).
+   After 5 failed sign-ins within 15 minutes a username is refused for the rest of that time.
+2. **Sessions.** A random token in the `sid` cookie (HttpOnly, SameSite=Strict, Secure over HTTPS); the database keeps
+   only its SHA-256 hash (table `sessions`), so sessions survive a restart. They end after **30 minutes idle**, on
+   **Sign out**, or when the user changes their password (other sessions). The open gate is kept in the session.
+3. **First start.** While no account exists, the page offers to create the first one, which needs the one-time
+   **setup code** the server prints in its console (journalctl) at start, or `node cli.ts create-admin <username>`.
+   The first account becomes admin of every gate without an admin (gates moved over from DKS sign-in on 2026-11-13).
+4. **Gates** (`src/gate-list.ts`, table `managed_gates`). A gate is added once: phone, master code, its **DKS login**
+   and gate configuration. The server checks the DKS login (`CheckLogin`), then pulls residents with these values;
+   only when that succeeds is the gate saved, with the adder as its admin (so nobody can claim a gate by typing its
+   phone number). Adding a gate already managed here is refused: "ask one of its gate admins to add you". The DKS
+   login and master code are encrypted and never sent back; every pull, send, relay call and scheduled transfer of
+   the gate uses them. Admins change them under System Settings → Gate login (a new login is checked with DKS
+   Cloud; a new master code by a residents pull, saved only when it succeeds).
+5. **Roles** (table `gate_access`). Per gate: **admin** (everything, including the gate's users and login) or
+   **read only** (view, pull, camera pictures and live view). Routes are scoped `gate` (any role) or `gate-admin`.
+   Admins create accounts for their gate, share it with existing accounts, change roles and remove users; a gate
+   always keeps at least one admin. **Leave** removes your own access.
+6. **API keys** (`src/api-keys.ts`, table `api_keys`). Scripts don't sign in: a gate admin creates a key under System
+   Settings → API keys (name, role, optional expiry of 30/90/365 days); it is shown once and stored as a SHA-256
+   hash. A key belongs to its gate (it keeps working if its creator leaves) and is sent as
+   `Authorization: Bearer <key>`. It reaches only that gate's routes, with its role; web-only routes (gate login,
+   users, API keys, deleting the gate's data, leaving) refuse it. History shows key actions as `api:<key name>`.
+   Revoking deletes it at once. See [API.md](docs/API.md).
 
 ## Features
 Every page works on the open gate. Edits to gate data go to the **working copy** first (blue = unsaved on this
@@ -74,7 +83,8 @@ page, green = saved to the working copy but not on the gate yet; hover a value t
 the gate only with **Send to gate**. Anything that changes the gate asks for confirmation first.
 
 **Sidebar.** Gate name and **All gates**; the pages below; pinned at the bottom: History, Scheduled Transfers,
-System Settings, **Gate connection** and your user name with **Sign out** and **Dark mode**.
+System Settings, **Gate connection** and your user name and role with **User settings** and **Sign out**. Read-only users
+see every page with the edit controls hidden or disabled.
 
 **Gate connection.** **Pull residents** / **Pull transactions** start a DKS Cloud session with the gate; the
 progress window (bottom right; minimize or close it, **Show progress** reopens it) shows the log. One gate
@@ -94,8 +104,8 @@ connection runs at a time across all gates. When a pull or send finishes, the da
 | **Relay / Elevator** | Which elevators (1-8) each relay controls: relays 0-2, plus 3-10 / 11-18 with the Tracker boxes. Hidden with the Elevator Reference page when **Elevators** is off. |
 | **Anti-Pass Back** | Mode, In/Out relays (up to 10; 0-2, plus 3-10 / 11-18 with the Tracker boxes), facility counter, one-time re-sync, scheduled Re-Sync All. Applies only to cards in security levels 02-27; levels 01, 28, 29 and 30 are never limited by it. |
 | **History** | Every user's last sign-in; this gate's pulls, sends, relay changes, camera setting changes and working-copy changes, newest first. Click a change for a From/To table; **Revert** undoes it in the working copy (refused if a later change touched the same data). |
-| **Scheduled Transfers** | Entries the server runs on set days and times: send, pull residents, pull transactions, camera snapshots. Edit, Run now, Delete, Forget my saved password. See [Scheduled transfers](#scheduled-transfers). |
-| **System Settings** | **Gate configuration** (must match the gate; a new gate starts at 255 area codes, the default in the DoorKing 6.5 manual; also lists the working copy's area codes, where a 4-digit code is 1 + area code for long-distance dialing, and **Num of digits in dir code** (1-4), where decreasing wipes all resident data; **Show on the page**: switch off **Floors** to hide the Residents Floor column and field and the Security Levels Floors column, or **Elevators** to hide the Residents Elevator column and field and the Elevator Reference page; page only, the stored values are kept). **Gate settings** (master code read-only; talk time as m:ss, up to 4:14; outside line digit). **Working copy files** (download `names.bin`, `names.map`, `phone.bin`, `cards.bin`). **Tracker** (shows the Additional Relays boxes on the Relays page; page only). **Device association** (names for card-number ranges), **Gate cameras**, **Debug logs**, **Appearance** (dark mode), **Delete stored gate data** (after a warning, deletes every database row about the gate for every user, including its gate-list entries, and its `media/<phone>/` folder; nothing on the gate changes). |
+| **Scheduled Transfers** | Entries the server runs on set days and times: send, pull residents, pull transactions, camera snapshots. Edit, Run now, Delete. They run with the gate's DKS login. See [Scheduled transfers](#scheduled-transfers). |
+| **System Settings** | (admins) **Gate login** (DKS user/password and master code, checked before saving) and **Gate users** (create accounts for the gate, share with existing accounts, roles, remove); **Gate configuration** (must match the gate; a new gate starts at 255 area codes, the default in the DoorKing 6.5 manual; also lists the working copy's area codes, where a 4-digit code is 1 + area code for long-distance dialing, and **Num of digits in dir code** (1-4), where decreasing wipes all resident data; **Show on the page**: switch off **Floors** to hide the Residents Floor column and field and the Security Levels Floors column, or **Elevators** to hide the Residents Elevator column and field and the Elevator Reference page; page only, the stored values are kept). **Gate settings** (master code read-only; talk time as m:ss, up to 4:14; outside line digit). **Working copy files** (download `names.bin`, `names.map`, `phone.bin`, `cards.bin`). **Tracker** (shows the Additional Relays boxes on the Relays page; page only). **Device association** (names for card-number ranges), **Gate cameras**, **Debug logs**, **Appearance** (dark mode), **Delete stored gate data** (after a warning, deletes every database row about the gate for every user, including its gate-list entries, and its `media/<phone>/` folder; nothing on the gate changes). |
 
 Hold Open, Holidays, Facility Codes, Elevator and Anti-Pass Back have **Save to working copy**, **Discard unsaved**
 and **Clear** (fills every setting on the page with its unset value as an unsaved edit; nothing changes until Save).
@@ -107,15 +117,16 @@ Settings live in one of five places, depending on what they belong to:
 |---|---|---|
 | **The gate** (and its working copy in the database, `gate_files`) | Residents, vendors, cards, and every gate setting: Display, relay settings, Hold Open, Holidays, Security Levels, Facility Codes, Elevator, Anti-Pass Back, master code, talk time, outside line digit, directory code digits, area codes. Read by pulls, edited in the working copy, written by **Send to gate**. | Everyone who manages the gate |
 | **Database, per gate** (PostgreSQL, keyed by phone number) | Gate configuration, Floors/Elevators switches, relay names, Device Association (`prefs` table); resident/vendor notes (`notes`, by directory code without leading zeros); transaction history (`tx_history`, every event pulled); camera settings (`cameras`, password encrypted); snapshot log (`snapshots`); scheduled transfers (`schedules`); history (`history`). Not sent to the gate (DoorKing32 kept relay names and Device Association in `ACCOUNT.DAT`). | Every account that manages the gate on this PC |
-| **Database, per user** | Gate list with master codes (`gates`, encrypted), saved DKS password for schedules (`credentials`, encrypted), sign-in counts (`sign_ins`). | That DKS user |
+| **Database, per account** | Account (`users`: scrypt password hash, email, dark mode, last sign-in), sessions (`sessions`, token hashes), access to gates (`gate_access`: role per gate). | That user (access: the gate's admins) |
+| **Database, per gate (system)** | The gate's master code and DKS login (`managed_gates`, encrypted). | The gate's admins |
 | **Database, whole server** | Debug logs on/off (`meta` key `debugLogs`). | Everyone |
-| **This browser** (localStorage) | Remember user and the user name, dark mode, the Display page's layout choice. Never a password or master code. | That browser |
+| **This browser** (localStorage) | Remember user and the username, the last dark mode (for the sign-in page), the Display page's layout choice. Never a password or master code. | That browser |
 
-Sessions (with the DKS password) are only in server memory. `config.json` (`gateDefaults`) gives gate-match
+`config.json` (`gateDefaults`) gives gate-match
 defaults.
 
 **Encryption.** On first start the server creates `doorking.key` next to `config.json` (`paths.keyFile`): 32 random
-bytes as 64 hex digits, mode 0600. Master codes, saved DKS passwords, recorder passwords and the stored gate files
+bytes as 64 hex digits, mode 0600. Master codes, gates' DKS passwords, recorder passwords and the stored gate files
 are encrypted with AES-256-GCM using that key; everything else in the database is plain. Keep the database and the
 key together: without the key the encrypted values can't be read, and anyone with both can read them. The database
 login is in `config.json` (`database`); tables and setup are in [DB.md](docs/DB.md). The server refuses to start
@@ -123,7 +134,7 @@ while `config.json` or the key can be read by other users (Linux/macOS).
 
 | File | Contents | Share? |
 |---|---|---|
-| PostgreSQL database `doorking` | tables `gates`, `prefs`, `sign_ins`, `history` (per phone, with before/after resident data), `credentials`, `schedules`, `cameras`, `snapshots`, `notes`, `tx_history`, `meta` | **No** |
+| PostgreSQL database `doorking` | tables `users`, `sessions`, `managed_gates`, `gate_access`, `prefs`, `history` (per phone, with before/after resident data), `schedules`, `cameras`, `snapshots`, `notes`, `tx_history`, `meta` | **No** |
 | `config.json` | the server's settings, including the database password (`config.example.json` is the committed template) | **No** |
 | `doorking.key` | AES-256-GCM key for the encrypted columns | **No**: with the database it decrypts master codes and passwords |
 | `media/<phone>/` | `snapshots/` (camera pictures and videos). The board files are in the database (`gate_files`) | No: camera pictures |
@@ -146,9 +157,8 @@ schedules A-D.
 - Due entries queue and run one at a time; each transfer waits for any running gate connection. A failed
   transfer does not stop the entry's other transfers. Each transfer is recorded in History with
   `(scheduled)` in its summary, and the entry shows its last result.
-- An entry runs with the DKS password of the user who last saved it. Saving an entry stores that user's
-  password, encrypted, in the database; signing in again updates it. If it is deleted (**Forget my saved
-  password**) or the gate is removed from that user's list, the entry fails until someone saves it again.
+- Entries run with the gate's DKS login (System Settings → Gate login); "Saved by" shows who last saved the entry.
+  Before 2026-11-13 each entry ran with its saver's own stored DKS password.
 
 ## Cameras
 A gate can have a **Dahua or Amcrest recorder** (NVR/DVR) watching it. The app pairs the gate's transactions with
@@ -296,9 +306,10 @@ key `debugLogs`; off by default). While on, `logs/debug.log` (see `--logs`) gets
 | `dks` | each DKS Cloud call: operation, time taken, reply size or error (never its parameters); `GetSessionStatus` polls only when they fail |
 | `gate` | every gate connection line, as in the Gate connection window, without repeated statuses, and how it ended; live relay changes |
 | `change` | every working-copy, preference, note and revert change recorded in History, with the user and the files it touched |
-| `gates` | gates added or removed, master codes changed, a gate's stored data deleted (with the rows removed per table) |
-| `session` | sign-ins, sign-outs (also after 30 minutes idle), sign-ins refused after too many failures, the gate a user opens |
-| `schedule` | entries added, changed, deleted or queued with Run now; each run started and its result; saved passwords deleted |
+| `gates` | gates added (or a failed add), users created, shared, changed or removed, the gate login or master code changed, a gate's stored data deleted (with the rows removed per table) |
+| `session` | sign-ins, refused sign-ins (wrong password, too many failures), sign-outs (also after 30 minutes idle), password changes, the first account, the gate a user opens |
+| `api` | API keys created or revoked; requests refused for a wrong, expired or revoked key |
+| `schedule` | entries added, changed, deleted or queued with Run now; each run started and its result |
 | `camera` | snapshot runs started, stopped and finished, frame retries and failures, minutes not done, bridge starts, connections, exits and connection failures, live views opened and ended, camera tests, settings saved or removed, pictures deleted |
 | `request` | requests answered with an error status |
 | `server` | start, the one-time import, uncaught errors |
@@ -366,15 +377,22 @@ against changes observed on the gate. The database tests use the `doorking_test`
   `sid` cookie gets `Secure` there (INSTALL.md section 6a).
 - DKS Cloud is reached over **HTTPS** by default (`DEFAULT_URL` in `src/dks-cloud.ts`), so the DKS password and
   master codes are encrypted on the way. `DKS_URL` can override it.
-- Sign-in: after 5 failed sign-ins for a user name within 15 minutes, further tries are refused (429) for the rest
-  of that time without asking DKS Cloud, so a guessing script can't get the DKS account locked.
-- The DKS password is held in server memory for the session; idle sessions are removed every minute after 30
-  minutes without use. It is written to disk only when the user saves a scheduled transfer, encrypted with
-  AES-256-GCM in the database; the key is `doorking.key`, so anyone with the key and the database (or a dump of it) can
-  decrypt it. It is never logged. Pull/send logs mask credentials.
+- Sign-in: local accounts with scrypt password hashes; after 5 failed sign-ins for a username within 15 minutes,
+  further tries are refused (429) for the rest of that time. A wrong username takes as long as a wrong password.
+- Sessions: random tokens, stored only as SHA-256 hashes; idle sessions are removed every minute after 30 minutes
+  without use. A user whose password was set by someone else reaches nothing but the password change until they
+  choose their own.
+- The first account needs the setup code printed in the server's console, so a fresh public install can't be
+  claimed by a stranger. A gate is only added after a successful pull with its DKS login and master code.
+- Each gate's DKS login and master code are encrypted with AES-256-GCM in the database; the key is `doorking.key`,
+  so anyone with the key and the database (or a dump of it) can decrypt them. They are never sent to the browser or
+  logged. Pull/send logs mask credentials. The debug log (all gates) is open only to users who are admin of a gate.
+- API keys: 256-bit random secrets, stored only as SHA-256 hashes, limited to one gate and its role, never accepted
+  on web-only routes; requests with an `Authorization` header never use a cookie session, so a browser page on
+  another site can't use them (no CORS).
 - Request bodies must be JSON objects of at most 10,000 bytes (413 otherwise). Files are served only by name
   patterns (`cacheFilePath`, `snapshotFile`), so paths can't leave the gate's folder; gate, schedule and history
-  lookups are always scoped to the gate in the URL and the signed-in user's list.
+  lookups are always scoped to the gate in the URL and the signed-in user's access to it (role checked per route).
 - Master codes and recorder passwords are encrypted the same way. The recorder password goes to the bridge in
   an environment variable; ffmpeg gets it in its `rtsp://` URL on 127.0.0.1, which other programs running on
   the same PC can see in the process list. Tool output is masked before it is shown or stored.
@@ -409,12 +427,14 @@ against changes observed on the gate. The database tests use the `doorking_test`
     gate-pull.ts         DKS Cloud pull/send sessions, relay read/control
     dks-cloud.ts         DKS Cloud SOAP client
     db.ts                PostgreSQL connection (pg), schema, query helpers, AES-256-GCM encryption
-    gate-list.ts         per-user gate list (master codes encrypted), "connected" state
+    users.ts             local accounts (scrypt passwords) and sessions
+    gate-list.ts         managed gates (DKS login, master code, encrypted), access roles, the move from DKS sign-in
+    api-keys.ts          per-gate API keys (hashed), role and expiry
     prefs.ts             gate-scoped preferences, Device Association
     notes.ts             resident/vendor notes (database only, not on the gate)
     tx-history.ts        transaction history: merges each pulled rcv_out.bin into tx_history
     audit.ts             history log, sign-ins, revert patches
-    schedules.ts         scheduled transfers and the saved DKS passwords they run with
+    schedules.ts         scheduled transfers (run with the gate's DKS login)
     cameras.ts           camera settings, the dahua-p2p bridge, ffmpeg pictures, videos and live view
     holidays.ts          fixed-date holiday names
     transactions.ts      reader for the desktop app's TRANSnnn.TRA files

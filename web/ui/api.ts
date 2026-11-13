@@ -1,4 +1,5 @@
 // Calls to the server's REST API (see web/server.ts). Errors carry the server's { error } message.
+import { createContext, useContext } from 'react';
 
 export class ApiError extends Error {
   status: number;
@@ -11,7 +12,8 @@ export class ApiError extends Error {
 }
 
 let signedOut = () => {};
-// Called when a request comes back 401 (the session ended), except the sign-in request itself.
+// Called when a request comes back 401 (the session ended), except the sign-in request itself, or 403 because the
+// user must choose a new password first: either way the page reloads the session.
 export function onSignedOut(fn: () => void) { signedOut = fn; }
 
 export async function api<T = unknown>(method: string, url: string, body?: unknown): Promise<T> {
@@ -22,7 +24,7 @@ export async function api<T = unknown>(method: string, url: string, body?: unkno
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const json = await res.json().catch(() => ({})) as Record<string, unknown>;
-  if (res.status === 401 && !(method === 'POST' && url === '/api/session')) signedOut();
+  if ((res.status === 401 && !(method === 'POST' && url === '/api/session')) || (res.status === 403 && json.mustChangePassword)) signedOut();
   if (!res.ok) throw new ApiError(typeof json.error === 'string' ? json.error : `HTTP ${res.status}`, res.status, json);
   return json as T;
 }
@@ -34,6 +36,11 @@ export const gateUrl = (phone: string, sub: string) => `/api/gates/${encodeURICo
 export const gateApi = (phone: string): GateApi => (method, sub, body) => api(method, gateUrl(phone, sub), body);
 
 export const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+// True on a gate the signed-in user may only view (role readonly): edit controls are hidden or disabled. The server
+// refuses changes anyway.
+export const ReadOnlyContext = createContext(false);
+export const useReadOnly = () => useContext(ReadOnlyContext);
 
 // Per-browser settings in localStorage. Never holds a password or master code.
 export function lsGet<T>(key: string, def: T): T {

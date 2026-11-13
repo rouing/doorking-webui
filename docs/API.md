@@ -1,22 +1,29 @@
 # REST API
 
-Every action in the web page goes through this API, so scripts can do anything the page does. The routes are
-defined in the `ROUTES` table in `web/server.ts`.
+Every action in the web page goes through this API. Scripts and other systems use it with a gate's **API key**
+(below); the routes are defined in the `ROUTES` table in `web/server.ts`.
 
 ## Conventions
 
-- **Address:** `http://localhost:8080/api` (port from `--port` or `PORT`). The server listens on `127.0.0.1` only;
-  with `--public-host <name>` behind the HTTPS proxy, also `https://<name>/api`.
-- **Host and Origin:** requests must use host `localhost:<port>`, `127.0.0.1:<port>` or the `--public-host` name
+- **Address:** `http://localhost:8080/api` (`server.port`). The server listens on `127.0.0.1` only; with
+  `server.publicHost` behind the HTTPS proxy, also `https://<name>/api`.
+- **Host and Origin:** requests must use host `localhost:<port>`, `127.0.0.1:<port>` or the public host name
   (403 `Forbidden host` otherwise). Non-GET requests whose `Origin` header isn't `http://localhost:<port>`,
   `http://127.0.0.1:<port>` or `https://<public host>` get 403 `Forbidden origin`.
 - **Bodies:** `POST` and `PUT` need `Content-Type: application/json` (415 otherwise). The body must be a JSON
   object of at most 10,000 bytes (400 `Bad JSON` / `The body must be a JSON object`, 413 `Request body too large`).
-- **Sign-in:** `POST /api/session` sets the `sid` cookie (HttpOnly, SameSite=Strict; plus Secure through the public
-  name); send it with every later
-  call. A session ends after **30 minutes idle**, on sign-out, or when the server restarts.
-- **Gate routes** are under `/api/gates/{phone}`; `{phone}` (digits) must be in the signed-in user's gate list
-  (404 `Gate not in your list` otherwise).
+- **API keys (scripts):** send `Authorization: Bearer <key>`. A key is created by a gate admin under System
+  Settings → API keys (or `POST /api-keys` below), shown once, and belongs to **one gate**, not to a person. It
+  works only on that gate's routes (`/api/gates/{phone}/…`), with its own role (`readonly` or `admin`), until it
+  expires or is revoked. Routes marked **web only** below (gate login, gate users, API keys, deleting the gate's
+  data, leaving the gate) and every route outside the gate refuse keys (403). A wrong, expired or revoked key gets
+  401. When a request carries an `Authorization` header, no cookie session is used. History records key actions as
+  `api:<key name>`.
+- **Web page sign-in:** `POST /api/session` (local account) sets the `sid` cookie (HttpOnly, SameSite=Strict; plus
+  Secure through the public name), sent with every later call. A session ends after **30 minutes idle** or on
+  sign-out; it survives a server restart.
+- **Gate routes** are under `/api/gates/{phone}`; the signed-in user needs a role on `{phone}`, or the key must be
+  that gate's (404 / 403 otherwise).
 - **Background jobs:** pulls and sends return 202 and run in the background; poll `GET .../job`. One gate
   connection runs at a time across all gates (409 while one is running).
 - **Errors:** `{ "error": "message" }` with the status below.
@@ -25,7 +32,7 @@ defined in the `ROUTES` table in `web/server.ts`.
 |---|---|
 | 400 | invalid input |
 | 401 | not signed in, or DKS Cloud refused the sign-in |
-| 403 | wrong host or origin, or not connected to the gate yet (`{ error, notConnected: true }`) |
+| 403 | wrong host or origin, read-only user on an admin route, wrong setup code, or `{ mustChangePassword: true }` |
 | 404 | not found (gate, directory code, schedule, file, …) |
 | 405 | wrong method (with an `Allow` header) |
 | 409 | conflict (a gate connection or snapshot run is running, duplicate entry code, revert refused, …) |
@@ -43,40 +50,63 @@ Each route has one of these access levels (the `scope` in `ROUTES`):
 |---|---|
 | public | anyone |
 | user | any signed-in user |
-| gate-open | signed in, and `{phone}` is in the user's gate list |
-| gate | also **connected**: the user has pulled from or sent to the gate successfully with the master code now in their list (403 `notConnected` otherwise). Changing the master code closes the gate again until the next successful connection. |
-| gate-setup | like *gate*, but also open while no account has connected to the gate yet (to set it up for the first pull) |
+| gate | signed in with any role on the gate in `{phone}` (**admin** or **read only**); 404 otherwise |
+| gate-admin | signed in with the **admin** role on that gate, or an admin API key of that gate; 403 "Only a gate admin can do this" otherwise |
+
+**web only**: refused for API keys whatever their role: everything under "Session and gate list", "Gate login, users
+and API keys" and the debug log, plus `POST /delete-data`.
+
+A user whose password was set by someone else (a new account, or the CLI's `reset-password`) gets 403
+`{ mustChangePassword: true }` from every non-public route except `PUT /api/me/password` until they choose their own.
 
 ## Session and gate list
 
 | Method | Path | Level | Body | Result |
 |---|---|---|---|---|
 | GET | `/help` | public | | the user guide (`MANUAL.md`) as an HTML page (not under `/api`) |
-| GET | `/api/session` | public | | `{ loggedIn: false }`, or `{ loggedIn: true, user, gate, defaults, holidayList }` |
-| POST | `/api/session` | public | `{ user, password }` | DKS Cloud `CheckLogin`; 200 `{ ok: true }` and the `sid` cookie; 401 refused; 429 too many failures |
+| GET | `/api/session` | public | | `{ loggedIn: false, setup? }` (`setup`: no account exists yet), or `{ loggedIn: true, user, email, dark, mustChangePassword, gate, defaults, holidayList }`; `gate`: `{ phoneNumber, siteName, addedAt, role }` |
+| POST | `/api/session` | public | `{ user, password }` | local account; 200 `{ ok: true }` and the `sid` cookie; 401 wrong username or password; 429 too many failures |
 | DELETE | `/api/session` | public | | sign out: `{ ok: true }` |
+| POST | `/api/setup` | public | `{ setupCode, username, password, email? }` | only while no account exists: creates the first account (admin of every gate without an admin) and signs it in: 201 `{ ok, gates }`; 403 wrong setup code (printed in the server's console at start); 409 once an account exists |
+| GET | `/api/me` | user | | `{ username, email, dark }` |
+| PUT | `/api/me` | user | `{ email?, dark? }` | your own settings; `email: ""` removes it; 409 when the email belongs to another account |
+| PUT | `/api/me/password` | user | `{ current, password }` | change your own password (12+ characters); ends your other sessions; 403 wrong current password |
 | PUT | `/api/session/gate` | user | `{ phoneNumber }` | the gate the page shows (kept across reloads): `{ gate }` |
 | DELETE | `/api/session/gate` | user | | back to the gate list |
-| GET | `/api/gates` | user | | `{ gates: [{ phoneNumber, siteName, addedAt, verified }] }`; never master codes; `siteName` is empty until connected |
-| POST | `/api/gates` | user | `{ phoneNumber, masterCode }` | 201 added, 200 master code updated; phone 4–15 digits, master code 4 digits |
-| GET | `/api/gates/{phone}` | gate-open | | one gate (same fields) |
-| PUT | `/api/gates/{phone}` | gate-open | `{ masterCode }` | update the master code |
-| DELETE | `/api/gates/{phone}` | gate-open | | remove from your list; files, prefs, history and schedules are kept |
-| DELETE | `/api/credentials` | user | | delete your saved DKS password (used by scheduled transfers): `{ removed }` |
+| GET | `/api/gates` | user | | `{ gates: [{ phoneNumber, siteName, addedAt, role }] }`: the gates you have access to; never master codes or DKS logins |
+| POST | `/api/gates` | user | `{ phoneNumber, masterCode, dksUser, dksPassword, gateConfig }` | adds a gate: 409 "already managed here, ask one of its gate admins" when it exists; 400 when DKS Cloud refuses the DKS login; else 202 and a residents pull with these values starts; the gate is saved (you as admin) only when it succeeds |
+| GET | `/api/gate-add` | user | | `{ job }`: the pull checking the gate you are adding (as `/job` below), or `{ job: null }` |
+| GET | `/api/gates/{phone}` | gate | | one gate (same fields) |
+| DELETE | `/api/gates/{phone}` | gate | | leave the gate (remove your own access); 409 for its last admin |
 
-`defaults` are the gate-match defaults (`GATE_DEFAULTS` plus command-line flags); `holidayList` is the built-in
+### Gate login, users and API keys (prefix `/api/gates/{phone}`; web only)
+
+| Method | Path | Level | Body | Result |
+|---|---|---|---|---|
+| GET | `/login` | gate-admin | | `{ dksUser, dksPasswordSet }` (the password and master code are never returned) |
+| PUT | `/login` | gate-admin | `{ dksUser?, dksPassword? (empty keeps), masterCode? (empty keeps) }` | a new DKS login is checked with DKS Cloud, then saved: 200 `{ changed }`; a new master code starts a residents pull with it: 202 `{ checking: true }`, saved when the pull succeeds (progress via `/job`) |
+| GET | `/users` | gate-admin | | `{ users: [{ username, email, role, grantedBy, grantedAt, lastSignIn }] }` |
+| POST | `/users` | gate-admin | `{ username, password, email?, role? ("readonly" default \| "admin") }` | creates an account (temporary password, changed at first sign-in) with access to this gate: 201 `{ users }`; 409 `{ exists: true }` when the username is taken (share instead) |
+| POST | `/share` | gate-admin | `{ username, role? }` | gives an existing account access: `{ users }`; 404 no such user; 409 already has access |
+| PUT | `/users/{username}` | gate-admin | `{ role }` | changes a role: `{ users }`; 409 when it would leave the gate without an admin |
+| DELETE | `/users/{username}` | gate-admin | | takes the user off this gate (the account stays): `{ users }`; 409 for the last admin |
+| GET | `/api-keys` | gate-admin | | `{ apiKeys: [{ id, name, role, createdBy, createdAt, expiresAt, lastUsedAt }] }` (never the keys) |
+| POST | `/api-keys` | gate-admin | `{ name (1-40 characters), role? ("readonly" default \| "admin"), expiresDays? (0 never, 30, 90, 365) }` | 201 `{ key, apiKey }`: `key` (`dkg_<id>_<secret>`) is shown only here |
+| DELETE | `/api-keys/{id}` | gate-admin | | revokes the key at once: `{ apiKeys }` |
+
+`defaults` are the gate-match defaults (`gateDefaults` in `config.json` plus flags); `holidayList` is the built-in
 fixed-date holiday list.
 
 ## Gate connection (prefix `/api/gates/{phone}`)
 
 | Method | Path | Level | Body | Result |
 |---|---|---|---|---|
-| POST | `/pull` | gate-open | `{ what: "residents" \| "transactions" }` | 202, starts a pull |
-| GET | `/job` | gate-open | | `{ state: idle\|running\|done\|failed, what, phoneNumber, user, startedAt, finishedAt, log, error? }`; a job for another gate (or another user's job before you are connected) shows as `{ state: "idle", busyElsewhere }` |
+| POST | `/pull` | gate | `{ what: "residents" \| "transactions" }` | 202, starts a pull |
+| GET | `/job` | gate | | `{ state: idle\|running\|done\|failed, what, phoneNumber, user, startedAt, finishedAt, log, error? }`; a job for another gate (or the pull checking a gate someone is adding) shows as `{ state: "idle", busyElsewhere }` |
 | GET | `/send` | gate | | send preview: `{ changedBlocks: { "<file>.bin": [blocks] }, residentCounts }` |
-| POST | `/send` | gate | `{ confirm: true }` | 202, sends the working copy, then pulls residents to check the gate holds it |
+| POST | `/send` | gate-admin | `{ confirm: true }` | 202, sends the working copy, then pulls residents to check the gate holds it |
 
-A pull is allowed before the first connection: its success is what connects you. A send (and its preview) is
+Read-only users may pull. A send (and its preview) is
 refused (409) when the working copy is missing files, a newer pull differs from its base (**Reset to gate** first),
 or two or more entries share a directory code, entry code or card (the error lists them; see `duplicates` below).
 
@@ -88,12 +118,12 @@ or two or more entries share a directory code, entry code or card (the error lis
 |---|---|---|---|---|
 | GET | `/residents` | gate | | `{ rows, unassignedCards, areaCodes, emptyCodes, dirDigits, duplicates, cache, pulled, saved }`; each row has its `note`; `duplicates: [{ kind: directoryCode\|entryCode\|card, value, holders, text }]` lists values held by more than one entry |
 | GET | `/residents/{code}` | gate | | one row |
-| POST | `/residents` | gate | `{ directoryCode, name, vendor?, hidden?, …fields }` | 201; fills a vacant code or inserts a new one |
-| PUT | `/residents/{code}` | gate | any of `name, hidden, vendor, areaCode, phone, entryCode, securityLevel, elevatorRef, floor, cards[]` | only the given fields change |
-| PUT | `/residents/{code}/note` | gate | `{ note }` | local note, at most 500 characters (blank clears it): `{ note }` |
-| DELETE | `/residents/{code}` | gate | | blanks the slot; the code stays as an empty unit |
-| DELETE | `/directory-codes/{code}` | gate | | removes the code from the gate entirely |
-| PUT | `/dir-digits` | gate | `{ digits: 1-4, confirm? }` | Num of digits in dir code; decreasing wipes all residents and needs `confirm: true` |
+| POST | `/residents` | gate-admin | `{ directoryCode, name, vendor?, hidden?, …fields }` | 201; fills a vacant code or inserts a new one |
+| PUT | `/residents/{code}` | gate-admin | any of `name, hidden, vendor, areaCode, phone, entryCode, securityLevel, elevatorRef, floor, cards[]` | only the given fields change |
+| PUT | `/residents/{code}/note` | gate-admin | `{ note }` | local note, at most 500 characters (blank clears it): `{ note }` |
+| DELETE | `/residents/{code}` | gate-admin | | blanks the slot; the code stays as an empty unit |
+| DELETE | `/directory-codes/{code}` | gate-admin | | removes the code from the gate entirely |
+| PUT | `/dir-digits` | gate-admin | `{ digits: 1-4, confirm? }` | Num of digits in dir code; decreasing wipes all residents and needs `confirm: true` |
 
 Edits return `{ changed: { "<file>.bin": [blocks] }, cache }`. An entry code or card number already held by
 another directory code is refused with 409. `areaCode` is 3 digits, or 4 as 1 + area code for long distance;
@@ -104,18 +134,18 @@ card numbers are 00001–65407.
 | Method | Path | Level | Body | Result |
 |---|---|---|---|---|
 | GET | `/settings` | gate | | `{ fields: [{ key, group, name, offset, size, value, gate, editable, secret, note, maxLength }], pulled, saved, cache }`; secret values are masked |
-| PUT | `/settings` | gate | `{ "<field key>": value, … }` | saves editable fields to the working copy: `{ changed, changedBlocks }`; 400 when nothing changed, or when it changes a tone-open digit (`relay{0-2}Tone…`) and two tones of relays 0–2 would share a digit (Tracker command relays are left out) |
+| PUT | `/settings` | gate-admin | `{ "<field key>": value, … }` | saves editable fields to the working copy: `{ changed, changedBlocks }`; 400 when nothing changed, or when it changes a tone-open digit (`relay{0-2}Tone…`) and two tones of relays 0–2 would share a digit (Tracker command relays are left out) |
 | GET | `/data` | gate | | `{ transactions }`: the transaction history, with names looked up in the working copy's values (`gate_residents`, `gate_cards`) (until 2026-11-12 also `residents`, `holdOpen`, `holidays`, `securityLevels`, `facilityCodes`, `elevator`; use `/residents` and `/settings` for those) |
 | GET | `/working-copy` | gate | | `{ exists, edited, newerPull, files }` |
-| DELETE | `/working-copy` | gate | | Reset to gate: the working copy becomes the last pull |
-| GET | `/files/{name}` | gate | | download the working copy's `names.bin`, `phone.bin`, `cards.bin` or their `.map` (built from the database) |
-| GET | `/prefs` | gate-setup | | the gate's preferences (see below) |
-| PUT | `/prefs` | gate-setup | any preference keys | saves; changing `gateConfig.areaCodes` converts the working copy (409 when it can't) |
-| GET | `/history` | gate | | `{ events, signIns }`: up to 500 events, newest first, `{ id, time, user, action, summary, result?, error?, details, revertible, revertedBy }`; `signIns: [{ user, last, count }]` |
-| POST | `/history/{id}/revert` | gate | | undoes that change in the working copy (and prefs); 409 if already reverted or a later change touched the same data |
+| DELETE | `/working-copy` | gate-admin | | Reset to gate: the working copy becomes the last pull |
+| GET | `/files/{name}` | gate-admin | | download the working copy's `names.bin`, `phone.bin`, `cards.bin` or their `.map` (built from the database) |
+| GET | `/prefs` | gate | | the gate's preferences (see below) |
+| PUT | `/prefs` | gate-admin | any preference keys | saves; changing `gateConfig.areaCodes` converts the working copy (409 when it can't) |
+| GET | `/history` | gate | | `{ events, users }` (`users`: the gate's users with their last sign-in, as `/users`): up to 500 events, newest first, `{ id, time, user, action, summary, result?, error?, details, revertible, revertedBy }`; `signIns: [{ user, last, count }]` |
+| POST | `/history/{id}/revert` | gate-admin | | undoes that change in the working copy (and prefs); 409 if already reverted or a later change touched the same data |
 | GET | `/relays` | gate | | live relay state (DKS `GetRelays`): `{ checkedAt, relays }`, all 19 relays |
-| PUT | `/relays` | gate | `{ "<relay>": true\|false, … }` | **changes the gate now** (DKS `SetRelays`); `true` = Active (held open). Allowed: relays 0–2 except a Tracker command relay, plus 3–10 with Tracker 2 and 11–18 with Tracker 1 (400 otherwise) |
-| POST | `/delete-data` | gate | `{ confirm: true }` | **deletes everything stored about the gate**: its rows in every table keyed by phone (every user's gate-list entry, prefs, history, schedules, camera settings, snapshot log, notes, transaction history) and its `media/<phone>/` folder: `{ removed: { <table>: rows }, filesError? }`. Nothing on the gate changes. 409 while a gate connection, snapshot run or scheduled transfer for the gate is running |
+| PUT | `/relays` | gate-admin | `{ "<relay>": true\|false, … }` | **changes the gate now** (DKS `SetRelays`); `true` = Active (held open). Allowed: relays 0–2 except a Tracker command relay, plus 3–10 with Tracker 2 and 11–18 with Tracker 1 (400 otherwise) |
+| POST | `/delete-data` | gate-admin (web only) | `{ confirm: true }` | **deletes everything stored about the gate**: its rows in every table keyed by phone (the gate itself with its DKS login, everyone's access to it, prefs, history, schedules, camera settings, snapshot log, notes, transaction history) and its `media/<phone>/` folder: `{ removed: { <table>: rows }, filesError? }`. Nothing on the gate changes. 409 while a gate connection, snapshot run or scheduled transfer for the gate is running |
 
 **Preferences** (`PUT /prefs`, any of these keys; they are kept in the local database, never sent to the gate):
 
@@ -127,7 +157,8 @@ card numbers are 00001–65407.
 | `features` | `{ floors, elevators }`: which floor/elevator columns and pages the web page shows |
 | `tracker` | `{ enabled, tracker1, tracker2, prevTime1?, prevTime2? }`: Tracker expansion boxes; `prevTimeN` is the command relay's strike time to restore |
 
-**History actions:** `change` (working-copy or prefs change), `revert`, `note`, `pull`, `send`, `relay`, `camera`.
+**History actions:** `change` (working-copy or prefs change), `revert`, `note`, `pull`, `send`, `relay`, `camera`,
+`access` (users created, shared, changed, removed or leaving), `login` (the gate's DKS login or master code changed).
 Working-copy and prefs changes are recorded with what changed (as values) and can be reverted, including directory-code digit
 and area-code changes; a revert is itself recorded and can be reverted. A revert is refused while a later change
 touched the same resident, card, setting or layout value. Pulls, sends, relay changes
@@ -140,25 +171,25 @@ listed in `src/gate-settings.ts`; [`BITMAP.md`](BITMAP.md) lists each key's addr
 
 | Method | Path | Level | Body | Result |
 |---|---|---|---|---|
-| GET | `/schedules` | gate | | `{ schedules: [{ id, phoneNumber, user, days, time, actions, enabled, createdAt, nextRun, lastRun, lastResult, lastError, queued }], passwordSaved }` |
-| POST | `/schedules` | gate | `{ days: [0-6, Sun = 0], time: "HH:MM", actions: ["send"\|"residents"\|"transactions"\|"snapshots"], enabled? }` | 201; also saves your DKS password (encrypted) |
-| PUT | `/schedules/{id}` | gate | same as POST | replaces the entry; you become its owner and your password is saved |
-| DELETE | `/schedules/{id}` | gate | | deletes the entry |
-| POST | `/schedules/{id}/run` | gate | `{}` | 202, queues the entry now; 409 if already queued |
+| GET | `/schedules` | gate | | `{ schedules: [{ id, phoneNumber, user, days, time, actions, enabled, createdAt, nextRun, lastRun, lastResult, lastError, queued }] }`; entries run with the gate's DKS login |
+| POST | `/schedules` | gate-admin | `{ days: [0-6, Sun = 0], time: "HH:MM", actions: ["send"\|"residents"\|"transactions"\|"snapshots"], enabled? }` | 201; you become its owner ("Saved by") |
+| PUT | `/schedules/{id}` | gate-admin | same as POST | replaces the entry; you become its owner ("Saved by") |
+| DELETE | `/schedules/{id}` | gate-admin | | deletes the entry |
+| POST | `/schedules/{id}/run` | gate-admin | `{}` | 202, queues the entry now; 409 if already queued |
 
 ## Cameras and snapshots (prefix `/api/gates/{phone}`)
 
 | Method | Path | Level | Body | Result |
 |---|---|---|---|---|
 | GET | `/cameras` | gate | | `{ settings }`: `{ enabled, serial, username, channels: [{ channel, name }], clockOffset, mode, frames, framesAfter, clipTries, events, backfillHours, keepDays, savedBy, savedAt }` or `null`; never the password |
-| PUT | `/cameras` | gate | `{ serial, username, password?, channels, clockOffset?, mode? ("snapshots"\|"video"), frames? (1-6), framesAfter? (0-6), clipTries? (1-5), events? ("access"\|"all"), backfillHours? (0-720), keepDays? (15, 30, 60, 90; 0 = forever), enabled? }` | saves; a blank password keeps the saved one |
-| DELETE | `/cameras` | gate | | removes the settings (pictures are kept): `{ removed }` |
-| POST | `/cameras/test` | gate | `{}` | a live picture per channel: `{ channels: [{ channel, name, file?, error? }] }` |
+| PUT | `/cameras` | gate-admin | `{ serial, username, password?, channels, clockOffset?, mode? ("snapshots"\|"video"), frames? (1-6), framesAfter? (0-6), clipTries? (1-5), events? ("access"\|"all"), backfillHours? (0-720), keepDays? (15, 30, 60, 90; 0 = forever), enabled? }` | saves; a blank password keeps the saved one |
+| DELETE | `/cameras` | gate-admin | | removes the settings (pictures are kept): `{ removed }` |
+| POST | `/cameras/test` | gate-admin | `{}` | a live picture per channel: `{ channels: [{ channel, name, file?, error? }] }` |
 | GET | `/cameras/live/{channel}` | gate | | live MJPEG stream for an `<img>`; `?quality=high` for the main stream; 502 when no picture comes |
 | GET | `/snapshots` | gate | | `{ snapshots: { "<YYYYMMDD-HHMM>": { status (done, partial, failed, removed), files, error, attempts, at, … } }, run }`; match a transaction's `minute` |
 | POST | `/snapshots/run` | gate | `{}` or `{ minute }` | 202, fetches pictures for pending transactions (or only that minute; 409 during a run) |
 | POST | `/snapshots/stop` | gate | `{}` | stops the running snapshot run: `{ stopped }` |
-| DELETE | `/snapshots` | gate | | deletes every saved picture and the snapshot log: `{ minutes, files }` (409 during a run) |
+| DELETE | `/snapshots` | gate-admin | | deletes every saved picture and the snapshot log: `{ minutes, files }` (409 during a run) |
 | GET | `/snapshots/{minute}/{file}` | gate | | the JPEG, or the `.mp4` (supports `Range`); `{minute}` may be `live` |
 | POST | `/snapshots/{minute}/{file}/refresh` | gate | `{}` | fetches that picture (or video) again: `{ snapshot }`; 502 when none was saved, 409 during a run |
 
@@ -175,14 +206,14 @@ framesDone, current, byMinute }, result, log, error?, stopping? }`, or `null`.
 
 ## Example (`curl`)
 
-Bash quoting; in Windows PowerShell use `curl.exe` and put JSON bodies in files (`-d "@body.json"`).
+Bash quoting; in Windows PowerShell use `curl.exe` and put JSON bodies in files (`-d "@body.json"`). Keep the key in a
+file readable only by you, not on the command line:
 ```
-J='Content-Type: application/json'; API=http://localhost:8080/api
-curl -c jar.txt -H "$J" -d @login.json $API/session
-curl -b jar.txt $API/gates/2145550100/residents/101
-curl -b jar.txt -X PUT -H "$J" -d '{"name":"Smith, J"}' $API/gates/2145550100/residents/101
-curl -b jar.txt -X POST -H "$J" -d '{"what":"residents"}' $API/gates/2145550100/pull
-curl -b jar.txt $API/gates/2145550100/job
+printf 'Authorization: Bearer %s\n' "<your API key>" > key.hdr && chmod 600 key.hdr   # once, from a password manager
+J='Content-Type: application/json'; G=https://gate.example.com/api/gates/2145550100
+curl -H @key.hdr $G/residents/101
+curl -H @key.hdr -X PUT -H "$J" -d '{"name":"Smith, J"}' $G/residents/101        # admin key
+curl -H @key.hdr -X POST -H "$J" -d '{"what":"transactions"}' $G/pull
+curl -H @key.hdr $G/job
+curl -H @key.hdr $G/data
 ```
-Keep the password in `login.json` (`{ "user": "...", "password": "..." }`) rather than on the command line, and
-delete `jar.txt` afterwards: it holds the session cookie.

@@ -7,12 +7,12 @@ import { featuresOf, trackerOf } from '../format.ts';
 import { Field } from '../panes/fields.tsx';
 import { HelpTip } from '../HelpTip.tsx';
 
-const KEYS: (keyof Config)[] = ['siteName', 'memorySize', 'areaCodes', 'modelNumber', 'antiPassBack', 'interface1816'];
-const OPTIONS: Partial<Record<keyof Config, string[]>> = {
+export const CONFIG_KEYS: (keyof Config)[] = ['siteName', 'memorySize', 'areaCodes', 'modelNumber', 'antiPassBack', 'interface1816'];
+export const CONFIG_OPTIONS: Partial<Record<keyof Config, string[]>> = {
   memorySize: ['1000', '2000', '3000'], areaCodes: ['10 Area Codes', '255 Area Codes'], modelNumber: ['1833/1835/1837/1838', '1834'],
   antiPassBack: ['N', 'Y'], interface1816: ['N', 'Y'],
 };
-const LABELS: Record<keyof Config, string> = {
+export const CONFIG_LABELS: Record<keyof Config, string> = {
   siteName: 'Site name', memorySize: 'System memory', areaCodes: 'Area codes', modelNumber: 'Model',
   antiPassBack: 'Anti-passback', interface1816: 'Interface 1816/1820',
 };
@@ -22,7 +22,7 @@ const LABELS: Record<keyof Config, string> = {
 export function GateConfig({ prefs, defaults, list, gapi, onSaved }: {
   prefs: GatePrefs; defaults: Config; list: ResidentsReply | null; gapi: GateApi; onSaved: () => Promise<void>;
 }) {
-  const [cfg, setCfg] = useState<Record<string, string>>(() => Object.fromEntries(KEYS.map((k) => [k, (prefs.gateConfig && prefs.gateConfig[k]) || defaults[k] || ''])));
+  const [cfg, setCfg] = useState<Record<string, string>>(() => Object.fromEntries(CONFIG_KEYS.map((k) => [k, (prefs.gateConfig && prefs.gateConfig[k]) || defaults[k] || ''])));
   const [info, setInfo] = useState('');
   const [digits, setDigits] = useState(String(list ? list.dirDigits : 3));
   const [digitsInfo, setDigitsInfo] = useState('');
@@ -88,12 +88,12 @@ export function GateConfig({ prefs, defaults, list, gapi, onSaved }: {
           account that manages this gate</strong> (keyed by system phone number). Pulls and sends use them automatically.
         </Text>
         <Grid columns={{ initial: '1', sm: '2', md: '3' }} gap="3">
-          {KEYS.map((k) => (
-            <Field key={k} label={LABELS[k]} help={k}>
-              {OPTIONS[k] ? (
+          {CONFIG_KEYS.map((k) => (
+            <Field key={k} label={CONFIG_LABELS[k]} help={k}>
+              {CONFIG_OPTIONS[k] ? (
                 <Select.Root value={cfg[k]} onValueChange={(v) => setCfg({ ...cfg, [k]: v })}>
                   <Select.Trigger />
-                  <Select.Content>{OPTIONS[k]!.map((o) => <Select.Item key={o} value={o}>{o}</Select.Item>)}</Select.Content>
+                  <Select.Content>{CONFIG_OPTIONS[k]!.map((o) => <Select.Item key={o} value={o}>{o}</Select.Item>)}</Select.Content>
                 </Select.Root>
               ) : <TextField.Root value={cfg[k]} onChange={(e) => setCfg({ ...cfg, [k]: e.target.value })} />}
             </Field>

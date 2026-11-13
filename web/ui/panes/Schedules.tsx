@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button, Card, Checkbox, Flex, Heading, Table, Text, TextField } from '@radix-ui/themes';
 import type { Schedule, ScheduleAction, SchedulesReply } from '../../../src/types.ts';
-import { api, errorText, type GateApi } from '../api.ts';
+import { errorText, type GateApi } from '../api.ts';
 import { useConfirm } from '../Confirm.tsx';
 import { fmtTime } from '../format.ts';
 
@@ -70,22 +70,14 @@ export function Schedules({ gapi, video }: { gapi: GateApi; video: boolean }) {
     if (editing === e.id) fill(null);
     await load();
   });
-  const forget = () => act(async () => {
-    if (!await confirm({ title: 'Delete your saved DKS password?', action: 'Delete', color: 'red',
-      body: 'Schedules saved by you will fail until you save one of them again.' })) return;
-    await api('DELETE', '/api/credentials');
-    await load();
-    setInfo('Saved password deleted.');
-  });
 
   return (
     <Flex direction="column" gap="3">
       {dialog}
       <Heading>Scheduled Transfers</Heading>
       <Text size="2" color="gray">
-        The server runs these at the set days and time (the server's local time), even when no one is signed in. Each entry
-        runs with the DKS password of the user who last saved it; <strong>saving an entry stores your password, encrypted, in
-        the local database</strong>. A time missed while the server was stopped runs once when it starts. Send to gate runs
+        The server runs these at the set days and time (the server's local time), even when no one is signed in. They use the
+        gate's DKS login (System Settings → Gate login). A time missed while the server was stopped runs once when it starts. Send to gate runs
         only when the working copy has changes, and runs before the pulls.
       </Text>
       <Card>
@@ -123,7 +115,6 @@ export function Schedules({ gapi, video }: { gapi: GateApi; video: boolean }) {
         <Heading size="3" mb="2">Schedules for this gate</Heading>
         <Flex gap="3" align="center" mb="2">
           <Button variant="soft" color="gray" onClick={load}>Refresh</Button>
-          {list?.passwordSaved && <Button variant="soft" color="gray" onClick={forget}>Forget my saved password</Button>}
           <Text size="2" color="gray">{info}</Text>
         </Flex>
         <Table.Root size="1">

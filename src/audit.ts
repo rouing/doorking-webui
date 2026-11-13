@@ -1,11 +1,11 @@
 // History of who did what on a gate (database table history, one JSON event per row, append-only, keyed by
-// the gate's phone number) and each user's last sign-in (table sign_ins); see db.ts. Working-copy changes carry
+// the gate's phone number); see db.ts. Working-copy changes carry
 // their change as values (gate-state.ts diffStates; before 2026-11-12, a byte patch per file) so they can be
 // reverted; a revert is itself an event (revertOf = the id it undid).
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { all, run, type Store } from './db.ts';
-import type { HistoryEvent, SignIn } from './types.ts';
+import type { HistoryEvent } from './types.ts';
 
 export type Patch =
   | { whole: true; before: string; after: string }
@@ -107,15 +107,4 @@ export async function listHistory(store: Store, phone: unknown, limit = MAX_LIST
       revertedBy: by ? { id: by.id, user: by.user as string, time: by.time } : null,
     } as unknown as HistoryEvent;
   });
-}
-
-export async function recordSignIn(store: Store, user: string): Promise<void> {
-  await run(store, `INSERT INTO sign_ins (username, last, count) VALUES ($1, $2, 1)
-    ON CONFLICT (username) DO UPDATE SET last = excluded.last, count = sign_ins.count + 1`, [user, new Date().toISOString()]);
-}
-
-// [{ user, last, count }], most recent first.
-export async function signIns(store: Store): Promise<SignIn[]> {
-  return (await all<{ username: string; last: string; count: number }>(store, 'SELECT username, last, count FROM sign_ins ORDER BY last DESC'))
-    .map((r) => ({ user: r.username, last: r.last, count: r.count }));
 }

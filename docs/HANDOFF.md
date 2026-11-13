@@ -40,19 +40,34 @@ The gate exchanges four memory images via DKS Cloud:
 
 Working, tested end-to-end against live gate pulls:
 
-- **Login** against DKS Cloud with user + password only (`CheckLogin`).
-- **Multi-gate list:** after login the user sees their gates, adds one with its system phone + master
-  code, and opens one to get its control panel (site name top left, "All gates" goes back). The name
-  shown is the gate's **System Settings → Gate configuration → Site name** (`gateConfig.siteName`); until
-  that is saved the gate is listed as "Gate <phone>". DKS Cloud has no per-account gate list (`GetDistinctSystems` only takes a date range), so
-  the list is local: the database's `gates` table (`gate-list.ts`, master codes encrypted), keyed by user. The master code is NOT validated
-  when a gate is added, only format-checked (4 digits); a wrong code shows up on the first gate call.
-  Added 2026-10-19: `gates.verified_at` is set when that user's pull or send finishes successfully with the
-  saved master code (`startJob()` → `markGateVerified`) and cleared when the master code changes. Until it is
-  set, `gate`-scope routes answer 403 `notConnected` and the site name is hidden; `gate-open` routes (gate
-  info/edit/remove, own job, pull) work, and `gate-setup` routes (prefs) work while no account has connected
-  to the gate (`gateClaimed`). `backfillGateVerified()` (once, `meta.gatesVerifiedBackfill`) marks older
-  entries from successful pull/send history events.
+- **Local accounts and gate roles (2026-11-13; replaced DKS sign-in):** `src/users.ts` (accounts: scrypt hashes,
+  12+ character passwords, unique case-insensitive usernames and emails; sessions in table `sessions`, token SHA-256
+  only, so they survive restarts) and `src/gate-list.ts` (`managed_gates`: one row per gate with its encrypted
+  master code and DKS login; `gate_access`: role `admin` or `readonly` per user and gate). Every DKS call for a gate
+  uses its DKS login (`asGate` in server.ts sets `user`/`password` to it; `actor` is the local username for History).
+  - Adding a gate (`POST /api/gates`): 409 `ALREADY_ADDED` if managed already; `CheckLogin` of the DKS login; then
+    the gate configuration is saved to prefs and a residents pull runs with `JobInfo.adding`; `finishAdding()`
+    calls `registerGate` (adder = admin) on success, else `deleteGateData` for that phone (nothing left behind).
+    Only one connection runs at a time, so two adds of one phone can't race.
+  - Changing the gate login (`PUT G/login`): a new DKS login is `CheckLogin`-ed and saved; a new master code runs a
+    residents pull (`startLoginCheck`) and is saved only on success.
+  - Scopes: `gate` (any role; read-only users may view, pull, use cameras, read relay state) and `gate-admin`
+    (everything else, incl. board file downloads because names.bin holds the master code). Debug log routes need
+    admin of any gate. A user with `must_change` (password set by an admin or the CLI) gets 403
+    `mustChangePassword` everywhere except `PUT /api/me/password`.
+  - Last-admin rule in `setRole`/`revokeAccess` (gate row locked `FOR UPDATE`). No self-registration. Admins can't
+    set others' passwords; `node cli.ts reset-password` (operator) can, plus `create-admin` and `grant`.
+  - First account: setup page with a one-time code printed to the console at start (`SETUP_CODE`), or the CLI; it
+    adopts every gate without an admin (`adoptAdminlessGates`). `migrateToLocalAccounts()` (once,
+    `meta.localAccountsMigrated`) made managed gates from the old per-user `gates` (connected entries) and
+    `credentials` (saved schedule passwords). Old tables `gates`, `credentials`, `sign_ins` are kept, unused.
+  - **API keys (2026-11-13):** `src/api-keys.ts`, table `api_keys`: per gate, not per person; `dkg_<id>_<secret>`,
+    SHA-256 stored, role, optional expiry, `last_used_at`. The request handler authenticates a `Bearer` key before
+    sessions; keys reach only `gate`/`gate-admin` routes of their own gate and never `webOnly(...)` routes (gate
+    login, users, share, API keys, delete-data, leave). The handler's `s.user` is `api:<name>` (History, logs).
+  - UI: `Account.tsx` (first setup, forced password change, User Settings: dark mode, email, password), `Gates.tsx`
+    (roles, Leave, Add a gate with DKS login + configuration and progress), System Settings → Gate login / Gate
+    users, read-only via `ReadOnlyContext` (edit buttons hidden; settings pages in a disabled `<fieldset>`).
 - **Pull residents** and **Pull transactions** (read from the gate into the database).
 - **Live Relay Control** — red/green buttons for relays 0–2 (`GetRelays`/`SetRelays`); holds the gate
   open / releases, immediately, with confirm. Lives on the **Relays** page. State is read
@@ -420,16 +435,21 @@ REST routes, defined in the `ROUTES` table with `route(method, pattern, scope, h
 Full request/response details are in `README.md`.
 ```
 GET    /help                        public; MANUAL.md as an HTML page
-GET    /api/session                 { loggedIn, user, gate (UI's open gate) | null, defaults, holidayList }
-POST   /api/session                 { user, password }  CheckLogin against DKS Cloud; sets sid cookie
+GET    /api/session                 { loggedIn, setup?, user, email, dark, mustChangePassword, gate | null, defaults, holidayList }
+POST   /api/session                 { user, password }  local account; sets sid cookie
 DELETE /api/session                 sign out
+POST   /api/setup                   { setupCode, username, password, email? }  first account only
+GET    /api/me, PUT /api/me         own settings { email, dark }; PUT /api/me/password { current, password }
 PUT    /api/session/gate            { phoneNumber }  the gate the web UI has open (restored on reload)
 DELETE /api/session/gate            back to the gate list
-GET    /api/gates                   the user's gates { phoneNumber, siteName, addedAt, verified } (no master codes)
-POST   /api/gates                   { phoneNumber, masterCode }  201 added, 200 master code updated
+GET    /api/gates                   the user's gates { phoneNumber, siteName, addedAt, role }
+POST   /api/gates                   { phoneNumber, masterCode, dksUser, dksPassword, gateConfig }  add (202; check pull)
+GET    /api/gate-add                { job } of the user's gate-add check
 GET    G                            one gate
-PUT    G                            { masterCode }
-DELETE G                            remove from the list (files, prefs, history and schedules are kept)
+DELETE G                            leave the gate (not for its last admin)
+GET/PUT G/login                     the gate's DKS login / master code (admins)
+GET/POST G/users, POST G/share, PUT/DELETE G/users/:username   gate users and roles (admins)
+GET/POST G/api-keys, DELETE G/api-keys/:id   per-gate API keys (admins; key shown once on POST)
 POST   G/delete-data                { confirm: true }  delete everything stored about the gate (all users' lists, DB rows,
                                     media/<phone>/); 409 while a job/snapshot run/schedule for it runs
 GET    G/job                        this gate's pull/send job; another gate's job shows idle + busyElsewhere
@@ -481,7 +501,6 @@ DELETE G/snapshots                  delete every picture and the snapshot log ->
 GET    G/snapshots/:minute/:file    JPEG, or MP4 via sendVideo (Range requests) (names validated by snapshotFile)
 POST   G/snapshots/:minute/:file/refresh  fetch one frame again (dk.refreshSnapshot, queued per gate in
                                     snapRefreshes) -> { snapshot }; 502 no picture, 409 during a run
-DELETE /api/credentials             forget the signed-in user's saved password
 GET    /api/debug-log               { enabled, file, size }  (whole server)
 PUT    /api/debug-log               { enabled }  turn Debug logs on/off
 GET    /api/debug-log/file          debug.log as text/plain
@@ -600,8 +619,8 @@ kept and the user must **Reset to gate** to start from the new pull.
   gate-match defaults `--site-name`, `--memory`, `--area-codes`, `--anti-passback`, `--interface-1816`, `--model`. The earlier sessions always started
   the server with `--anti-passback Y`. The command above omits it, which is how the default `'N'` leaked
   into pulls (see §6).
-- Sign-in sessions are in memory, so **restarting the server signs everyone out**. After code changes,
-  restart the server and hard-reload the browser (Ctrl+F5). A stale server still holding port 8080 was a
+- Sign-in sessions are in the database (since 2026-11-13), so a restart keeps everyone signed in. After code
+  changes, restart the server and hard-reload the browser (Ctrl+F5). A stale server still holding port 8080 was a
   recurring cause of "my change isn't showing".
 - CLI: `node cli.ts` (no args prints usage). Local read-only parsers (`board`, `phones`, `cards`,
   `directory`, `rcvout`, `transactions`) and `cloud-*` commands that read credentials from the
@@ -859,8 +878,8 @@ byte, not only the one expected.
   Docs: `INSTALL.md`, `MANUAL.md`, `API.md`, `DB.md` (README now links to them).
 - **Public deployment, 2026-11-12** (an AWS machine, Ubuntu 26.04, project at `/home/ubuntu/doorkings`, Node
   v26.13.0 via nvm; names and addresses below are placeholders):
-  - Public at **`https://gate.example.com`**, open to anyone (user's choice; the DKS sign-in and its failure limit
-    protect it). The machine's public (Elastic) IP is on a second network interface with its own private address
+  - Public at **`https://gate.example.com`**, open to anyone (user's choice; the sign-in (local accounts since
+    2026-11-13) and its failure limit protect it). The machine's public (Elastic) IP is on a second network interface with its own private address
     (`<public-interface IP>`); the first interface goes out through NAT, and a Docker container on it holds port
     8080 there, no clash with the app on `127.0.0.1:8080`.
   - **Caddy 2.6.2** (apt) on `<public-interface IP>:80/443`, `/etc/caddy/Caddyfile` (original kept as `Caddyfile.orig`):

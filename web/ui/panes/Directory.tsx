@@ -9,7 +9,7 @@ import type { Snaps } from '../camera/snapshots.ts';
 import { ResidentForm } from './ResidentForm.tsx';
 import { TX_COLUMNS } from './Transactions.tsx';
 import { WorkingCopyBar } from './WorkingCopyBar.tsx';
-import type { GateApi } from '../api.ts';
+import { useReadOnly, type GateApi } from '../api.ts';
 
 const COLUMNS: Record<'residents' | 'vendors', Column[]> = {
   residents: [['Directory Code', 'directoryCode'], ['Name', 'name'], ['Hidden', 'hidden'], ['Phone', 'phoneFull'],
@@ -42,6 +42,7 @@ export function Directory({ kind, list, tx, devices, features, snaps, onOpenSnap
   const [open, setOpen] = useState<string | null>(highlight);
   const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState(false);
+  const readOnly = useReadOnly();
 
   useEffect(() => {
     setOpen(highlight);
@@ -87,7 +88,7 @@ export function Directory({ kind, list, tx, devices, features, snaps, onOpenSnap
         </Card>
       )}
       <Flex gap="3" align="center" wrap="wrap">
-        <Button onClick={() => setAdding(!adding)} disabled={!list}>{vendor ? 'Add vendor' : 'Add resident'}</Button>
+        {!readOnly && <Button onClick={() => setAdding(!adding)} disabled={!list}>{vendor ? 'Add vendor' : 'Add resident'}</Button>}
         <TextField.Root type="search" placeholder="Filter rows" value={filter} onChange={(e) => setFilter(e.target.value)} />
         <Button variant="soft" onClick={csv} disabled={!rows.length}>Download CSV</Button>
         <Text size="2" color="gray">
@@ -122,7 +123,7 @@ export function Directory({ kind, list, tx, devices, features, snaps, onOpenSnap
                         features={features} gapi={gapi} onDone={async () => { setEditing(false); await onReload(); }} onCancel={() => setEditing(false)} />
                     ) : (
                       <Flex direction="column" gap="2">
-                        <Box><Button size="1" variant="soft" onClick={() => setEditing(true)}>Edit</Button></Box>
+                        {!readOnly && <Box><Button size="1" variant="soft" onClick={() => setEditing(true)}>Edit</Button></Box>}
                         <RecentTransactions r={r} tx={tx} snaps={snaps} onOpenSnap={onOpenSnap} />
                       </Flex>
                     )}

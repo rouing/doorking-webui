@@ -58,6 +58,22 @@ CREATE TABLE IF NOT EXISTS gate_state (phone TEXT PRIMARY KEY, pulled_at TIMESTA
   round_trip_ok BOOLEAN NOT NULL, problems JSONB NOT NULL);
 CREATE TABLE IF NOT EXISTS gate_working (phone TEXT PRIMARY KEY, dir_digits INTEGER NOT NULL, area_code_mode INTEGER NOT NULL,
   area_codes JSONB NOT NULL, middle_pointer TEXT NOT NULL, base_ok BOOLEAN NOT NULL, saved_at TIMESTAMPTZ NOT NULL);
+CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password_hash TEXT NOT NULL, email TEXT UNIQUE,
+  dark BOOLEAN NOT NULL, must_change BOOLEAN NOT NULL, created_at TIMESTAMPTZ NOT NULL, created_by TEXT NOT NULL,
+  last_sign_in TIMESTAMPTZ, sign_ins INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, username TEXT NOT NULL REFERENCES users ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL, last_seen TIMESTAMPTZ NOT NULL, gate TEXT);
+CREATE INDEX IF NOT EXISTS sessions_username ON sessions (username);
+CREATE TABLE IF NOT EXISTS managed_gates (phone TEXT PRIMARY KEY, master_code TEXT NOT NULL, dks_user TEXT NOT NULL,
+  dks_password TEXT NOT NULL, added_by TEXT NOT NULL, added_at TIMESTAMPTZ NOT NULL);
+CREATE TABLE IF NOT EXISTS gate_access (phone TEXT NOT NULL REFERENCES managed_gates ON DELETE CASCADE,
+  username TEXT NOT NULL REFERENCES users ON DELETE CASCADE, role TEXT NOT NULL CHECK (role IN ('admin', 'readonly')),
+  granted_by TEXT NOT NULL, granted_at TIMESTAMPTZ NOT NULL, PRIMARY KEY (phone, username));
+CREATE INDEX IF NOT EXISTS gate_access_username ON gate_access (username);
+CREATE TABLE IF NOT EXISTS api_keys (id TEXT PRIMARY KEY, phone TEXT NOT NULL REFERENCES managed_gates ON DELETE CASCADE,
+  name TEXT NOT NULL, role TEXT NOT NULL CHECK (role IN ('admin', 'readonly')), secret_hash TEXT NOT NULL,
+  created_by TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ, last_used_at TIMESTAMPTZ);
+CREATE INDEX IF NOT EXISTS api_keys_phone ON api_keys (phone);
 ALTER TABLE gate_cards ADD COLUMN IF NOT EXISTS raw_code TEXT;
 ALTER TABLE gate_working ADD COLUMN IF NOT EXISTS area_codes JSONB NOT NULL DEFAULT '[]';
 ALTER TABLE gate_working ADD COLUMN IF NOT EXISTS middle_pointer TEXT NOT NULL DEFAULT 'ffffff';

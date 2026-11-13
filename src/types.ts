@@ -100,13 +100,27 @@ export interface SettingsReply {
 export interface SendPreview { changedBlocks: Record<string, number[]>; residentCounts: number[] }
 
 // GET /api/gates (master codes are never sent). siteName is '' until the user has connected to the gate.
-export interface GateInfo { phoneNumber: string; siteName: string; addedAt: string; verified: boolean }
+// admin: everything, including the gate's users and DKS login; readonly: view, pull and cameras.
+export type GateRole = 'admin' | 'readonly';
+export interface GateInfo { phoneNumber: string; siteName: string; addedAt: string; role: GateRole }
+// Someone with access to a gate (G/users, History).
+export interface GateUser { username: string; email: string; role: GateRole; grantedBy: string; grantedAt: string; lastSignIn: string | null }
+// G/api-keys: an API key of the gate (never the key itself, which is shown once when created).
+export interface ApiKeyInfo {
+  id: string; name: string; role: GateRole; createdBy: string; createdAt: string; expiresAt: string | null; lastUsedAt: string | null;
+}
+// G/login: the gate's DKS login (the password and master code are never sent back).
+export interface GateLogin { dksUser: string; dksPasswordSet: boolean }
 
+// setup: no account exists yet, so the page offers to create the first one.
 export type SessionReply =
-  | { loggedIn: false }
+  | { loggedIn: false; setup?: boolean }
   | {
     loggedIn: true;
     user: string;
+    email: string;
+    dark: boolean;
+    mustChangePassword: boolean;
     gate: GateInfo | null;
     defaults: GateConfig;
     holidayList: { name: string; month: number; day: number }[];
@@ -122,6 +136,7 @@ export interface Job {
   finishedAt?: string;
   log: string[];
   error?: string;
+  adding?: boolean; // the connection that checks a gate being added
   busyElsewhere?: boolean;
 }
 
@@ -139,9 +154,7 @@ export interface HistoryEvent {
   revertedBy: { id: string; user: string; time: string } | null;
 }
 
-export interface SignIn { user: string; last: string; count: number }
-
-export interface HistoryReply { events: HistoryEvent[]; signIns: SignIn[] }
+export interface HistoryReply { events: HistoryEvent[]; users: GateUser[] }
 
 export type ScheduleAction = 'send' | 'residents' | 'transactions' | 'snapshots';
 
@@ -165,7 +178,7 @@ export interface Schedule extends ScheduleInput {
   queued?: boolean;
 }
 
-export interface SchedulesReply { schedules: Schedule[]; passwordSaved: boolean }
+export interface SchedulesReply { schedules: Schedule[] }
 
 export interface CameraChannel { channel: number; name: string }
 

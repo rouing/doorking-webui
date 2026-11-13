@@ -44,13 +44,13 @@ app's data and can run while the server runs.
 
 ## Encryption
 
-Master codes, saved DKS passwords and camera recorder passwords are encrypted with **AES-256-GCM** using `key`.
+Master codes, gates' DKS passwords, camera recorder passwords and the gate files are encrypted with **AES-256-GCM** using the key.
 An encrypted value is stored as text: `v1:<iv>:<tag>:<ciphertext>` (base64 parts, a new random 12-byte IV each
 time). Everything else in the database is plain text.
 
 ## Tables
 
-Phone numbers are stored as digits only. User names are stored lower case where noted (DKS user names compare
+Phone numbers are stored as digits only. Usernames and emails are stored lower case (they compare
 case-insensitively). Times are `TIMESTAMPTZ`; the app reads and writes them as ISO 8601 text (UTC). JSON columns are
 `JSONB` and hold the object described. The user column is called `username` (`user` is reserved in PostgreSQL).
 
@@ -62,9 +62,70 @@ case-insensitively). Times are `TIMESTAMPTZ`; the app reads and writes them as I
 | `value` | TEXT | value |
 
 Keys: `debugLogs` (`1` = Debug logs on, `0` = off), `jsonImported` (time the pre-database JSON files were
-imported; the import code was removed 2026-11-13), `gatesVerifiedBackfill` (time gates were marked connected from history, once).
+imported; the import code was removed 2026-11-13), `gatesVerifiedBackfill` (time gates were marked connected from history, once;
+removed 2026-11-13), `localAccountsMigrated` (time the move from DKS sign-in to local accounts ran, once).
 
-### `gates`: each user's gate list (`src/gate-list.ts`)
+### `users`: local accounts (`src/users.ts`)
+
+| Column | Type | Meaning |
+|---|---|---|
+| `username` | TEXT, primary key | 3-32 letters, digits, `.`, `_`, `-`; lower case |
+| `password_hash` | TEXT | `scrypt$N$r$p$<salt>$<hash>` (base64); never the password |
+| `email` | TEXT, unique, null | lower case; optional |
+| `dark` | BOOLEAN | dark mode |
+| `must_change` | BOOLEAN | the password was set by someone else (a gate admin or the CLI): the user must choose their own |
+| `created_at`, `created_by` | TIMESTAMPTZ, TEXT | when and by whom (`setup`, `cli` or a username) |
+| `last_sign_in`, `sign_ins` | TIMESTAMPTZ null, INTEGER | last sign-in and the count |
+
+### `sessions`: sign-in sessions (`src/users.ts`)
+
+| Column | Type | Meaning |
+|---|---|---|
+| `token_hash` | TEXT, primary key | SHA-256 of the `sid` cookie's token (the token itself is not stored) |
+| `username` | TEXT | references `users` (deleted with it) |
+| `created_at`, `last_seen` | TIMESTAMPTZ | `last_seen` is written at most once a minute; idle sessions are deleted |
+| `gate` | TEXT, null | the gate the page has open |
+
+### `managed_gates`: the gates this server manages (`src/gate-list.ts`)
+
+| Column | Type | Meaning |
+|---|---|---|
+| `phone` | TEXT, primary key | gate system phone number |
+| `master_code` | TEXT | 4-digit master code, **encrypted** |
+| `dks_user` | TEXT | the gate's DKS Cloud user ('' = not set yet) |
+| `dks_password` | TEXT | its password, **encrypted** ('' = not set yet) |
+| `added_by`, `added_at` | TEXT, TIMESTAMPTZ | who added it, when |
+
+A row is added only after a successful residents pull with these values (or by the 2026-11-13 migration).
+
+### `gate_access`: who may use each gate (`src/gate-list.ts`)
+
+| Column | Type | Meaning |
+|---|---|---|
+| `phone` | TEXT | references `managed_gates` |
+| `username` | TEXT | references `users` |
+| `role` | TEXT | `admin` or `readonly` |
+| `granted_by`, `granted_at` | TEXT, TIMESTAMPTZ | who gave access, when |
+
+Primary key (`phone`, `username`); index on `username`. Changes that would leave a gate without an admin are
+refused (the gate's row is locked while admins are counted).
+
+### `api_keys`: API keys, one gate each (`src/api-keys.ts`)
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | TEXT, primary key | 12 hex digits, also part of the key (`dkg_<id>_<secret>`) |
+| `phone` | TEXT | references `managed_gates` (deleted with it) |
+| `name` | TEXT | label, e.g. "Home Assistant" |
+| `role` | TEXT | `admin` or `readonly` |
+| `secret_hash` | TEXT | SHA-256 of the whole key (hex); the key itself is never stored |
+| `created_by`, `created_at` | TEXT, TIMESTAMPTZ | the admin who created it (recorded only; the key doesn't depend on them), when |
+| `expires_at` | TIMESTAMPTZ, null | null = never |
+| `last_used_at` | TIMESTAMPTZ, null | written at most once a minute |
+
+Revoking deletes the row.
+
+### `gates`: each DKS user's gate list (until 2026-11-13; kept, no longer used)
 
 | Column | Type | Meaning |
 |---|---|---|
@@ -83,7 +144,7 @@ Primary key (`username`, `phone`); index `gates_phone` on `phone`.
 | `phone` | TEXT, primary key | gate |
 | `data` | JSONB | `{ gateConfig?, relayLabels?, deviceAssociation?, features?, tracker? }` (see `PUT /prefs` in [API.md](API.md)) |
 
-### `sign_ins`: last sign-in per user (`src/audit.ts`)
+### `sign_ins`: last sign-in per DKS user (until 2026-11-13; kept, no longer used)
 
 | Column | Type | Meaning |
 |---|---|---|
@@ -103,7 +164,9 @@ Primary key (`username`, `phone`); index `gates_phone` on `phone`.
 Index `history_phone` on (`phone`, `seq`). Rows are only added, never changed or deleted.
 The event JSON: `{ id, time, user, action, summary, result?, error?, what?, scheduled?, details?, values?, files?, prefs?,
 revertOf? }`.
-- `action`: `change`, `revert`, `note`, `pull`, `send`, `relay` or `camera`.
+- `action`: `change`, `revert`, `note`, `pull`, `send`, `relay`, `camera`, `access` (gate users), `login` (gate login) or
+  `apikey` (API key created or revoked).
+- `user`: the local username, or `api:<key name>` for API key requests (DKS user names on events before 2026-11-13).
 - `details`: `[{ key, label, change: added|removed|changed|sent, fields: [{ field, from, to }] }]` for the History page.
 - `values`: the working-copy change that Revert undoes, as values (`diffStates` in `src/gate-state.ts`): `{ residents?:
   { <directory code>: [before, after] }, cards?: { <slot>: [before, after] }, settings?: { <key>: [before, after] },
@@ -115,7 +178,7 @@ revertOf? }`.
 - `prefs`: `{ before, after }`, the preference keys the change touched.
 - `revertOf`: the id of the event a revert undid.
 
-### `credentials`: saved DKS passwords for scheduled transfers (`src/schedules.ts`)
+### `credentials`: saved DKS passwords for scheduled transfers (until 2026-11-13; kept, no longer used)
 
 | Column | Type | Meaning |
 |---|---|---|
@@ -124,8 +187,7 @@ revertOf? }`.
 | `password` | TEXT | DKS password, **encrypted** |
 | `saved_at` | TIMESTAMPTZ | when it was saved |
 
-A row is written when the user saves a scheduled transfer, updated on each later sign-in, and deleted by
-**Forget my saved password**.
+The 2026-11-13 migration copied each gate's saved login into `managed_gates`. Schedules now use the gate's DKS login.
 
 ### `schedules`: scheduled transfers (`src/schedules.ts`)
 
@@ -133,7 +195,7 @@ A row is written when the user saves a scheduled transfer, updated on each later
 |---|---|---|
 | `id` | TEXT, primary key | random 16-hex-digit id |
 | `phone` | TEXT | gate |
-| `username` | TEXT | owner: the user who last saved it (it runs with their saved password) |
+| `username` | TEXT | who last saved it ("Saved by"); entries run with the gate's DKS login |
 | `data` | JSONB | `{ days: [0-6, Sun = 0], time: "HH:MM", actions: ["send"\|"residents"\|"transactions"\|"snapshots"], enabled }` |
 | `created_at` | TIMESTAMPTZ | when it was created |
 | `last_due` | TIMESTAMPTZ, null | the last scheduled time it was queued for (also set on save, so a new entry waits for its next time) |
@@ -240,10 +302,10 @@ from the pull when the directory rebuilt exactly, as edits do.
 ## Deleting a gate's data
 
 **System Settings → Delete stored gate data** (`POST /api/gates/{phone}/delete-data`) runs `deleteGateData` in
-`src/gate-list.ts`: in one transaction it deletes the gate's rows from `gates` (every user), `prefs`, `history`,
-`schedules`, `cameras`, `snapshots`, `notes`, `tx_history`, `gate_files`, `gate_residents`, `gate_cards`,
-`gate_settings` and `gate_state`. The server then deletes `media/<phone>/` (camera pictures).
-`meta`, `sign_ins` and `credentials` are not about one gate and are kept.
+`src/gate-list.ts`: in one transaction it deletes the gate's rows from `gate_access`, `api_keys`, `managed_gates`, `gates`,
+`prefs`, `history`, `schedules`, `cameras`, `snapshots`, `notes`, `tx_history`, `gate_files`, `gate_residents`,
+`gate_cards`, `gate_settings`, `gate_state` and `gate_working`, and closes it in open sessions. The server then
+deletes `media/<phone>/` (camera pictures). Accounts and `meta` are not about one gate and are kept.
 
 ## Schema changes
 

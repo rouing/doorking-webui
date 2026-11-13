@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Callout, Flex, Spinner, Theme } from '@radix-ui/themes';
 import type { SessionReply } from '../../src/types.ts';
 import { api, errorText, lsGet, lsSet, onSignedOut } from './api.ts';
+import { FirstSetup, ForcedPasswordChange } from './Account.tsx';
 import { Login } from './Login.tsx';
 import { Gates } from './Gates.tsx';
 import { GateApp } from './GateApp.tsx';
@@ -9,23 +10,28 @@ import { UpdateNotice } from './UpdateNotice.tsx';
 
 export type SignedIn = Extract<SessionReply, { loggedIn: true }>;
 
-// Sign-in, then the gate list, then the open gate. The open gate is kept in the server session, so a reload
-// opens the same gate.
+// First-account setup, sign-in, a forced password change, then the gate list, then the open gate. The open gate is
+// kept in the server session, so a reload opens the same gate. Dark mode is an account setting; this browser
+// remembers the last one for the sign-in page.
 export function App() {
-  const [dark, setDark] = useState(() => lsGet('dk-theme', false));
   const [session, setSession] = useState<SessionReply | null>(null);
   const [error, setError] = useState('');
 
   const reload = useCallback(async () => {
-    try { setSession(await api<SessionReply>('GET', '/api/session')); setError(''); } catch (e) { setError(errorText(e)); }
+    try {
+      const s = await api<SessionReply>('GET', '/api/session');
+      if (s.loggedIn) lsSet('dk-theme', s.dark);
+      setSession(s);
+      setError('');
+    } catch (e) { setError(errorText(e)); }
   }, []);
 
   useEffect(() => {
-    onSignedOut(() => setSession({ loggedIn: false }));
+    onSignedOut(() => { reload(); });
     reload();
   }, [reload]);
 
-  const toggleDark = () => { lsSet('dk-theme', !dark); setDark(!dark); };
+  const dark = session && session.loggedIn ? session.dark : lsGet('dk-theme', false);
 
   let page;
   if (error && !session) {
@@ -33,12 +39,13 @@ export function App() {
   } else if (!session) {
     page = <Flex justify="center" p="9"><Spinner size="3" /></Flex>;
   } else if (!session.loggedIn) {
-    page = <Login onSignedIn={reload} />;
+    page = session.setup ? <FirstSetup onDone={reload} /> : <Login onSignedIn={reload} />;
+  } else if (session.mustChangePassword) {
+    page = <ForcedPasswordChange user={session.user} onDone={reload} />;
   } else if (!session.gate) {
     page = <Gates session={session} onChange={reload} />;
   } else {
-    page = <GateApp key={session.gate.phoneNumber} session={session} gate={session.gate} onChange={reload}
-      dark={dark} onToggleDark={toggleDark} />;
+    page = <GateApp key={session.gate.phoneNumber} session={session} gate={session.gate} onChange={reload} />;
   }
   return <Theme appearance={dark ? 'dark' : 'light'} accentColor="blue" radius="medium">{page}<UpdateNotice /></Theme>;
 }

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Badge, Button, Callout, Flex, Link, Separator, Text } from '@radix-ui/themes';
 import type { CameraSettings, DataReply, GateInfo, GatePrefs, Job, ResidentRow, ResidentsReply, TransactionRow } from '../../src/types.ts';
-import { api, errorText, gateApi } from './api.ts';
+import { api, errorText, gateApi, ReadOnlyContext } from './api.ts';
+import { UserSettings } from './Account.tsx';
 import { DEFAULT_DEVICES, featuresOf, trackerOf, trackerRelays } from './format.ts';
 import { LiveView } from './camera/LiveView.tsx';
 import { SnapViewer } from './camera/SnapViews.tsx';
 import { useSnapshots } from './camera/snapshots.ts';
 import { useConfirm } from './Confirm.tsx';
-import { gateLabel } from './Gates.tsx';
+import { gateLabel, roleLabel } from './Gates.tsx';
 import { JOB_COLORS, JobDock, jobLabel, type DockState } from './JobDock.tsx';
 import { Directory } from './panes/Directory.tsx';
 import { History } from './panes/History.tsx';
@@ -31,18 +32,20 @@ const NAV = [
 const PINNED_NAV = [
   { key: 'history', label: 'History' }, { key: 'schedules', label: 'Scheduled Transfers' }, { key: 'prefs', label: 'System Settings' },
 ] as const;
-type NavKey = Extract<(typeof NAV)[number], { key: string }>['key'] | (typeof PINNED_NAV)[number]['key'];
+type NavKey = Extract<(typeof NAV)[number], { key: string }>['key'] | (typeof PINNED_NAV)[number]['key'] | 'user';
+// Pages that only edit gate settings: shown with every control disabled for read-only users.
+const EDIT_PAGES: NavKey[] = ['display', 'relays', 'holdOpen', 'holidays', 'security', 'facility', 'elevator', 'relayElevator', 'apb', 'schedules'];
 
 const PULL_WARNING = {
   residents: 'This refreshes the working copy with the gate\'s current data. If you have unsaved resident edits they are kept (use "Reset to gate" to discard them).',
   transactions: '',
 };
 
-// The open gate: sidebar navigation and gate connection, and the page for the chosen item.
-export function GateApp({ session, gate, onChange, dark, onToggleDark }: {
-  session: SignedIn; gate: GateInfo; onChange: () => void; dark: boolean; onToggleDark: () => void;
-}) {
+// The open gate: sidebar navigation and gate connection, and the page for the chosen item. Read-only users see
+// every page but can't change anything (they can pull and use the cameras).
+export function GateApp({ session, gate, onChange }: { session: SignedIn; gate: GateInfo; onChange: () => void }) {
   const gapi = useMemo(() => gateApi(gate.phoneNumber), [gate.phoneNumber]);
+  const readOnly = gate.role !== 'admin';
   const [nav, setNav] = useState<NavKey>('residents');
   const [highlight, setHighlight] = useState<string | null>(null);
   const [data, setData] = useState<DataReply | null>(null);
@@ -107,10 +110,9 @@ export function GateApp({ session, gate, onChange, dark, onToggleDark }: {
       if (!first && j.state === 'done') {
         setNav(j.what === 'transactions' ? 'transactions' : 'residents');
         loadData();
-        if (!gate.verified) onChange();
       }
     }
-  }, [gapi, loadData, gate.verified, onChange]);
+  }, [gapi, loadData]);
 
   useEffect(() => {
     loadData();
@@ -149,7 +151,9 @@ export function GateApp({ session, gate, onChange, dark, onToggleDark }: {
     page = <Schedules gapi={gapi} video={snaps.video} />;
   } else if (nav === 'prefs') {
     page = <SystemSettings phone={gate.phoneNumber} gapi={gapi} prefs={prefs} defaults={session.defaults} list={residents}
-      cameras={cameras} dark={dark} onToggleDark={onToggleDark} onReload={loadData} onSessionChange={onChange} onJobStarted={jobStarted} />;
+      cameras={cameras} user={session.user} onReload={loadData} onSessionChange={onChange} onJobStarted={jobStarted} />;
+  } else if (nav === 'user') {
+    page = <UserSettings user={session.user} email={session.email} dark={session.dark} onSaved={onChange} />;
   } else if (nav === 'relays') {
     page = <RelaysPage gapi={gapi} prefs={prefs} onReload={loadData} onJobStarted={jobStarted} />;
   } else if (nav === 'display') {
@@ -200,21 +204,23 @@ export function GateApp({ session, gate, onChange, dark, onToggleDark }: {
             {dock === 'closed' && job && job.log.length > 0 && <Link href="#" size="1" style={{ textAlign: 'center' }} onClick={(e) => { e.preventDefault(); setDock('open'); }}>Show progress</Link>}
           </Flex>
           <Separator size="4" />
-          <Text size="1" color="gray">{session.user}</Text>
+          <Text size="1" color="gray">{session.user} · {roleLabel(gate.role)}</Text>
           <Flex gap="2" wrap="wrap">
+            <Button size="1" variant={nav === 'user' ? 'solid' : 'soft'} color="gray" onClick={() => go('user')}>User settings</Button>
             <Button size="1" variant="soft" color="gray" onClick={signOut}>Sign out</Button>
-            <Button size="1" variant="soft" color="gray" onClick={onToggleDark}>{dark ? 'Light mode' : 'Dark mode'}</Button>
           </Flex>
         </Flex>
       </aside>
       <main className="content">
-        {!gate.verified && (
-          <Callout.Root color="amber" mb="4">
-            <Callout.Text>Not connected yet: pull residents or transactions to open this gate's saved data.</Callout.Text>
+        {readOnly && nav !== 'user' && (
+          <Callout.Root color="gray" mb="4">
+            <Callout.Text>Read only: you can look at everything, pull from the gate and use the cameras. Ask a gate admin to make changes.</Callout.Text>
           </Callout.Root>
         )}
         {error && <Callout.Root color="red" mb="4"><Callout.Text>{error}</Callout.Text></Callout.Root>}
-        {page}
+        <ReadOnlyContext.Provider value={readOnly}>
+          {readOnly && EDIT_PAGES.includes(nav) ? <fieldset disabled className="readonly-page">{page}</fieldset> : page}
+        </ReadOnlyContext.Provider>
       </main>
       <JobDock job={job} state={dock} onState={setDock} />
       <SnapViewer t={viewing} snaps={snaps} onClose={() => setViewing(null)} />

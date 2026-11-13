@@ -24,6 +24,12 @@ DKS Cloud (read-only; credentials from DKS_USER / DKS_PASSWORD, URL from DKS_URL
                                     Start a session, read from the gate, download the files
                                     (master code from DKS_MASTER_CODE, system phone from --phone or DKS_PHONE)
 
+Accounts (for whoever runs the server; uses config.json's database; the password is asked for, not typed on the
+command line):
+  create-admin <username>           Create an account that becomes admin of every gate without an admin
+  reset-password <username>         Set a temporary password (the user must choose a new one at sign-in)
+  grant <username> <gate phone> <admin|readonly>   Give an account access to a gate (or change its role)
+
 Web UI and REST API: node web/server.ts [--config config.json] [--check-config] [--port 8080] [--public-host <name>]
                            [--media media] [--logs logs]
                            [--site-name <tag>] [--memory 1000|2000|3000] [--area-codes "255 Area Codes"|"10 Area Codes"]
@@ -64,7 +70,88 @@ function credentials(): [string, string] {
   return [DKS_USER, DKS_PASSWORD];
 }
 
+// The server's database (config.json).
+async function openDatabase(): Promise<dk.Store> {
+  const cfg = dk.loadConfig({ args: process.argv.slice(2).filter((a, i, all) => a === '--config' || all[i - 1] === '--config') });
+  return dk.openStore({ connection: dk.connectionSettings(cfg.database), keyFile: cfg.paths.keyFile, poolSize: 1 });
+}
+
+// Reads a line from the terminal without showing it (or from standard input when that is not a terminal).
+function askHidden(prompt: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const input = process.stdin;
+    if (!input.isTTY) {
+      let data = '';
+      input.setEncoding('utf8');
+      input.on('data', (c) => { data += c; });
+      input.on('end', () => resolve(data.split(/\r?\n/)[0]));
+      input.on('error', reject);
+      return;
+    }
+    process.stderr.write(prompt);
+    input.setRawMode(true);
+    input.setEncoding('utf8');
+    let text = '';
+    const done = (value: string | null) => {
+      input.setRawMode(false);
+      input.pause();
+      input.removeListener('data', onData);
+      process.stderr.write('\n');
+      if (value === null) reject(new Error('Cancelled')); else resolve(value);
+    };
+    const onData = (chunk: string) => {
+      for (const ch of chunk) {
+        if (ch === '\r' || ch === '\n') return done(text);
+        if (ch === '\u0003') return done(null);
+        if (ch === '\u007f' || ch === '\b') text = text.slice(0, -1);
+        else text += ch;
+      }
+    };
+    input.on('data', onData);
+    input.resume();
+  });
+}
+
+// A new password, asked twice on a terminal.
+async function newPassword(): Promise<string> {
+  const pw = await askHidden(`New password (at least ${dk.PASSWORD_MIN} characters): `);
+  dk.checkPassword(pw);
+  if (process.stdin.isTTY && await askHidden('Again: ') !== pw) throw new Error('The two passwords differ');
+  return pw;
+}
+
+async function withDatabase(fn: (store: dk.Store) => Promise<void>): Promise<void> {
+  const store = await openDatabase();
+  try { await fn(store); } finally { await dk.closeStore(store); }
+}
+
 const COMMANDS: Record<string, (positional: string[], args: string[]) => void | Promise<void>> = {
+  'create-admin': ([username]) => withDatabase(async (store) => {
+    if (!username) throw new Error('Usage: create-admin <username>');
+    dk.checkUsername(username);
+    if (await dk.getUser(store, username)) throw new Error(`The username "${dk.userKey(username)}" already exists`);
+    const u = await dk.createUser(store, { username, password: await newPassword(), createdBy: 'cli', mustChangePassword: false });
+    const gates = await dk.adoptAdminlessGates(store, u.username);
+    console.error(`Created ${u.username}; admin of ${gates.length} gate(s)${gates.length ? `: ${gates.join(', ')}` : ''}`);
+  }),
+
+  'reset-password': ([username]) => withDatabase(async (store) => {
+    if (!username) throw new Error('Usage: reset-password <username>');
+    const u = await dk.getUser(store, username);
+    if (!u) throw new Error(`There is no user "${dk.userKey(username)}"`);
+    await dk.setPassword(store, u.username, await newPassword(), { mustChange: true });
+    console.error(`Password of ${u.username} reset; they must choose a new one at their next sign-in. Their sessions were ended.`);
+  }),
+
+  grant: ([username, phone, role]) => withDatabase(async (store) => {
+    if (!username || !phone || !role) throw new Error('Usage: grant <username> <gate phone> <admin|readonly>');
+    const r = dk.checkRole(role);
+    if (!await dk.getGate(store, phone)) throw new Error(`Gate ${phone} is not managed here`);
+    if (await dk.accessOf(store, phone, username)) await dk.setRole(store, phone, username, r);
+    else await dk.grantAccess(store, phone, username, r, 'cli');
+    console.error(`${dk.userKey(username)} is now ${r} of gate ${dk.checkPhone(phone)}`);
+  }),
+
   transactions: ([file], args) => output(toCsv([
     ['Timestamp', 'timestamp'], ['Date', 'date'], ['Time', 'time'], ['Type', 'type'],
     ['Code / Card', 'code'], ['Name', 'name'], ['Result', 'result'], ['Relay', 'relay'],
@@ -162,7 +249,7 @@ const COMMANDS: Record<string, (positional: string[], args: string[]) => void | 
 async function main() {
   const args = process.argv.slice(2);
   const [command, ...rest] = args;
-  const positional = rest.filter((a, i) => a !== '--out' && rest[i - 1] !== '--out');
+  const positional = rest.filter((a, i) => !['--out', '--config'].includes(a) && !['--out', '--config'].includes(rest[i - 1]));
   if (!COMMANDS[command]) {
     console.error(USAGE);
     process.exit(command ? 1 : 0);

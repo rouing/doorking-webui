@@ -4,8 +4,8 @@ DoorKing Gate Manager lets you look after your DoorKing telephone-entry gates fr
 the old DoorKing32 program ("DoorKing Account Manager"): you can see and change residents, vendors, entry codes,
 cards and gate settings, read the list of who came and went, and open or hold the gate.
 
-It talks to your gates through **DKS Cloud**, DoorKing's online service, using the same user name and password you
-used in DoorKing32.
+It talks to your gates through **DKS Cloud**, DoorKing's online service. You sign in to this app with your own
+account; each gate's DKS Cloud login is saved once by its gate admin and used for everyone.
 
 > **Only two things change the real gate straight away:** **Send to gate**, and the buttons under **Live relay
 > control** on the Relays page. Everything else is a change on this computer only, until you send it.
@@ -15,7 +15,7 @@ Throughout the app, a small **?** next to a setting explains it in more detail: 
 ## Contents
 1. [Quick start](#1-quick-start)
 2. [Signing in](#2-signing-in)
-3. [Your gates](#3-your-gates)
+3. [Your gates](#3-your-gates) (also gate users, roles and User Settings)
 4. [How changes reach the gate](#4-how-changes-reach-the-gate)
 5. [Getting data from the gate and sending changes](#5-getting-data-from-the-gate-and-sending-changes)
 6. [Residents and vendors](#6-residents-and-vendors)
@@ -30,34 +30,64 @@ Throughout the app, a small **?** next to a setting explains it in more detail: 
 
 ## 1. Quick start
 
-1. **Sign in** with your DKS Cloud user name and password.
-2. **Add a gate**: type its system phone number and 4-digit master code, then click **Open**.
-3. Go to **System Settings → Gate configuration** and make the choices match how the gate is set up (ask your
-   installer if you're unsure). Click **Save gate configuration**.
-4. Click **Pull residents** (bottom of the left-hand menu) and wait for it to finish. Then click **Pull transactions**.
-5. Make your changes, for example add a resident.
-6. Click **Send to gate** to put your changes on the gate.
+1. **Sign in** with the username and password a gate admin gave you. The first time, choose your own password.
+2. Your gates are listed. **Open** one. (To add a new gate, see [Your gates](#3-your-gates).)
+3. Click **Pull transactions** (bottom of the left-hand menu) to fetch the latest visits.
+4. Make your changes, for example add a resident (gate admins only).
+5. Click **Send to gate** to put your changes on the gate.
 
 ## 2. Signing in
 
 Open the app in your browser at the address you were given (for example **https://gate.yourdomain.com**, or
-**http://localhost:8080** on the computer it is installed on) and sign in with your **DKS Cloud** user name and
-password.
-- **Remember user** keeps only your user name in this browser, never your password.
-- You are signed out after **30 minutes** without activity, or when you click **Sign out** (under your name at the
-  bottom of the left-hand menu).
-- After 5 wrong passwords in a row, sign-in for that user name is paused for 15 minutes. This protects your DKS
-  account from being locked by someone guessing.
+**http://localhost:8080** on the computer it is installed on) and sign in with your **username and password**.
+- Accounts are created by gate admins (see [Gate users and roles](#gate-users-and-roles)). There is no sign-up page.
+- **The first time** you sign in with a password someone else set, the app asks you to choose your own (at least
+  12 characters). Nobody else can see or change it.
+- **Remember user** keeps only your username in this browser, never your password.
+- You are signed out after **30 minutes** without activity, or when you click **Sign out**.
+- After 5 wrong passwords in a row, sign-in for that username is paused for 15 minutes.
+- **Forgot your password?** Ask the person who runs the server; they can set a temporary one for you. (Recovery by
+  email is planned.)
+- **Brand-new installation:** the very first visit asks to create the first account. It needs a **setup code** that
+  the server prints in its log when it starts, so only the person running the server can do it. That first account
+  becomes the admin of every gate already on the server.
 
 ## 3. Your gates
 
-After signing in you see **your gate list**. Each person's list is their own.
-- **Add a gate:** the gate's system phone number and its 4-digit master code. The master code is checked the first
-  time you pull from the gate. It is kept secret and never shown again.
+After signing in you see **your gates**: the gates you have access to, each marked **Admin** or **Read only**.
 - **Open** a gate to work on it. **All gates** (top of the left-hand menu) takes you back to the list.
-- **Remove** takes a gate off your list only. Nothing else is deleted.
-- **"Not connected yet"** means you added the gate but haven't pulled from it yet. Its saved information stays hidden
-  until your first successful pull with the right master code.
+- **Leave** takes you off a gate. Its data stays for its other users. (A gate's last admin can't leave.)
+- **Add a gate:** its system phone number, 4-digit master code, the **DKS user and password** that manage it, and
+  its **gate configuration** (site name, memory, area codes, model, anti-passback, interface 1816; they must match
+  the gate, ask your installer if unsure). The app checks the DKS login, then pulls the residents with these
+  details. Only when that works is the gate added, with **you as its admin**. If something doesn't match, the
+  message says what, and nothing is saved.
+- If the gate is **already managed here**, you get a message to ask one of its gate admins to add you.
+
+### Gate users and roles
+
+Each person has one of two roles on each gate:
+
+| Role | Can |
+|---|---|
+| **Admin** | everything: residents, settings, Send to gate, relays, schedules, cameras, the gate's login and its users |
+| **Read only** | look at everything, pull from the gate, see camera pictures and the live view; can't change anything |
+
+Gate admins manage people under **System Settings → Gate users**:
+- **Create an account for this gate:** username, a temporary password (12+ characters), optional email, and the
+  role. Give the person their username and temporary password; they choose their own at their first sign-in.
+- If the username **already exists**, the app says so and offers **Share this gate with them instead**.
+- **Share with an existing account:** type their username and pick the role. This is how one person gets access to
+  several gates, each with its own role.
+- Change someone's **role**, or **Remove** them from the gate (their account stays).
+- A gate always keeps **at least one admin**. Make someone else an admin before stepping down.
+- Admins can't see or change anyone's password.
+
+### User Settings
+
+**User settings** (on the gate list, or under your name at the bottom of the left-hand menu) holds your own settings,
+which follow you to any browser: **Dark mode**, your **email** (optional; each email belongs to one account only) and
+**changing your password** (asks for your current one, and signs you out everywhere else).
 
 ## 4. How changes reach the gate
 
@@ -190,8 +220,8 @@ only affects cards with security levels 2–27.
 ## 9. History
 
 **History** (bottom of the left-hand menu) shows everything done to this gate, newest first, with who did it and when:
-pulls, sends, relay buttons, changes to residents and settings, notes and camera settings. It also shows when each
-person last signed in.
+pulls, sends, relay buttons, changes to residents and settings, notes, camera settings, the gate's login and its users.
+It also lists the gate's users and when each last signed in.
 - Click an entry to see exactly what changed (before and after).
 - **Revert** undoes a change in your working copy; it reaches the gate the next time you send. If a later change
   touched the same thing, revert that one first. Pulls, sends and relay buttons can't be reverted.
@@ -201,12 +231,34 @@ person last signed in.
 **Scheduled Transfers** lets the app do jobs on its own, for example fetching transactions every night.
 - Choose the days, a time (24-hour clock) and what to do: **Send working copy to gate**, **Pull residents**, **Pull
   transactions** and/or **Get camera snapshots**. Send is skipped when there's nothing to send.
-- Saving a schedule stores **your DKS password** (kept secret) so the app can connect while nobody is signed in.
-  **Forget my saved password** removes it; your schedules then stop working until you save one again.
+- Schedules use the gate's DKS login (**System Settings → Gate login**), so they keep working whoever saved them.
 - **Run now** does the job straight away. **Edit** and **Delete** change or remove it.
 - The app must be running at the scheduled time. Each schedule shows how its last run went.
 
 ## 11. System Settings
+
+Read-only users see the gate configuration and settings here, greyed out. Everything else on this page is for gate
+admins.
+
+### Gate login
+The **DKS user and password** and the **master code** this gate's pulls, sends, relay buttons and schedules use, for
+everyone. Leave the password or master code empty to keep the saved one. A new DKS login is checked with DKS Cloud
+before it's saved; a new master code is checked by pulling the residents with it, and saved only when that works.
+None of them is ever shown again.
+
+### Gate users
+See [Gate users and roles](#gate-users-and-roles).
+
+### API keys
+For connecting other systems or scripts (for example home automation) to this gate without a username and password.
+- **Create API key:** give it a name (such as "Home Assistant"), a role (**Read only**: look and pull; **Admin**:
+  also make changes and send) and when it expires (never, 30 or 90 days, or 1 year). The key is shown **once**:
+  copy it straight away and keep it like a password.
+- A key belongs to the gate, not to you: it keeps working if you leave. It only works on this gate, and it can never
+  change the gate login, users or API keys, or delete the gate's data.
+- The list shows when each key was last used. **Revoke** stops a key at once.
+- Whoever sets up the other system needs the key and the address shown on the card; details are in the API guide
+  (`docs/API.md`).
 
 ### Gate configuration
 These settings tell DKS Cloud what kind of gate it is talking to, so they **must match how the gate is set up**:
@@ -232,12 +284,9 @@ See [Cameras](#12-cameras).
 Leave this off unless someone supporting the app asks you to turn it on. It records detailed information to help
 them find a problem. Turn it off again afterwards.
 
-### Appearance
-Dark mode, for this browser only.
-
 ### Delete stored gate data
-Deletes **everything this app has stored about the gate**, for everyone on this computer: the gate in every
-person's gate list, settings, notes, transaction history, History, schedules, camera settings and pictures, and any
+Deletes **everything this app has stored about the gate**, for everyone on this computer: the gate itself and
+everyone's access to it (with its DKS login and master code), settings, notes, transaction history, History, schedules, camera settings and pictures, and any
 changes not yet sent. It asks first and **can't be undone**. Nothing on the gate itself changes. Use it only when
 the gate is no longer managed here.
 
@@ -268,6 +317,9 @@ same ones as in the DMSS or SmartPSS app), and the camera channels to use. Click
 | **Pull** | fetch information from the gate |
 | **Send** | put your changes on the gate |
 | **Working copy** | your changes, kept on this computer until you send them |
+| **Gate admin** | someone with the Admin role on a gate: can change it and manage its users |
+| **DKS login** | the DKS Cloud user and password that manage a gate, saved once per gate by its admin |
+| **API key** | a secret that lets another system use one gate, with its own role, without signing in |
 | **Directory code** | the number a visitor enters on the gate's keypad to call a resident |
 | **Entry code** | a private code a resident types to open the gate themselves |
 | **Card / remote** | a card or transmitter that opens the gate; each has a number |
@@ -283,11 +335,15 @@ same ones as in the DMSS or SmartPSS app), and the camera channels to use. Click
 
 | Message or problem | What to do |
 |---|---|
-| "Login refused" | Check your DKS Cloud user name and password. |
+| "Wrong username or password" | Check them. If you've forgotten your password, ask the person who runs the server for a temporary one. |
+| "Choose a new password first" | Your password was set by someone else; choose your own on the page shown. |
+| "Only a gate admin can do this" | Your access to this gate is read only. Ask a gate admin. |
+| "This gate is already managed here" | Ask one of the gate's admins to add you to it. |
+| "DKS Cloud refused that DKS user and password" | The gate's DKS login is wrong. Check it (gate admins: **System Settings → Gate login**). |
+| "This gate has no DKS login yet" | A gate admin needs to set it under **System Settings → Gate login**. |
 | "Too many failed sign-ins" | Wait 15 minutes, then try again. |
 | A pull fails with "… Mismatch" | A Gate configuration setting doesn't match the gate. Fix the one named. |
 | "A gate connection is already running" | Someone (or a schedule) is talking to a gate. Wait and try again. |
-| "Not connected yet" | Pull residents or transactions once, with the correct master code. |
 | Send to gate won't work | Read the red message: usually duplicates on the Residents page, or a newer pull (click **Reset to gate**). |
 | Save is greyed out on the Relays page | Two tones use the same digit; change one of the red boxes. |
 | "This change can't be stored as gate values" | The app couldn't record that change safely, so nothing was saved. Tell the person who supports the app what you changed. |

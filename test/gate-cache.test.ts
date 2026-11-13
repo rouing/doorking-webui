@@ -84,6 +84,9 @@ function withStore(fn) {
   });
 }
 const T1 = '2026-01-01T08:00:00.000Z';
+const PW = 'correct horse battery';
+const NEW_PW = 'another long secret';
+const GATE_A = { phoneNumber: '5550100', masterCode: '1234', dksUser: 'dksuser', dksPassword: 'dks-secret' };
 const T2 = '2026-01-02T08:00:00.000Z';
 
 // A small but realistic set of board files: settings blank as on a real gate (display text spaces, security relay
@@ -408,49 +411,52 @@ test('checkPull records the round-trip check of a pull', withStore(async (store)
   assert.deepStrictEqual([(await dk.getGateState(store, PHONE)).pulledAt, (await dk.getGateState(store, PHONE)).roundTripOk], [T2, false]);
 }));
 
-test('deleteGateData removes every row about one gate, for every user, and nothing else', withStore(async (store) => {
-  await dk.addGate(store, 'u1', { phoneNumber: '5550100', masterCode: '1234' });
-  await dk.addGate(store, 'u2', { phoneNumber: '5550100', masterCode: '9999' });
-  await dk.addGate(store, 'u1', { phoneNumber: '5550111', masterCode: '1234' });
+test('deleteGateData removes every row about one gate, all access to it, and nothing else', withStore(async (store) => {
+  await dk.createUser(store, { username: 'user1', password: PW, createdBy: 't' });
+  await dk.createUser(store, { username: 'user2', password: PW, createdBy: 't' });
+  await dk.registerGate(store, GATE_A, 'user1');
+  await dk.registerGate(store, { ...GATE_A, phoneNumber: '5550111' }, 'user1');
+  await dk.grantAccess(store, '5550100', 'user2', 'readonly', 'user1');
+  const tok = await dk.createSession(store, 'user2');
+  const sess = await dk.findSession(store, tok, 60000);
+  await dk.setSessionGate(store, sess.tokenHash, '5550100');
   await dk.setPrefs(store, '5550100', { relayLabels: { 0: 'Gate' } });
   await dk.setPrefs(store, '5550111', { relayLabels: { 0: 'Other' } });
-  await dk.setNote(store, '5550100', '101', 'note', 'u1');
-  await dk.addEvent(store, '5550100', { user: 'u1', action: 'pull', summary: 'Pulled residents' });
+  await dk.setNote(store, '5550100', '101', 'note', 'user1');
+  await dk.addEvent(store, '5550100', { user: 'user1', action: 'pull', summary: 'Pulled residents' });
   const removed = await dk.deleteGateData(store, '555-0100');
-  assert.deepStrictEqual([removed.gates, removed.prefs, removed.notes, removed.history], [2, 1, 1, 1]);
-  assert.deepStrictEqual(await dk.listGates(store, 'u2'), []);
-  assert.deepStrictEqual((await dk.listGates(store, 'u1')).map((g) => g.phoneNumber), ['5550111']);
+  assert.deepStrictEqual([removed.managed_gates, removed.gate_access, removed.prefs, removed.notes, removed.history], [1, 2, 1, 1, 1]);
+  assert.deepStrictEqual(await dk.userGates(store, 'user2'), []);
+  assert.deepStrictEqual((await dk.userGates(store, 'user1')).map((g) => g.phoneNumber), ['5550111']);
+  assert.strictEqual((await dk.findSession(store, tok, 60000)).gate, null);
   assert.deepStrictEqual(await dk.getPrefs(store, '5550100'), {});
   assert.strictEqual((await dk.getPrefs(store, '5550111')).relayLabels['0'], 'Other');
   await assert.rejects(() => dk.deleteGateData(store, ''), /phone number required/);
 }));
 
 test('history lists newest first, hides patches and marks reverted events', withStore(async (store) => {
-  const a = await dk.addEvent(store, '555-0100', { user: 'u1', action: 'change', summary: 'first', files: { 'names.bin': { runs: [] } } });
-  await dk.addEvent(store, '5550100', { user: 'u2', action: 'pull', summary: 'Pulled residents', result: 'done' });
-  await dk.addEvent(store, '5550100', { user: 'u2', action: 'revert', revertOf: a.id, summary: 'Reverted: first', files: { 'names.bin': { runs: [] } } });
+  const a = await dk.addEvent(store, '555-0100', { user: 'user1', action: 'change', summary: 'first', files: { 'names.bin': { runs: [] } } });
+  await dk.addEvent(store, '5550100', { user: 'user2', action: 'pull', summary: 'Pulled residents', result: 'done' });
+  await dk.addEvent(store, '5550100', { user: 'user2', action: 'revert', revertOf: a.id, summary: 'Reverted: first', files: { 'names.bin': { runs: [] } } });
   await dk.addEvent(store, '5550199', { user: 'u3', action: 'pull', summary: 'other gate' });
   const list = await dk.listHistory(store, '5550100');
   assert.deepStrictEqual(list.map((e) => e.summary), ['Reverted: first', 'Pulled residents', 'first']);
   assert.ok(list.every((e) => !('files' in e)));
   assert.strictEqual(list[2].revertible, false);
-  assert.strictEqual(list[2].revertedBy.user, 'u2');
+  assert.strictEqual(list[2].revertedBy.user, 'user2');
   assert.strictEqual(list[0].revertible, true);
   assert.strictEqual(list[1].revertible, false);
   assert.ok((await dk.readHistory(store, '5550100'))[0].files);
-  await dk.recordSignIn(store, 'u1');
-  await dk.recordSignIn(store, 'u1');
-  assert.deepStrictEqual((await dk.signIns(store)).map((u) => [u.user, u.count]), [['u1', 2]]);
 }));
 
 test('resident notes are kept per gate and directory code, ignoring leading zeros', withStore(async (store) => {
-  assert.strictEqual(await dk.setNote(store, '555-0100', '701', '  Gate code given to the cleaner  ', 'u1'), 'Gate code given to the cleaner');
+  assert.strictEqual(await dk.setNote(store, '555-0100', '701', '  Gate code given to the cleaner  ', 'user1'), 'Gate code given to the cleaner');
   assert.strictEqual(await dk.getNote(store, '5550100', '0701'), 'Gate code given to the cleaner');
   assert.deepStrictEqual(await dk.getNotes(store, '5550100'), { 701: 'Gate code given to the cleaner' });
   assert.deepStrictEqual(await dk.getNotes(store, '5550199'), {});
   assert.strictEqual(dk.noteKey('000'), '0');
-  await assert.rejects(() => dk.setNote(store, '5550100', '701', 'x'.repeat(dk.NOTE_MAX + 1), 'u1'), /at most 500/);
-  assert.strictEqual(await dk.setNote(store, '5550100', '0701', ' ', 'u1'), '');
+  await assert.rejects(() => dk.setNote(store, '5550100', '701', 'x'.repeat(dk.NOTE_MAX + 1), 'user1'), /at most 500/);
+  assert.strictEqual(await dk.setNote(store, '5550100', '0701', ' ', 'user1'), '');
   assert.deepStrictEqual(await dk.getNotes(store, '5550100'), {});
 }));
 
@@ -470,50 +476,160 @@ test('transaction history keeps events that leave the gate buffer and adds only 
   assert.strictEqual(await dk.txHistoryCount(store, '5550199'), 0);
 }));
 
-test('database encrypts master codes and passwords, and keeps prefs per gate', withStore(async (store) => {
+test('database encrypts master codes and DKS logins, and keeps prefs per gate', withStore(async (store) => {
   assert.strictEqual(dk.decrypt(store, dk.encrypt(store, 'secret')), 'secret');
   assert.notStrictEqual(dk.encrypt(store, 'secret'), dk.encrypt(store, 'secret'));
-  await dk.addGate(store, 'User', { phoneNumber: '555-0100', masterCode: '1234' });
-  assert.deepStrictEqual((await dk.findGate(store, 'user', '5550100')).masterCode, '1234');
-  const raw = (await store.db.query('SELECT master_code FROM gates')).rows[0].master_code;
-  assert.ok(!raw.includes('1234'));
-  await assert.rejects(() => dk.removeGate(store, 'user', '5550199'), /not in your list/);
-  assert.deepStrictEqual(await dk.removeGate(store, 'USER', '5550100'), []);
+  await dk.createUser(store, { username: 'user1', password: PW, createdBy: 't' });
+  await dk.registerGate(store, { ...GATE_A, phoneNumber: '555-0100' }, 'USER1');
+  const g = await dk.getGate(store, '5550100');
+  assert.deepStrictEqual([g.masterCode, g.dksUser, g.dksPassword, g.addedBy], ['1234', 'dksuser', 'dks-secret', 'user1']);
+  const raw = (await store.db.query('SELECT master_code, dks_password FROM managed_gates')).rows[0];
+  assert.ok(!raw.master_code.includes('1234') && !raw.dks_password.includes('dks-secret'));
   await dk.setPrefs(store, '555-0100', { relayLabels: { 0: 'Gate' } });
   await dk.setPrefs(store, '5550100', { gateConfig: { siteName: 'A' } });
   assert.deepStrictEqual(await dk.getPrefs(store, '5550100'), { relayLabels: { 0: 'Gate' }, gateConfig: { siteName: 'A' } });
   assert.deepStrictEqual(await dk.setPrefs(store, '5550100', { gateConfig: undefined }), { relayLabels: { 0: 'Gate' } });
   assert.deepStrictEqual(await dk.getPrefs(store, '5550199'), {});
-  assert.strictEqual(await dk.getCredential(store, 'User'), null);
-  await dk.saveCredential(store, 'User', 'pw');
-  assert.deepStrictEqual(await dk.getCredential(store, 'user'), { user: 'User', password: 'pw' });
-  assert.ok(!(await store.db.query('SELECT password FROM credentials')).rows[0].password.includes('pw'));
-  assert.strictEqual(await dk.forgetCredential(store, 'user'), true);
-  assert.strictEqual(await dk.hasCredential(store, 'User'), false);
 }));
 
-test('gate connections: verifiedAt, master code changes and the history backfill', withStore(async (store) => {
-  await dk.addGate(store, 'u1', { phoneNumber: '5550100', masterCode: '1234' });
-  await dk.addGate(store, 'u2', { phoneNumber: '5550100', masterCode: '9999' });
-  assert.strictEqual((await dk.findGate(store, 'u1', '5550100')).verifiedAt, null);
-  assert.strictEqual(await dk.gateClaimed(store, '5550100'), false);
-  await dk.markGateVerified(store, 'U1', '555-0100', T1);
-  assert.strictEqual((await dk.findGate(store, 'u1', '5550100')).verifiedAt, T1);
-  assert.strictEqual((await dk.findGate(store, 'u2', '5550100')).verifiedAt, null);
-  assert.strictEqual(await dk.gateClaimed(store, '5550100'), true);
-  await dk.addGate(store, 'u1', { phoneNumber: '5550100', masterCode: '1234' }); // same code: kept
-  assert.strictEqual((await dk.findGate(store, 'u1', '5550100')).verifiedAt, T1);
-  await dk.addGate(store, 'u1', { phoneNumber: '5550100', masterCode: '4321' }); // changed code: cleared
-  assert.strictEqual((await dk.findGate(store, 'u1', '5550100')).verifiedAt, null);
+test('accounts: rules, scrypt hashes, unique usernames and emails, own settings and password', withStore(async (store) => {
+  assert.throws(() => dk.checkUsername('ab'), /3-32/);
+  assert.throws(() => dk.checkUsername('bad name'), /3-32/);
+  assert.strictEqual(dk.checkUsername(' Jane.Doe '), 'jane.doe');
+  assert.throws(() => dk.checkPassword('short'), /at least 12/);
+  assert.throws(() => dk.checkEmail('nope'), /email/);
+  assert.strictEqual(await dk.userCount(store), 0);
+  const u = await dk.createUser(store, { username: 'Jane', password: PW, email: 'Jane@Example.com', createdBy: 'admin' });
+  assert.deepStrictEqual([u.username, u.email, u.mustChangePassword, u.createdBy], ['jane', 'jane@example.com', true, 'admin']);
+  const hash = (await store.db.query('SELECT password_hash FROM users')).rows[0].password_hash;
+  assert.ok(hash.startsWith('scrypt$') && !hash.includes(PW));
+  await assert.rejects(() => dk.createUser(store, { username: 'JANE', password: PW, createdBy: 'x' }), (e) => e.status === 409 && /already taken/.test(e.message));
+  await assert.rejects(() => dk.createUser(store, { username: 'john', password: PW, email: 'jane@EXAMPLE.com', createdBy: 'x' }), /already used/);
+  assert.strictEqual(await dk.authenticate(store, 'jane', 'wrong password!!'), null);
+  assert.strictEqual(await dk.authenticate(store, 'nobody', PW), null);
+  const signed = await dk.authenticate(store, 'JANE', PW);
+  assert.deepStrictEqual([signed.username, signed.signIns, Boolean(signed.lastSignIn)], ['jane', 1, true]);
+  // Own settings: email (unique, '' removes) and dark mode.
+  await dk.createUser(store, { username: 'john', password: PW, email: 'john@example.com', createdBy: 'x' });
+  await assert.rejects(() => dk.updateUserSettings(store, 'jane', { email: 'john@example.com' }), /already used/);
+  assert.deepStrictEqual(await dk.updateUserSettings(store, 'jane', { email: '', dark: true }).then((x) => [x.email, x.dark]), ['', true]);
+  // Own password change: needs the current one; ends the other sessions, keeps this one; clears must-change.
+  const keep = await dk.findSession(store, await dk.createSession(store, 'jane'), 60000);
+  const othertoken = await dk.createSession(store, 'jane');
+  await assert.rejects(() => dk.changeOwnPassword(store, 'jane', 'wrong password!!', NEW_PW, keep.tokenHash), /current password is wrong/);
+  await assert.rejects(() => dk.changeOwnPassword(store, 'jane', PW, PW, keep.tokenHash), /different/);
+  await dk.changeOwnPassword(store, 'jane', PW, NEW_PW, keep.tokenHash);
+  assert.strictEqual(await dk.findSession(store, othertoken, 60000), null);
+  assert.ok(await dk.findSession(store, '0'.repeat(64), 60000) === null);
+  assert.strictEqual((await dk.getUser(store, 'jane')).mustChangePassword, false);
+  assert.ok(await dk.authenticate(store, 'jane', NEW_PW));
+  // The CLI's reset: a temporary password the user must change; every session ends.
+  await dk.setPassword(store, 'jane', PW, { mustChange: true });
+  assert.strictEqual((await dk.getUser(store, 'jane')).mustChangePassword, true);
+  assert.strictEqual((await store.db.query("SELECT COUNT(*)::int AS n FROM sessions WHERE username = 'jane'")).rows[0].n, 0);
+}));
 
-  await dk.addGate(store, 'u3', { phoneNumber: '5550199', masterCode: '1111' });
-  await dk.addEvent(store, '5550100', { user: 'U2', action: 'pull', result: 'done', time: T2 });
-  await dk.addEvent(store, '5550199', { user: 'u3', action: 'pull', result: 'failed' });
-  await dk.addEvent(store, '5550199', { user: 'u3', action: 'change', summary: 'edit' });
-  assert.strictEqual(await dk.backfillGateVerified(store), 1);
-  assert.strictEqual((await dk.findGate(store, 'u2', '5550100')).verifiedAt, T2);
-  assert.strictEqual((await dk.findGate(store, 'u3', '5550199')).verifiedAt, null);
-  assert.strictEqual(await dk.backfillGateVerified(store), null);
+test('sessions: stored hashed, found by token, ended when idle, open gate kept', withStore(async (store) => {
+  await dk.createUser(store, { username: 'jane', password: PW, createdBy: 't' });
+  const tok = await dk.createSession(store, 'jane');
+  assert.match(tok, /^[a-f0-9]{64}$/);
+  const row = (await store.db.query('SELECT token_hash FROM sessions')).rows[0];
+  assert.ok(row.token_hash !== tok);
+  const sess = await dk.findSession(store, tok, 60000);
+  assert.deepStrictEqual([sess.username, sess.gate], ['jane', null]);
+  await dk.setSessionGate(store, sess.tokenHash, '5550100');
+  assert.strictEqual((await dk.findSession(store, tok, 60000)).gate, '5550100');
+  await store.db.query("UPDATE sessions SET last_seen = now() - interval '2 hours'");
+  assert.deepStrictEqual(await dk.sweepSessions(store, 3600000), ['jane']);
+  assert.strictEqual(await dk.findSession(store, tok, 3600000), null);
+  const t2 = await dk.createSession(store, 'jane');
+  await store.db.query("UPDATE sessions SET last_seen = now() - interval '2 hours'");
+  assert.strictEqual(await dk.findSession(store, t2, 3600000), null); // idle: refused and deleted
+  assert.strictEqual((await store.db.query('SELECT COUNT(*)::int AS n FROM sessions')).rows[0].n, 0);
+}));
+
+test('gates: added once, roles, sharing, and a gate always keeps an admin', withStore(async (store) => {
+  for (const u of ['ann', 'bob', 'cyd']) await dk.createUser(store, { username: u, password: PW, createdBy: 't' });
+  await assert.rejects(() => dk.registerGate(store, { ...GATE_A, masterCode: '12' }, 'ann'), /Master code/);
+  await assert.rejects(() => dk.registerGate(store, { ...GATE_A, dksUser: '' }, 'ann'), /DKS user and password/);
+  await dk.registerGate(store, GATE_A, 'ann');
+  assert.strictEqual(await dk.gateExists(store, '555-0100'), true);
+  await assert.rejects(() => dk.registerGate(store, GATE_A, 'bob'), (e) => e.status === 409 && e.message === dk.ALREADY_ADDED);
+  assert.strictEqual(await dk.accessOf(store, '5550100', 'ann'), 'admin');
+  assert.strictEqual(await dk.accessOf(store, '5550100', 'bob'), null);
+  // Sharing: existing users only, once.
+  await assert.rejects(() => dk.grantAccess(store, '5550100', 'nobody', 'readonly', 'ann'), (e) => e.status === 404);
+  await assert.rejects(() => dk.grantAccess(store, '5550100', 'bob', 'owner', 'ann'), /admin or readonly/);
+  await dk.grantAccess(store, '5550100', 'BOB', 'readonly', 'ann');
+  await assert.rejects(() => dk.grantAccess(store, '5550100', 'bob', 'admin', 'ann'), (e) => e.status === 409 && /already has access/.test(e.message));
+  assert.deepStrictEqual((await dk.userGates(store, 'bob')).map((g) => [g.phoneNumber, g.role]), [['5550100', 'readonly']]);
+  assert.deepStrictEqual((await dk.gateUsers(store, '5550100')).map((u) => [u.username, u.role, u.grantedBy]), [['ann', 'admin', 'ann'], ['bob', 'readonly', 'ann']]);
+  assert.strictEqual(await dk.isAnyGateAdmin(store, 'bob'), false);
+  // The last admin can't be demoted or removed (or leave); with a second admin they can.
+  await assert.rejects(() => dk.setRole(store, '5550100', 'ann', 'readonly'), /keep at least one admin/);
+  await assert.rejects(() => dk.revokeAccess(store, '5550100', 'ann'), /keep at least one admin/);
+  await dk.setRole(store, '5550100', 'bob', 'admin');
+  await dk.revokeAccess(store, '5550100', 'ann');
+  assert.deepStrictEqual((await dk.gateUsers(store, '5550100')).map((u) => u.username), ['bob']);
+  await assert.rejects(() => dk.revokeAccess(store, '5550100', 'cyd'), (e) => e.status === 404);
+  // The gate's login: blank password keeps the saved one; master code checked.
+  const g = await dk.updateGateLogin(store, '5550100', { dksUser: 'other', dksPassword: '' });
+  assert.deepStrictEqual([g.dksUser, g.dksPassword, g.masterCode], ['other', 'dks-secret', '1234']);
+  await assert.rejects(() => dk.updateGateLogin(store, '5550100', { masterCode: '99' }), /Master code/);
+  assert.strictEqual((await dk.updateGateLogin(store, '5550100', { masterCode: '4321' })).masterCode, '4321');
+}));
+
+test('API keys: per gate, shown once, stored hashed, role and expiry, revoked at once, gone with the gate', withStore(async (store) => {
+  await dk.createUser(store, { username: 'ann', password: PW, createdBy: 't' });
+  await dk.registerGate(store, GATE_A, 'ann');
+  await dk.registerGate(store, { ...GATE_A, phoneNumber: '5550111' }, 'ann');
+  await assert.rejects(() => dk.createApiKey(store, '5550100', { name: '', role: 'readonly' }, 'ann'), /name/);
+  await assert.rejects(() => dk.createApiKey(store, '5550100', { name: 'x', role: 'owner' }, 'ann'), /admin or readonly/);
+  await assert.rejects(() => dk.createApiKey(store, '5550100', { name: 'x', role: 'readonly', expiresDays: 7 }, 'ann'), /Expiry/);
+  const { key, apiKey } = await dk.createApiKey(store, '555-0100', { name: 'Home Assistant', role: 'readonly' }, 'ANN');
+  assert.match(key, /^dkg_[0-9a-f]{12}_[A-Za-z0-9_-]{43}$/);
+  assert.deepStrictEqual([apiKey.name, apiKey.role, apiKey.createdBy, apiKey.expiresAt, apiKey.lastUsedAt], ['Home Assistant', 'readonly', 'ann', null, null]);
+  const row = (await store.db.query('SELECT * FROM api_keys')).rows[0];
+  assert.ok(!JSON.stringify(row).includes(key.split('_')[2]));
+  assert.deepStrictEqual(await dk.findApiKey(store, key), { id: apiKey.id, phone: '5550100', name: 'Home Assistant', role: 'readonly' });
+  assert.ok((await dk.listApiKeys(store, '5550100'))[0].lastUsedAt);
+  assert.strictEqual(await dk.findApiKey(store, `${key.slice(0, -1)}${key.endsWith('A') ? 'B' : 'A'}`), null); // wrong secret
+  assert.strictEqual(await dk.findApiKey(store, 'dkg_nothex'), null);
+  // Not tied to its creator: it keeps working when they lose access.
+  await dk.createUser(store, { username: 'bob', password: PW, createdBy: 't' });
+  await dk.grantAccess(store, '5550100', 'bob', 'admin', 'ann');
+  const bobs = await dk.createApiKey(store, '5550100', { name: 'Bob script', role: 'admin', expiresDays: 30 }, 'bob');
+  await dk.revokeAccess(store, '5550100', 'bob');
+  assert.strictEqual((await dk.findApiKey(store, bobs.key)).role, 'admin');
+  assert.ok(new Date(bobs.apiKey.expiresAt).getTime() > Date.now() + 29 * 86400000);
+  await store.db.query("UPDATE api_keys SET expires_at = now() - interval '1 minute' WHERE id = $1", [bobs.apiKey.id]);
+  assert.strictEqual(await dk.findApiKey(store, bobs.key), null); // expired
+  // Revoking is per gate and immediate; deleting the gate's data removes its keys.
+  await assert.rejects(() => dk.revokeApiKey(store, '5550111', apiKey.id), (e) => e.status === 404);
+  assert.strictEqual(await dk.revokeApiKey(store, '5550100', apiKey.id), 'Home Assistant');
+  assert.strictEqual(await dk.findApiKey(store, key), null);
+  const other = await dk.createApiKey(store, '5550111', { name: 'Other', role: 'readonly' }, 'ann');
+  assert.strictEqual((await dk.deleteGateData(store, '5550111')).api_keys, 1);
+  assert.strictEqual(await dk.findApiKey(store, other.key), null);
+}));
+
+test('moving from DKS sign-in: gates with a saved DKS login, adopted by the first account', withStore(async (store) => {
+  const enc = (v) => dk.encrypt(store, v);
+  await store.db.query(`INSERT INTO gates (username, phone, master_code, added_at, verified_at) VALUES
+    ('dks1', '5550100', $1, $3, $3), ('dks2', '5550100', $2, $3, $3), ('dks2', '5550111', $2, $3, $3), ('dks3', '5550122', $2, $3, NULL)`,
+  [enc('1234'), enc('9999'), T1]);
+  await store.db.query('INSERT INTO credentials (username, login, password, saved_at) VALUES ($1, $2, $3, $4)', ['dks1', 'DKS1', enc('pw1'), T1]);
+  assert.deepStrictEqual(await dk.migrateToLocalAccounts(store), { gates: ['5550100', '5550111'], noLogin: ['5550111'] });
+  assert.strictEqual(await dk.migrateToLocalAccounts(store), null);
+  const a = await dk.getGate(store, '5550100');
+  assert.deepStrictEqual([a.masterCode, a.dksUser, a.dksPassword], ['1234', 'DKS1', 'pw1']); // the entry with a saved login wins
+  const b = await dk.getGate(store, '5550111');
+  assert.deepStrictEqual([b.masterCode, b.dksUser, b.dksPassword], ['9999', '', '']);
+  assert.strictEqual(await dk.getGate(store, '5550122'), null); // never connected
+  await dk.createUser(store, { username: 'owner', password: PW, createdBy: 'setup', mustChangePassword: false });
+  assert.deepStrictEqual(await dk.adoptAdminlessGates(store, 'owner'), ['5550100', '5550111']);
+  assert.deepStrictEqual(await dk.adoptAdminlessGates(store, 'owner'), []);
+  assert.strictEqual(await dk.accessOf(store, '5550111', 'owner'), 'admin');
 }));
 
 test('config: defaults, file, environment and flags, checked values and private files', withDir(async (dir) => {
@@ -531,6 +647,11 @@ test('config: defaults, file, environment and flags, checked values and private 
   assert.strictEqual(dk.connectionSettings(c.database, c.database.testName).database, 'doorking_test');
   assert.strictEqual(dk.maskedConfig(c).database.password, '***');
   assert.strictEqual(c.security.sessionIdleMinutes, 30);
+  assert.strictEqual(c.cameras.ffmpeg, '');
+  write({ database: { password: 'pw' }, cameras: { ffmpeg: '../bin/ffmpeg' } });
+  assert.strictEqual(dk.loadConfig({ file, env: {}, args: [] }).cameras.ffmpeg, path.join(dir, 'bin', 'ffmpeg'));
+  write({ database: { password: 'pw' }, cameras: { ffmpeg: 'ffmpeg' } });
+  assert.strictEqual(dk.loadConfig({ file, env: {}, args: [] }).cameras.ffmpeg, 'ffmpeg'); // left for the PATH
   // Environment over the file, flags over both.
   const o = dk.loadConfig({ file, env: { PORT: '9000', DATABASE_URL: 'postgres://u:secret@db/x' }, args: ['--port', '9100', '--media', 'pics', '--site-name', 'Lobby'] });
   assert.deepStrictEqual([o.server.port, o.paths.media, o.gateDefaults.siteName], [9100, path.join(dir, 'conf', 'pics'), 'Lobby']);

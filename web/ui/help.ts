@@ -3,7 +3,10 @@
 export const HELP: Record<string, string> = {
   // Gate list
   systemPhone: "The gate's own phone number (the line the entry panel is connected to), digits only. It identifies the gate in DKS Cloud.",
-  gateMasterCode: "The gate's 4-digit master code, set at the entry panel. It's checked the first time you pull from the gate, then kept secret on this computer.",
+  gateMasterCode: "The gate's 4-digit master code, set at the entry panel. It's checked when the gate is added (the app pulls from the gate with it), then kept secret on this computer.",
+  dksLogin: 'The DKS Cloud user and password that manage this gate. The app uses them for every pull, send, relay change and scheduled transfer of this gate, for all its users. Kept encrypted on this computer and never shown again.',
+  apiKeys: 'Keys for scripts and other systems (for example home automation) to use this gate without signing in. Each key works only on this gate, has its own role, and can be revoked at any time. Treat a key like a password.',
+  gateRole: 'Admin: can change everything, including the gate\'s users and DKS login. Read only: can look at everything, pull from the gate and watch the cameras, but can\'t change anything.',
 
   // Working copy
   workingCopy: 'Your changes are kept on this computer (the working copy) until you click Send to gate. Reset to gate throws away every change you have not sent.',

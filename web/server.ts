@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 
 // Localhost-only web UI and REST API for gate pulls (and confirmed sends of the working copy) through DKS Cloud.
-// DKS credentials are kept in memory for the browser session; a user's password is written to disk (encrypted)
-// only when they save a scheduled transfer. Gate lists, prefs, sign-ins, history, saved passwords and schedules
-// are kept in the local database (see src/db.ts). Gate routes are scoped by path (/api/gates/<phone>/...); a
-// gate's saved data opens to a user after their first successful connection to it (see the route scopes).
+// People sign in with local accounts (src/users.ts); each gate has its own DKS login, saved encrypted with it
+// (src/gate-list.ts), which every DKS call for that gate uses. Gate routes are scoped by path
+// (/api/gates/<phone>/...) and by the user's role on the gate: admin or readonly (see the route scopes).
 // Scheduled transfers run here, unattended. After each transactions pull, camera snapshots are saved for gates
 // with camera settings (see src/cameras.ts). The REST API is documented in docs/API.md.
 
@@ -17,24 +16,29 @@ import * as dk from '../index.ts';
 import { loadData, residents, residentRows, type GateFiles } from './data.ts';
 import { helpPage } from '../src/markdown.ts';
 import type { BoardBuffers } from '../src/residents-edit.ts';
-import type { GateEntry } from '../src/gate-list.ts';
 import type { Patch, RecordChange } from '../src/audit.ts';
 import type { ValuesPatch } from '../src/gate-state.ts';
 import type { CacheStatus } from '../src/gate-cache.ts';
 import type { SnapshotProgress, SnapshotResult } from '../src/cameras.ts';
 import type { GateSetting } from '../src/gate-settings.ts';
-import type { CameraChannel, DeviceRange, GateConfig, GateFeatures, GatePrefs, GateTracker, ResidentRow, Schedule } from '../src/types.ts';
+import type { CameraChannel, DeviceRange, GateConfig, GateFeatures, GatePrefs, GateRole, GateTracker, ResidentRow, Schedule } from '../src/types.ts';
 
 type Body = Record<string, any>; // request JSON, checked by each handler
 type Reply = readonly [number, unknown];
-interface SessionData { user: string; password: string; lastSeen: number; gate?: string }
-interface Session { token: string; raw: SessionData; user: string; password: string }
-type Gate = GateEntry & { verified: boolean; user: string; password: string; dir: string };
+// tokenHash identifies the session row; gate: the phone number the web UI has open. apiKey: the request came with an
+// API key (then user is "api:<key name>" and there is no session row).
+interface Session {
+  tokenHash: string; user: string; gate: string | null; mustChangePassword: boolean; apiKey?: { phone: string; role: GateRole };
+}
+// A managed gate as seen by one user: role is theirs, actor their username (for History); user/password are the
+// gate's DKS login (what buildSessionRequest and the relay calls read).
+type Gate = dk.GateRecord & { role: GateRole; actor: string; user: string; password: string; dir: string };
 interface JobState {
   state: 'idle' | 'running' | 'done' | 'failed'; what?: string; phoneNumber?: string; user?: string;
-  startedAt?: Date; finishedAt?: Date; log: string[]; error?: string;
+  startedAt?: Date; finishedAt?: Date; log: string[]; error?: string; adding?: boolean;
 }
-interface JobInfo { scheduled?: boolean; details?: RecordChange[] }
+// adding: the first pull of a gate being added; it is saved as a managed gate only when that pull succeeds.
+interface JobInfo { scheduled?: boolean; details?: RecordChange[]; adding?: boolean }
 interface SnapRun {
   state: 'running' | 'done' | 'stopped' | 'failed'; startedAt: Date; finishedAt?: Date; log: string[]; minute?: string;
   progress?: SnapshotProgress; result?: SnapshotResult | null; error?: string; again?: boolean; stopping?: boolean;
@@ -69,10 +73,13 @@ try {
 // The Debug logs setting, kept in memory so writing a line never waits for the database.
 let debugOn = await dk.debugLogEnabled(STORE);
 const DEBUG = dk.createDebugLog(path.join(LOG_DIR, 'debug.log'), { enabled: () => debugOn });
-const backfilled = await dk.backfillGateVerified(STORE);
-if (backfilled) {
-  console.log(`Marked ${backfilled} gate(s) as connected from history`);
-  DEBUG.write('server', `Marked ${backfilled} gate(s) as connected from history`);
+// Once: gates from the DKS sign-in era become managed gates; the first local account becomes their admin.
+const migrated = await dk.migrateToLocalAccounts(STORE);
+if (migrated && migrated.gates.length) {
+  const note = `Moved ${migrated.gates.length} gate(s) to local accounts${migrated.noLogin.length
+    ? `; set the DKS login in System Settings for ${migrated.noLogin.join(', ')}` : ''}`;
+  console.log(note);
+  DEBUG.write('server', note);
 }
 const DIST = path.join(HERE, 'dist'); // the web page, built from web/ui by `npm run build`
 const IDLE_MS = CONFIG.security.sessionIdleMinutes * 60000;
@@ -104,21 +111,19 @@ const defaults = CONFIG.gateDefaults;
 const client = () => new dk.DksCloudClient({ url: CONFIG.dks.url, log: (m) => DEBUG.write('dks', m) });
 const CAMERAS = dk.createCameraRunner({ ffmpegPath: CONFIG.cameras.ffmpeg, log: (m) => DEBUG.write('camera', m) });
 
-// token -> { user, password, lastSeen, gate? }; gate is the phone number the web UI has open.
-const sessions = new Map<string, SessionData>();
+// While no account exists, creating the first one needs this code, printed only to the server's console (journalctl),
+// so a stranger reaching a fresh public install can't claim it first.
+let SETUP_CODE = '';
 const failedSignIns = new Map<string, number[]>(); // user (lower case) -> times of recent failed sign-ins
 let job: JobState = { state: 'idle', log: [] }; // one gate connection at a time, across all gates
 
 const recentFailures = (user: string): number[] => (failedSignIns.get(user) || []).filter((t) => Date.now() - t < SIGN_IN_WINDOW_MS);
 
-// Ends idle sessions, so a DKS password does not stay in memory once its session has expired.
-function sweepSessions() {
-  const now = Date.now();
-  for (const [token, s] of sessions) {
-    if (now - s.lastSeen <= IDLE_MS) continue;
-    sessions.delete(token);
-    DEBUG.write('session', `${s.user} signed out after ${IDLE_MS / 60000} minutes idle`);
-  }
+// Ends idle sessions (they are kept in the database, so they survive a restart).
+async function sweepSessions() {
+  try {
+    for (const user of await dk.sweepSessions(STORE, IDLE_MS)) DEBUG.write('session', `${user} signed out after ${IDLE_MS / 60000} minutes idle`);
+  } catch (e) { DEBUG.write('session', `Session sweep failed: ${(e as Error).message}`); }
   for (const user of failedSignIns.keys()) if (!recentFailures(user).length) failedSignIns.delete(user);
 }
 
@@ -152,33 +157,36 @@ function readJson(req: IncomingMessage): Promise<Body> {
   });
 }
 
-function currentSession(req: IncomingMessage): Session | null {
+async function currentSession(req: IncomingMessage): Promise<Session | null> {
   const m = /(?:^|;\s*)sid=([a-f0-9]{64})/.exec(req.headers.cookie || '');
   if (!m) return null;
-  const s = sessions.get(m[1]);
+  const s = await dk.findSession(STORE, m[1], IDLE_MS);
   if (!s) return null;
-  if (Date.now() - s.lastSeen > IDLE_MS) {
-    sessions.delete(m[1]);
-    DEBUG.write('session', `${s.user} signed out after ${IDLE_MS / 60000} minutes idle`);
-    return null;
-  }
-  s.lastSeen = Date.now();
-  return { token: m[1], raw: s, user: s.user, password: s.password };
+  const u = await dk.getUser(STORE, s.username);
+  if (!u) return null;
+  return { tokenHash: s.tokenHash, user: u.username, gate: s.gate, mustChangePassword: u.mustChangePassword };
 }
 
-// The gate named in the URL, from the signed-in user's list, with the session's DKS credentials. verified: this
-// user has connected to the gate successfully with the master code in their list (see the route scopes).
-async function gateFor(s: { user: string; password: string }, phone: unknown): Promise<Gate> {
-  const g = await dk.findGate(STORE, s.user, phone);
-  if (!g) throw Object.assign(new Error('Gate not in your list'), { status: 404 });
-  return { ...g, verified: Boolean(g.verifiedAt), user: s.user, password: s.password, dir: path.join(ROOT, g.phoneNumber) };
+const NO_GATE = 'Gate not found, or you have no access to it';
+const ADMIN_ONLY = 'Only a gate admin can do this. Your access to this gate is read only.';
+
+// The managed gate as `actor` sees it, with their role ('admin' for scheduled runs).
+function asGate(rec: dk.GateRecord, role: GateRole, actor: string): Gate {
+  return { ...rec, role, actor, user: rec.dksUser, password: rec.dksPassword, dir: path.join(ROOT, rec.phoneNumber) };
+}
+
+// The gate named in the URL, if the signed-in user has access to it.
+async function gateFor(s: { user: string }, phone: unknown): Promise<Gate> {
+  const [rec, role] = await Promise.all([dk.getGate(STORE, phone), dk.accessOf(STORE, phone, s.user)]);
+  if (!rec || !role) throw Object.assign(new Error(NO_GATE), { status: 404 });
+  return asGate(rec, role, s.user);
 }
 
 const prefsOf = (phone: unknown): Promise<GatePrefs> => dk.getPrefs(STORE, phone);
 const siteNameOf = async (phone: unknown): Promise<string> => ((await prefsOf(phone)).gateConfig || {}).siteName || '';
-// The site name is shown only once the user has connected to the gate.
-const gateInfo = async (g: GateEntry) => ({ phoneNumber: g.phoneNumber, siteName: g.verifiedAt ? await siteNameOf(g.phoneNumber) : '',
-  addedAt: g.addedAt, verified: Boolean(g.verifiedAt) });
+const gateInfo = async (g: { phoneNumber: string; role: GateRole; addedAt: string }) => ({
+  phoneNumber: g.phoneNumber, siteName: await siteNameOf(g.phoneNumber), addedAt: g.addedAt, role: g.role,
+});
 
 // Runs fn after the gate's earlier queued work: changes to a gate's working copy and prefs run one at a time, so
 // each History entry holds exactly its own change.
@@ -189,7 +197,6 @@ function serial<T>(phone: string, fn: () => Promise<T>): Promise<T> {
   p.catch(() => {}).finally(() => { if (gateQueues.get(phone) === p) gateQueues.delete(phone); });
   return p;
 }
-const NOT_CONNECTED = 'Pull residents or transactions from this gate first. Its saved data opens after your first successful connection with this master code.';
 
 const GATE_CONFIG_KEYS: (keyof GateConfig)[] = ['siteName', 'memorySize', 'areaCodes', 'modelNumber', 'antiPassBack', 'interface1816'];
 const AREA_CODE_SETTINGS = ['10 Area Codes', '255 Area Codes'];
@@ -198,6 +205,7 @@ type SessionRequest = ReturnType<typeof dk.buildSessionRequest>;
 
 // The gate-match config lives in the gate-scoped prefs (keyed by phone number), set under System Settings.
 async function sessionRequest(g: Gate, what: string, extra: Record<string, unknown> = {}): Promise<SessionRequest> {
+  if (!g.user || !g.password) throw new Error('This gate has no DKS login yet. A gate admin can set it in System Settings → Gate login.');
   const cfg: Partial<GateConfig> = (await prefsOf(g.phoneNumber)).gateConfig || {};
   const chosen = Object.fromEntries(GATE_CONFIG_KEYS
     .filter((k) => typeof cfg[k] === 'string' && cfg[k].trim())
@@ -217,7 +225,7 @@ async function sessionRequest(g: Gate, what: string, extra: Record<string, unkno
 function startJob(g: Gate, what: string, makeRequest: () => Promise<SessionRequest>,
   run: (log: (line: string) => void, request: SessionRequest) => Promise<void>, info: JobInfo = {}): Promise<JobState> {
   const startedAt = new Date();
-  const j: JobState = { state: 'running', what, phoneNumber: g.phoneNumber, user: g.user, startedAt, log: [] };
+  const j: JobState = { state: 'running', what, phoneNumber: g.phoneNumber, user: g.actor, startedAt, log: [], ...(info.adding && { adding: true }) };
   job = j;
   // Each job line also goes to the debug log, except a status repeated while the gate is polled.
   let lastLine = '';
@@ -228,7 +236,7 @@ function startJob(g: Gate, what: string, makeRequest: () => Promise<SessionReque
   };
   return (async () => {
     const request = await makeRequest();
-    log(`Starting ${info.scheduled ? 'scheduled ' : ''}${what === 'send' ? 'send' : `${what} pull`} by ${g.user}: ${JSON.stringify(dk.maskRequest(request, g.user))}`);
+    log(`Starting ${info.scheduled ? 'scheduled ' : ''}${what === 'send' ? 'send' : `${what} pull`} by ${g.actor}: ${JSON.stringify(dk.maskRequest(request, g.user))}`);
     await run(log, request);
   })()
     .then(() => { j.state = 'done'; })
@@ -237,19 +245,48 @@ function startJob(g: Gate, what: string, makeRequest: () => Promise<SessionReque
       const finishedAt = new Date();
       j.finishedAt = finishedAt;
       DEBUG.write('gate', `Gate ${g.phoneNumber}: ${what} ${info.scheduled ? '(scheduled) ' : ''}${j.state} after ${Math.round((finishedAt.getTime() - startedAt.getTime()) / 1000)} s`);
-      if (j.state === 'done') {
-        try {
-          const cur = await dk.findGate(STORE, g.user, g.phoneNumber);
-          if (cur && cur.masterCode === g.masterCode) await dk.markGateVerified(STORE, g.user, g.phoneNumber);
-        } catch (e) { console.error(`Gate connection not recorded: ${(e as Error).message}`); DEBUG.write('server', `Gate connection not recorded: ${(e as Error).message}`); }
-      }
+      if (info.adding && !await finishAdding(g, j, log)) return j;
+      const { adding, ...rest } = info;
       const action = what === 'send' ? 'send' : 'pull';
-      const summary = `${what === 'send' ? 'Sent working copy to gate' : `Pulled ${what}`}${info.scheduled ? ' (scheduled)' : ''}`;
+      const summary = `${what === 'send' ? 'Sent working copy to gate' : `Pulled ${what}`}${info.scheduled ? ' (scheduled)' : ''}${adding ? ' (gate added)' : ''}`;
       try {
-        await dk.addEvent(STORE, g.phoneNumber, { user: g.user, action, what, summary, result: j.state, ...(j.error && { error: j.error }), ...info });
+        await dk.addEvent(STORE, g.phoneNumber, { user: g.actor, action, what, summary, result: j.state, ...(j.error && { error: j.error }), ...rest });
       } catch (e) { console.error(`History not saved: ${(e as Error).message}`); DEBUG.write('server', `History not saved: ${(e as Error).message}`); }
       return j;
     });
+}
+
+const roleText = (r: GateRole) => (r === 'admin' ? 'admin' : 'read only');
+
+// A new master code (with the DKS login): checked by a residents pull with it, and saved only when that succeeds.
+function startLoginCheck(g: Gate): Promise<JobState> {
+  return startPull(g, 'residents').then(async (j) => {
+    if (j.state !== 'done') return j;
+    await dk.updateGateLogin(STORE, g.phoneNumber, { masterCode: g.masterCode, dksUser: g.dksUser, dksPassword: g.dksPassword });
+    j.log.push(`${new Date().toLocaleTimeString('en-US')}  New master code saved`);
+    await dk.addEvent(STORE, g.phoneNumber, { user: g.actor, action: 'login', summary: 'Changed the gate\'s master code' });
+    DEBUG.write('gates', `${g.actor} changed the master code of gate ${g.phoneNumber}`);
+    return j;
+  });
+}
+
+// The first pull of a gate being added: on success the gate is saved with its DKS login and master code, and the
+// person adding it becomes its admin. On failure everything stored for that phone number (its gate configuration
+// and anything the pull left) is removed. Returns false when the gate was not added (nothing goes in its History).
+async function finishAdding(g: Gate, j: JobState, log: (line: string) => void): Promise<boolean> {
+  try {
+    if (j.state === 'done') {
+      await dk.registerGate(STORE, g, g.actor);
+      log(`Gate added; ${g.actor} is its admin`);
+      DEBUG.write('gates', `${g.actor} added gate ${g.phoneNumber}`);
+      return true;
+    }
+  } catch (e) { j.state = 'failed'; j.error = (e as Error).message; log(`Error: ${j.error}`); }
+  if (!await dk.gateExists(STORE, g.phoneNumber)) {
+    try { await dk.deleteGateData(STORE, g.phoneNumber); } catch (e) { DEBUG.write('gates', `Cleanup after a failed add of ${g.phoneNumber}: ${(e as Error).message}`); }
+  }
+  DEBUG.write('gates', `${g.actor} could not add gate ${g.phoneNumber}: ${j.error}`);
+  return false;
 }
 
 // Camera snapshots: one run at a time per gate, separate from the gate connection. A run asked for while one
@@ -793,15 +830,20 @@ async function savePrefs(g: Gate, body: Body, was: GatePrefs): Promise<Reply> {
     prefs.deviceAssociation = da.rows;
   }
   if (body.gateConfig && typeof body.gateConfig === 'object') {
-    prefs.gateConfig = Object.fromEntries(GATE_CONFIG_KEYS
-      .map((k) => [k, String(body.gateConfig[k] ?? '').slice(0, 40)]));
-    if (prefs.gateConfig.areaCodes && !AREA_CODE_SETTINGS.includes(prefs.gateConfig.areaCodes)) {
-      return [400, { error: `Area codes must be ${AREA_CODE_SETTINGS.join(' or ')}` }];
-    }
+    prefs.gateConfig = gateConfigFrom(body.gateConfig);
     const problem = await applyAreaCodeSetting(g.phoneNumber, prefs.gateConfig.areaCodes || defaults.areaCodes);
     if (problem) return [409, { error: problem }];
   }
   return [200, await dk.setPrefs(STORE, g.phoneNumber, prefs)];
+}
+
+// The gate configuration's values from a request (each up to 40 characters). Throws 400 on a bad Area codes value.
+function gateConfigFrom(raw: Record<string, unknown>): Record<string, string> {
+  const cfg = Object.fromEntries(GATE_CONFIG_KEYS.map((k) => [k, String(raw[k] ?? '').slice(0, 40)]));
+  if (cfg.areaCodes && !AREA_CODE_SETTINGS.includes(cfg.areaCodes)) {
+    throw Object.assign(new Error(`Area codes must be ${AREA_CODE_SETTINGS.join(' or ')}`), { status: 400 });
+  }
+  return cfg;
 }
 
 // Area-code slot limit from the gate's saved "Area codes" setting.
@@ -832,19 +874,21 @@ async function sendFile(res: ServerResponse, phone: string, name: string) {
   return res.end(data);
 }
 
-// Route table. scope: 'public' (no session), 'user' (signed in), 'gate-open' (signed in; :phone must be in the
-// user's gate list), 'gate' (also: the user has connected to the gate successfully with the master code in
-// their list, else 403), 'gate-setup' (like 'gate', but also open while no account has connected to the gate).
-// Handlers get { s, g, params, body, req, res } and return [status, body], or answer themselves (file
-// downloads) and return nothing.
-type Scope = 'public' | 'user' | 'gate-open' | 'gate' | 'gate-setup';
+// Route table. scope: 'public' (no session), 'user' (signed in), 'gate' (signed in with any role on the gate in
+// :phone, else 404), 'gate-admin' (admin role on it, else 403). Read-only users may view, pull and use the
+// cameras. Handlers get { s, g, params, body, req, res } and return [status, body], or answer themselves (file
+// downloads) and return nothing. A user who must change their password reaches only the public routes and
+// PUT /api/me/password until they do.
+type Scope = 'public' | 'user' | 'gate' | 'gate-admin';
 interface Ctx<S extends Scope> {
   s: S extends 'public' ? Session | null : Session;
   g: S extends `gate${string}` ? Gate : null;
   params: Record<string, string>; body: Body; req: IncomingMessage; res: ServerResponse;
 }
 type Handler<S extends Scope> = (ctx: Ctx<S>) => Reply | undefined | void | Promise<Reply | undefined | void>;
-interface Route { method: string; re: RegExp; keys: string[]; scope: Scope; handler: Handler<Scope> }
+// webOnly: refused for API keys (gate login, users, API keys, deleting the gate's data, leaving).
+interface Route { method: string; re: RegExp; keys: string[]; scope: Scope; handler: Handler<Scope>; webOnly?: boolean }
+const webOnly = (r: Route): Route => ({ ...r, webOnly: true });
 
 function route<S extends Scope>(method: string, pattern: string, scope: S, handler: Handler<S>): Route {
   const keys: string[] = [];
@@ -860,98 +904,223 @@ const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const scheduleText = (x: Schedule) => `${x.enabled ? '' : 'off, '}${x.days.map((d) => DAY_NAMES[d]).join(' ')} ${x.time}: ${x.actions.join(', ')}`;
 
 const MANUAL = path.join(HERE, '..', 'docs', 'MANUAL.md');
+const DEBUG_ADMIN = 'Only gate admins can use the debug log';
 
 const ROUTES = [
   // The user guide (docs/MANUAL.md) as a page, read on each request so edits show at once. Public: it holds no gate data.
   route('GET', '/help', 'public', ({ res }) => { send(res, 200, helpPage(fs.readFileSync(MANUAL, 'utf8')), 'text/html'); return undefined; }),
 
-  // Session: sign in with the DKS Cloud account; the sid cookie authenticates every later call.
+  // Session: sign in with a local account; the sid cookie authenticates every later call. setup: no account exists
+  // yet (POST /api/setup creates the first one).
   route('GET', '/api/session', 'public', async ({ s }) => {
-    if (!s) return [200, { loggedIn: false }];
-    const open = s.raw.gate ? await dk.findGate(STORE, s.user, s.raw.gate) : null;
-    return [200, { loggedIn: true, user: s.user, gate: open ? await gateInfo(open) : null, defaults, holidayList: dk.FIXED_HOLIDAYS }];
+    if (!s) return [200, { loggedIn: false, ...(await dk.userCount(STORE) === 0 && { setup: true }) }];
+    const u = (await dk.getUser(STORE, s.user))!;
+    const open = s.gate ? await dk.accessOf(STORE, s.gate, s.user) : null;
+    const rec = open && s.gate ? await dk.getGate(STORE, s.gate) : null;
+    return [200, { loggedIn: true, user: u.username, email: u.email, dark: u.dark, mustChangePassword: u.mustChangePassword,
+      gate: rec && open ? await gateInfo({ ...rec, role: open }) : null, defaults, holidayList: dk.FIXED_HOLIDAYS }];
   }),
 
   route('POST', '/api/session', 'public', async ({ body, req, res }) => {
-    const f = Object.fromEntries(['user', 'password'].map((k) => [k, String(body[k] || '').trim()])) as { user: string; password: string };
-    if (Object.values(f).some((v) => !v)) return [400, { error: 'User and password are required' }];
-    const key = f.user.toLowerCase();
+    const user = String(body.user || '').trim();
+    const pw = String(body.password || '');
+    if (!user || !pw) return [400, { error: 'Username and password are required' }];
+    const key = user.toLowerCase();
     if (recentFailures(key).length >= MAX_FAILED_SIGN_INS) {
-      DEBUG.write('session', `${f.user}: sign-in refused after ${MAX_FAILED_SIGN_INS} failed tries`);
+      DEBUG.write('session', `${user}: sign-in refused after ${MAX_FAILED_SIGN_INS} failed tries`);
       return [429, { error: `Too many failed sign-ins. Try again in ${SIGN_IN_WINDOW_MS / 60000} minutes.` }];
     }
-    let reply;
-    try { reply = String(await client().checkLogin(f.user, f.password)).trim(); } catch (e) {
-      return [502, { error: `DKS Cloud: ${(e as Error).message}` }];
-    }
-    if (reply !== 'OK') {
+    const u = await dk.authenticate(STORE, user, pw);
+    if (!u) {
       failedSignIns.set(key, [...recentFailures(key), Date.now()]);
-      return [401, { error: `Login refused: ${reply || 'no reply'}` }];
+      DEBUG.write('session', `${user}: sign-in refused (wrong username or password)`);
+      return [401, { error: 'Wrong username or password' }];
     }
     failedSignIns.delete(key);
-    const token = crypto.randomBytes(32).toString('hex');
-    sessions.set(token, { ...f, lastSeen: Date.now() });
-    DEBUG.write('session', `${f.user} signed in`);
-    try { await dk.recordSignIn(STORE, f.user); } catch (e) { console.error(`Sign-in not recorded: ${(e as Error).message}`); DEBUG.write('session', `Sign-in not recorded: ${(e as Error).message}`); }
-    // A saved password (for scheduled transfers) follows password changes.
-    if (await dk.hasCredential(STORE, f.user)) await dk.saveCredential(STORE, f.user, f.password);
-    res.setHeader('Set-Cookie', `sid=${token}${cookieAttrs(req)}`);
+    const tok = await dk.createSession(STORE, u.username);
+    DEBUG.write('session', `${u.username} signed in`);
+    res.setHeader('Set-Cookie', `sid=${tok}${cookieAttrs(req)}`);
     return [200, { ok: true }];
   }),
 
-  route('DELETE', '/api/session', 'public', ({ s, req, res }) => {
-    if (s) { sessions.delete(s.token); DEBUG.write('session', `${s.user} signed out`); }
+  route('DELETE', '/api/session', 'public', async ({ s, req, res }) => {
+    if (s) { await dk.deleteSession(STORE, s.tokenHash); DEBUG.write('session', `${s.user} signed out`); }
     res.setHeader('Set-Cookie', `sid=${cookieAttrs(req)}; Max-Age=0`);
+    return [200, { ok: true }];
+  }),
+
+  // First start only (no account yet): creates the first account, which becomes admin of every gate that has no
+  // admin (gates moved over from DKS sign-in), and signs it in. { setupCode, username, password, email? }.
+  route('POST', '/api/setup', 'public', async ({ body, req, res }) => {
+    if (await dk.userCount(STORE) > 0) return [409, { error: 'Setup is already done. Sign in instead.' }];
+    const code = String(body.setupCode || '').trim().toLowerCase();
+    if (!SETUP_CODE || code.length !== SETUP_CODE.length || !crypto.timingSafeEqual(Buffer.from(code), Buffer.from(SETUP_CODE))) {
+      DEBUG.write('session', 'First-account setup refused: wrong setup code');
+      return [403, { error: 'Wrong setup code. It is printed in the server\'s log (journalctl -u doorking) when the server starts.' }];
+    }
+    const u = await dk.createUser(STORE, { username: body.username, password: body.password, email: body.email, createdBy: 'setup', mustChangePassword: false });
+    const adopted = await dk.adoptAdminlessGates(STORE, u.username);
+    const tok = await dk.createSession(STORE, u.username);
+    SETUP_CODE = '';
+    DEBUG.write('session', `First account ${u.username} created (admin of ${adopted.length} gate(s))`);
+    res.setHeader('Set-Cookie', `sid=${tok}${cookieAttrs(req)}`);
+    return [201, { ok: true, gates: adopted.length }];
+  }),
+
+  // The signed-in user's own settings: GET { username, email, dark }; PUT { email?, dark? }.
+  route('GET', '/api/me', 'user', async ({ s }) => {
+    const u = (await dk.getUser(STORE, s.user))!;
+    return [200, { username: u.username, email: u.email, dark: u.dark }];
+  }),
+  route('PUT', '/api/me', 'user', async ({ s, body }) => {
+    const u = await dk.updateUserSettings(STORE, s.user, { email: body.email, dark: body.dark });
+    return [200, { username: u.username, email: u.email, dark: u.dark }];
+  }),
+  // Changes the user's own password ({ current, password }); their other sessions end.
+  route('PUT', '/api/me/password', 'user', async ({ s, body }) => {
+    await dk.changeOwnPassword(STORE, s.user, body.current, body.password, s.tokenHash);
+    DEBUG.write('session', `${s.user} changed their password`);
     return [200, { ok: true }];
   }),
 
   // The gate the web UI has open (restored on page reload). API clients can ignore it.
   route('PUT', '/api/session/gate', 'user', async ({ s, body }) => {
     const g = await gateFor(s, body.phoneNumber);
-    if (s.raw.gate !== g.phoneNumber) DEBUG.write('session', `${s.user} opened gate ${g.phoneNumber}`);
-    s.raw.gate = g.phoneNumber;
+    if (s.gate !== g.phoneNumber) DEBUG.write('session', `${s.user} opened gate ${g.phoneNumber}`);
+    await dk.setSessionGate(STORE, s.tokenHash, g.phoneNumber);
     return [200, { gate: await gateInfo(g) }];
   }),
 
-  route('DELETE', '/api/session/gate', 'user', ({ s }) => { delete s.raw.gate; return [200, { ok: true }]; }),
+  route('DELETE', '/api/session/gate', 'user', async ({ s }) => { await dk.setSessionGate(STORE, s.tokenHash, null); return [200, { ok: true }]; }),
 
-  // The signed-in user's gates (never includes master codes). DKS Cloud has no call that lists them.
-  route('GET', '/api/gates', 'user', async ({ s }) => [200, { gates: await Promise.all((await dk.listGates(STORE, s.user)).map(gateInfo)) }]),
+  // The gates the signed-in user may open, with their role (never master codes or DKS logins).
+  route('GET', '/api/gates', 'user', async ({ s }) => [200, { gates: await Promise.all((await dk.userGates(STORE, s.user)).map(gateInfo)) }]),
 
-  // Adds a gate, or updates the master code of one already in the list.
+  // Adds a gate: { phoneNumber, masterCode, dksUser, dksPassword, gateConfig }. Refused (409) when it is managed here
+  // already. The DKS login is checked first, then a residents pull with these values runs; only when it succeeds is
+  // the gate saved, with the user as its admin. Progress: GET /api/gate-add.
   route('POST', '/api/gates', 'user', async ({ s, body }) => {
-    const existed = !!await dk.findGate(STORE, s.user, body.phoneNumber);
-    await dk.addGate(STORE, s.user, { phoneNumber: body.phoneNumber, masterCode: body.masterCode });
-    const g = (await dk.findGate(STORE, s.user, body.phoneNumber))!;
-    DEBUG.write('gates', `${s.user} ${existed ? 'updated the master code of' : 'added'} gate ${g.phoneNumber}`);
-    return [existed ? 200 : 201, await gateInfo(g)];
+    const phoneNumber = dk.checkPhone(body.phoneNumber);
+    const masterCode = dk.checkMasterCode(body.masterCode);
+    const dksUser = String(body.dksUser || '').trim();
+    const dksPassword = String(body.dksPassword || '');
+    if (!dksUser || !dksPassword) return [400, { error: 'The gate\'s DKS user and password are required' }];
+    const gateConfig = gateConfigFrom(body.gateConfig && typeof body.gateConfig === 'object' ? body.gateConfig : {});
+    if (await dk.gateExists(STORE, phoneNumber)) return [409, { error: dk.ALREADY_ADDED }];
+    if (job.state === 'running') return [409, { error: 'Another gate connection is running. Try again when it finishes.' }];
+    let reply;
+    try { reply = String(await client().checkLogin(dksUser, dksPassword)).trim(); } catch (e) {
+      return [502, { error: `DKS Cloud: ${(e as Error).message}` }];
+    }
+    if (reply !== 'OK') return [400, { error: `DKS Cloud refused that DKS user and password: ${reply || 'no reply'}` }];
+    if (connectionBusy() || await dk.gateExists(STORE, phoneNumber)) return [409, { error: 'Try again in a moment.' }];
+    await dk.setPrefs(STORE, phoneNumber, { gateConfig });
+    const g = asGate({ phoneNumber, masterCode, dksUser, dksPassword, addedBy: s.user, addedAt: new Date().toISOString() }, 'admin', s.user);
+    DEBUG.write('gates', `${s.user} is adding gate ${phoneNumber}`);
+    startPull(g, 'residents', { adding: true });
+    return [202, { ok: true }];
   }),
 
-  route('GET', G, 'gate-open', async ({ g }) => [200, await gateInfo(g)]),
+  // The connection that checks the gate the user is adding (or the last one, once finished): { job } or { job: null }.
+  route('GET', '/api/gate-add', 'user', ({ s }) => [200, { job: job.adding && job.user === s.user ? job : null }]),
 
-  // A changed master code needs a new successful connection before the gate's saved data opens again.
-  route('PUT', G, 'gate-open', async ({ s, g, body }) => {
-    await dk.addGate(STORE, s.user, { phoneNumber: g.phoneNumber, masterCode: body.masterCode });
-    DEBUG.write('gates', `${s.user} updated the master code of gate ${g.phoneNumber}`);
-    return [200, await gateInfo((await dk.findGate(STORE, s.user, g.phoneNumber))!)];
-  }),
+  route('GET', G, 'gate', async ({ g }) => [200, await gateInfo(g)]),
 
-  // Removes the gate from the user's list. Its downloaded files, prefs, history and schedules are kept.
-  route('DELETE', G, 'gate-open', async ({ s, g }) => {
-    await dk.removeGate(STORE, s.user, g.phoneNumber);
-    if (s.raw.gate === g.phoneNumber) delete s.raw.gate;
-    DEBUG.write('gates', `${s.user} removed gate ${g.phoneNumber} from their list`);
+  // Leaves the gate (removes the user's own access). The last admin can't leave.
+  webOnly(route('DELETE', G, 'gate', async ({ s, g }) => {
+    await dk.revokeAccess(STORE, g.phoneNumber, s.user);
+    if (s.gate === g.phoneNumber) await dk.setSessionGate(STORE, s.tokenHash, null);
+    await dk.addEvent(STORE, g.phoneNumber, { user: s.user, action: 'access', summary: `${s.user} left the gate` });
+    DEBUG.write('gates', `${s.user} left gate ${g.phoneNumber}`);
     return [200, { ok: true }];
-  }),
+  })),
 
-  // Gate connections (one at a time across all gates). A job for another gate, or another user's job while this
-  // user has not connected to the gate, shows as idle with busyElsewhere.
-  route('GET', `${G}/job`, 'gate-open', ({ s, g }) => [200, job.phoneNumber === g.phoneNumber
-    && (g.verified || String(job.user || '').toLowerCase() === String(s.user).toLowerCase())
+  // The gate's DKS login: GET { dksUser, dksPasswordSet }. PUT { dksUser?, dksPassword? (blank keeps), masterCode? }:
+  // a new DKS login is checked with DKS Cloud and saved at once (200); a new master code is checked by a residents
+  // pull and saved only when it succeeds (202; progress via G/job).
+  webOnly(route('GET', `${G}/login`, 'gate-admin', ({ g }) => [200, { dksUser: g.dksUser, dksPasswordSet: Boolean(g.dksPassword) }])),
+  webOnly(route('PUT', `${G}/login`, 'gate-admin', async ({ s, g, body }) => {
+    const dksUser = body.dksUser === undefined ? g.dksUser : String(body.dksUser).trim();
+    const dksPassword = body.dksPassword ? String(body.dksPassword) : g.dksPassword;
+    const masterCode = body.masterCode ? dk.checkMasterCode(body.masterCode) : g.masterCode;
+    if (!dksUser || !dksPassword) return [400, { error: 'The gate\'s DKS user and password are required' }];
+    const loginChanged = dksUser !== g.dksUser || dksPassword !== g.dksPassword;
+    if (loginChanged) {
+      let reply;
+      try { reply = String(await client().checkLogin(dksUser, dksPassword)).trim(); } catch (e) {
+        return [502, { error: `DKS Cloud: ${(e as Error).message}` }];
+      }
+      if (reply !== 'OK') return [400, { error: `DKS Cloud refused that DKS user and password: ${reply || 'no reply'}` }];
+    }
+    if (masterCode === g.masterCode) {
+      if (!loginChanged) return [200, { dksUser, dksPasswordSet: true, changed: false }];
+      await dk.updateGateLogin(STORE, g.phoneNumber, { dksUser, dksPassword });
+      await dk.addEvent(STORE, g.phoneNumber, { user: s.user, action: 'login', summary: 'Changed the gate\'s DKS login' });
+      DEBUG.write('gates', `${s.user} changed the DKS login of gate ${g.phoneNumber}`);
+      return [200, { dksUser, dksPasswordSet: true, changed: true }];
+    }
+    const trial: Gate = { ...g, masterCode, dksUser, dksPassword, user: dksUser, password: dksPassword };
+    return busy(g) || (startLoginCheck(trial), [202, { checking: true }]);
+  })),
+
+  // Gate users (admins only): GET the list; POST { username, password, role } creates an account with access to this
+  // gate (409 { exists: true } when the username is taken: share instead); POST share { username, role } gives an
+  // existing account access; PUT { role } changes a role; DELETE takes the user off this gate. A gate always keeps
+  // at least one admin.
+  webOnly(route('GET', `${G}/users`, 'gate-admin', async ({ g }) => [200, { users: await dk.gateUsers(STORE, g.phoneNumber) }])),
+  webOnly(route('POST', `${G}/users`, 'gate-admin', async ({ s, g, body }) => {
+    const role = dk.checkRole(body.role || 'readonly');
+    if (await dk.getUser(STORE, body.username)) {
+      return [409, { error: `The username "${dk.userKey(body.username)}" already exists. Share this gate with them instead.`, exists: true }];
+    }
+    const u = await dk.createUser(STORE, { username: body.username, password: body.password, email: body.email, createdBy: s.user });
+    await dk.grantAccess(STORE, g.phoneNumber, u.username, role, s.user);
+    await dk.addEvent(STORE, g.phoneNumber, { user: s.user, action: 'access', summary: `Created user ${u.username} (${roleText(role)})` });
+    DEBUG.write('gates', `${s.user} created user ${u.username} with ${role} access to gate ${g.phoneNumber}`);
+    return [201, { users: await dk.gateUsers(STORE, g.phoneNumber) }];
+  })),
+  webOnly(route('POST', `${G}/share`, 'gate-admin', async ({ s, g, body }) => {
+    const role = dk.checkRole(body.role || 'readonly');
+    await dk.grantAccess(STORE, g.phoneNumber, body.username, role, s.user);
+    await dk.addEvent(STORE, g.phoneNumber, { user: s.user, action: 'access', summary: `Shared the gate with ${dk.userKey(body.username)} (${roleText(role)})` });
+    DEBUG.write('gates', `${s.user} shared gate ${g.phoneNumber} with ${dk.userKey(body.username)} (${role})`);
+    return [200, { users: await dk.gateUsers(STORE, g.phoneNumber) }];
+  })),
+  webOnly(route('PUT', `${G}/users/:username`, 'gate-admin', async ({ s, g, params, body }) => {
+    const role = dk.checkRole(body.role);
+    await dk.setRole(STORE, g.phoneNumber, params.username, role);
+    await dk.addEvent(STORE, g.phoneNumber, { user: s.user, action: 'access', summary: `Changed ${dk.userKey(params.username)} to ${roleText(role)}` });
+    return [200, { users: await dk.gateUsers(STORE, g.phoneNumber) }];
+  })),
+  webOnly(route('DELETE', `${G}/users/:username`, 'gate-admin', async ({ s, g, params }) => {
+    await dk.revokeAccess(STORE, g.phoneNumber, params.username);
+    await dk.addEvent(STORE, g.phoneNumber, { user: s.user, action: 'access', summary: `Removed ${dk.userKey(params.username)} from the gate` });
+    DEBUG.write('gates', `${s.user} removed ${dk.userKey(params.username)} from gate ${g.phoneNumber}`);
+    return [200, { users: await dk.gateUsers(STORE, g.phoneNumber) }];
+  })),
+
+  // API keys of this gate (admins, web only): GET the list (never the keys); POST { name, role, expiresDays (0 never,
+  // 30, 90, 365) } creates one and returns it once as `key`; DELETE revokes one at once.
+  webOnly(route('GET', `${G}/api-keys`, 'gate-admin', async ({ g }) => [200, { apiKeys: await dk.listApiKeys(STORE, g.phoneNumber) }])),
+  webOnly(route('POST', `${G}/api-keys`, 'gate-admin', async ({ s, g, body }) => {
+    const out = await dk.createApiKey(STORE, g.phoneNumber, { name: body.name, role: body.role || 'readonly', expiresDays: body.expiresDays }, s.user);
+    await dk.addEvent(STORE, g.phoneNumber, { user: s.user, action: 'apikey', summary: `Created API key "${out.apiKey.name}" (${roleText(out.apiKey.role)})` });
+    DEBUG.write('api', `Gate ${g.phoneNumber}: API key ${out.apiKey.id} "${out.apiKey.name}" (${out.apiKey.role}) created by ${s.user}`);
+    return [201, out];
+  })),
+  webOnly(route('DELETE', `${G}/api-keys/:id`, 'gate-admin', async ({ s, g, params }) => {
+    const name = await dk.revokeApiKey(STORE, g.phoneNumber, params.id);
+    await dk.addEvent(STORE, g.phoneNumber, { user: s.user, action: 'apikey', summary: `Revoked API key "${name}"` });
+    DEBUG.write('api', `Gate ${g.phoneNumber}: API key ${params.id} "${name}" revoked by ${s.user}`);
+    return [200, { apiKeys: await dk.listApiKeys(STORE, g.phoneNumber) }];
+  })),
+
+  // Gate connections (one at a time across all gates). A job for another gate, or another user's gate-add check,
+  // shows as idle with busyElsewhere.
+  route('GET', `${G}/job`, 'gate', ({ g }) => [200, job.phoneNumber === g.phoneNumber && !job.adding
     ? job : { state: 'idle', log: [], busyElsewhere: job.state === 'running' }]),
 
-  // Allowed before the first successful connection: a successful pull is what opens the gate's saved data.
-  route('POST', `${G}/pull`, 'gate-open', ({ g, body }) => {
+  route('POST', `${G}/pull`, 'gate', ({ g, body }) => {
     if (!dk.PULL_FILES[body.what as dk.PullKind]) return [400, { error: 'what must be transactions or residents' }];
     return busy(g) || (startPull(g, body.what), [202, { ok: true }]);
   }),
@@ -961,7 +1130,7 @@ const ROUTES = [
     return [200, { changedBlocks, residentCounts: counts }];
   }),
 
-  route('POST', `${G}/send`, 'gate', async ({ g, body }) => {
+  route('POST', `${G}/send`, 'gate-admin', async ({ g, body }) => {
     if (body.confirm !== true) return [400, { error: 'Send must be confirmed' }];
     const prepared = await prepareGateSend(g);
     return busy(g) || (startSend(g, prepared), [202, { ok: true }]);
@@ -973,7 +1142,7 @@ const ROUTES = [
   // Residents/vendors in the working copy, keyed by directory code.
   route('GET', `${G}/residents`, 'gate', ({ g }) => editorResidents(g)),
 
-  route('POST', `${G}/residents`, 'gate', ({ s, g, body }) => withHistory(s, g,
+  route('POST', `${G}/residents`, 'gate-admin', ({ s, g, body }) => withHistory(s, g,
     { summary: `Added ${body.vendor ? 'vendor' : 'resident'} ${body.directoryCode}` }, async () => {
       const opts = await editOpts(g);
       const [, out] = await applyToCache(g.phoneNumber, (bufs) => dk.addEntry(bufs, body, opts));
@@ -987,14 +1156,14 @@ const ROUTES = [
     return row ? [200, row] : [404, { error: 'Directory code not found' }];
   }),
 
-  route('PUT', `${G}/residents/:code`, 'gate', ({ s, g, params, body }) => withHistory(s, g,
+  route('PUT', `${G}/residents/:code`, 'gate-admin', ({ s, g, params, body }) => withHistory(s, g,
     { summary: `Edited directory code ${params.code}` }, async () => {
       const opts = await editOpts(g);
       return applyToCache(g.phoneNumber, (bufs) => dk.applyResidentEdit(bufs, { ...body, directoryCode: params.code }, opts));
     })),
 
   // The local note of a directory code (never sent to the gate). Body: { note } (blank clears it).
-  route('PUT', `${G}/residents/:code/note`, 'gate', async ({ s, g, params, body }) => {
+  route('PUT', `${G}/residents/:code/note`, 'gate-admin', async ({ s, g, params, body }) => {
     const [, list] = await editorResidents(g);
     const want = params.code.padStart(list.dirDigits, '0');
     if (!list.rows!.some((r) => r.directoryCode === want)) return [404, { error: 'Directory code not found' }];
@@ -1002,17 +1171,17 @@ const ROUTES = [
   }),
 
   // Blanks the slot (the code stays on the gate as an empty unit).
-  route('DELETE', `${G}/residents/:code`, 'gate', async ({ s, g, params }) => dropNote(s, g, params.code, await withHistory(s, g,
+  route('DELETE', `${G}/residents/:code`, 'gate-admin', async ({ s, g, params }) => dropNote(s, g, params.code, await withHistory(s, g,
     { summary: `Deleted the entry at directory code ${params.code}` }, () => applyToCache(g.phoneNumber,
       (bufs) => dk.deleteResident(bufs, params.code))))),
 
   // Takes the directory code off the gate entirely.
-  route('DELETE', `${G}/directory-codes/:code`, 'gate', async ({ s, g, params }) => dropNote(s, g, params.code, await withHistory(s, g,
+  route('DELETE', `${G}/directory-codes/:code`, 'gate-admin', async ({ s, g, params }) => dropNote(s, g, params.code, await withHistory(s, g,
     { summary: `Removed directory code ${params.code}` }, () => applyToCache(g.phoneNumber,
       (bufs) => dk.removeDirectoryCode(bufs, params.code))))),
 
   // "Num of Digits in Dir Code". Decreasing wipes all resident data, so it needs confirm: true.
-  route('PUT', `${G}/dir-digits`, 'gate', async ({ s, g, body }) => {
+  route('PUT', `${G}/dir-digits`, 'gate-admin', async ({ s, g, body }) => {
     const from = dk.namesDirDigits((await dk.readCacheFile(STORE, g.phoneNumber, 'names.bin')).data);
     if (Number(body.digits) < from && body.confirm !== true) {
       return [400, { error: 'Decreasing the directory code digits destroys all resident data; confirm is required' }];
@@ -1023,22 +1192,20 @@ const ROUTES = [
 
   // Gate settings in the working copy's names.bin. PUT body: { <field key>: value, ... }.
   route('GET', `${G}/settings`, 'gate', ({ g }) => gateSettings(g.phoneNumber)),
-  route('PUT', `${G}/settings`, 'gate', ({ s, g, body }) => withHistory(s, g,
+  route('PUT', `${G}/settings`, 'gate-admin', ({ s, g, body }) => withHistory(s, g,
     { summary: 'Changed gate settings' }, async () => saveSettings(g, body, await commandRelays(g.phoneNumber)))),
 
   // The working copy: status, reset to the last pull, and file downloads (.bin / .map).
   route('GET', `${G}/working-copy`, 'gate', async ({ g }) => [200, await dk.cacheStatus(STORE, g.phoneNumber)]),
-  route('DELETE', `${G}/working-copy`, 'gate', ({ s, g }) => withHistory(s, g,
+  route('DELETE', `${G}/working-copy`, 'gate-admin', ({ s, g }) => withHistory(s, g,
     { summary: 'Reset the working copy to the last pull' }, async () => [200, await dk.resetCache(STORE, g.phoneNumber)])),
-  route('GET', `${G}/files/:name`, 'gate', async ({ g, params, res }) => { await sendFile(res, g.phoneNumber, params.name); }),
+  route('GET', `${G}/files/:name`, 'gate-admin', async ({ g, params, res }) => { await sendFile(res, g.phoneNumber, params.name); }),
 
   // Gate-scoped local preferences (relay labels, Device Association, gate config), keyed by phone number.
-  // Open before the first connection only while no account has connected to the gate (to set it up for the
-  // first pull).
-  route('GET', `${G}/prefs`, 'gate-setup', async ({ g }) => [200, await prefsOf(g.phoneNumber)]),
+  route('GET', `${G}/prefs`, 'gate', async ({ g }) => [200, await prefsOf(g.phoneNumber)]),
 
   // Changing the area-code setting also converts the working copy; both are one history entry.
-  route('PUT', `${G}/prefs`, 'gate-setup', ({ s, g, body }) => serial(g.phoneNumber, async () => {
+  route('PUT', `${G}/prefs`, 'gate-admin', ({ s, g, body }) => serial(g.phoneNumber, async () => {
     const saved = await prefsOf(g.phoneNumber);
     const before = await workingBuffers(g.phoneNumber);
     const was: Record<string, unknown> = { ...saved };
@@ -1053,16 +1220,16 @@ const ROUTES = [
     return out;
   })),
 
-  // History: this gate's events (newest first) and every user's last sign-in.
+  // History: this gate's events (newest first) and the gate's users with their last sign-in.
   route('GET', `${G}/history`, 'gate', async ({ g }) => [200, {
-    events: await dk.listHistory(STORE, g.phoneNumber), signIns: await dk.signIns(STORE),
+    events: await dk.listHistory(STORE, g.phoneNumber), users: await dk.gateUsers(STORE, g.phoneNumber),
   }]),
-  route('POST', `${G}/history/:id/revert`, 'gate', ({ s, g, params }) => serial(g.phoneNumber, () => revertEvent(s, g, params.id))),
+  route('POST', `${G}/history/:id/revert`, 'gate-admin', ({ s, g, params }) => serial(g.phoneNumber, () => revertEvent(s, g, params.id))),
 
   // Deletes everything stored about the gate: its database rows (every user's gate-list entry, prefs, history,
   // schedules, camera settings, snapshot log, notes, transaction history) and its folder (pulled files, working
   // copy, camera pictures). Nothing on the gate changes. Body: { confirm: true }.
-  route('POST', `${G}/delete-data`, 'gate', async ({ s, g, body }) => {
+  webOnly(route('POST', `${G}/delete-data`, 'gate-admin', async ({ s, g, body }) => {
     if (body.confirm !== true) return [400, { error: 'Deleting the gate\'s data must be confirmed' }];
     if (job.state === 'running' && job.phoneNumber === g.phoneNumber) return [409, { error: 'Wait for the gate connection to finish' }];
     if (snapRuns.get(g.phoneNumber)?.state === 'running') return [409, { error: 'Stop the snapshot run first' }];
@@ -1071,12 +1238,11 @@ const ROUTES = [
     const removed = await dk.deleteGateData(STORE, g.phoneNumber);
     snapRuns.delete(g.phoneNumber);
     if (job.phoneNumber === g.phoneNumber) job = { state: 'idle', log: [] };
-    for (const x of sessions.values()) if (x.gate === g.phoneNumber) delete x.gate;
     let files = '';
     try { fs.rmSync(g.dir, { recursive: true, force: true }); } catch (e) { files = (e as Error).message; }
     DEBUG.write('gates', `${s.user} deleted all stored data of gate ${g.phoneNumber}: ${JSON.stringify(removed)}${files ? `; files not all deleted: ${files}` : ''}`);
     return [200, { removed, ...(files && { filesError: files }) }];
-  }),
+  })),
 
   // Live relays: GET reads the current state (GetRelays); PUT { '0'|'1'|'2': boolean } sets relays 0-2
   // Active/Inactive (SetRelays). Active holds the gate open. PUT changes the gate immediately.
@@ -1088,7 +1254,7 @@ const ROUTES = [
   }),
 
   // Recorded in the history; not revertible (it changed the gate, not the working copy).
-  route('PUT', `${G}/relays`, 'gate', async ({ s, g, body }) => {
+  route('PUT', `${G}/relays`, 'gate-admin', async ({ s, g, body }) => {
     const desired: Record<string, boolean> = {};
     const prefs = await prefsOf(g.phoneNumber);
     const cmd = await commandRelays(g.phoneNumber);
@@ -1118,36 +1284,32 @@ const ROUTES = [
     return [200, { checkedAt: new Date(), ...out }];
   }),
 
-  // Scheduled transfers for this gate. Saving an entry stores the signed-in user's DKS password (encrypted)
-  // and makes them its owner; the entry runs with that password. Body: { days: [0-6], time: 'HH:MM',
-  // actions: ['send'|'residents'|'transactions'|'snapshots'], enabled }.
-  route('GET', `${G}/schedules`, 'gate', async ({ s, g }) => [200, {
+  // Scheduled transfers for this gate, run with the gate's DKS login; saving an entry makes the user its owner
+  // (shown as "Saved by"). Body: { days: [0-6], time: 'HH:MM', actions: ['send'|'residents'|'transactions'|'snapshots'], enabled }.
+  route('GET', `${G}/schedules`, 'gate', async ({ g }) => [200, {
     schedules: (await dk.listSchedules(STORE, g.phoneNumber)).map((x) => ({ ...x, queued: scheduleQueue.some((q) => q.id === x.id) })),
-    passwordSaved: await dk.hasCredential(STORE, s.user),
   }]),
 
-  route('POST', `${G}/schedules`, 'gate', async ({ s, g, body }) => {
+  route('POST', `${G}/schedules`, 'gate-admin', async ({ s, g, body }) => {
     const out = await dk.saveSchedule(STORE, g.phoneNumber, s.user, body);
-    await dk.saveCredential(STORE, s.user, s.password);
     DEBUG.write('schedule', `Gate ${g.phoneNumber}: schedule ${out!.id} added by ${s.user} (${scheduleText(out!)})`);
     return [201, out];
   }),
 
-  route('PUT', `${G}/schedules/:id`, 'gate', async ({ s, g, params, body }) => {
+  route('PUT', `${G}/schedules/:id`, 'gate-admin', async ({ s, g, params, body }) => {
     const out = await dk.saveSchedule(STORE, g.phoneNumber, s.user, body, params.id);
-    await dk.saveCredential(STORE, s.user, s.password);
     DEBUG.write('schedule', `Gate ${g.phoneNumber}: schedule ${params.id} changed by ${s.user} (${scheduleText(out!)})`);
     return [200, out];
   }),
 
-  route('DELETE', `${G}/schedules/:id`, 'gate', async ({ s, g, params }) => {
+  route('DELETE', `${G}/schedules/:id`, 'gate-admin', async ({ s, g, params }) => {
     await dk.deleteSchedule(STORE, g.phoneNumber, params.id);
     DEBUG.write('schedule', `Gate ${g.phoneNumber}: schedule ${params.id} deleted by ${s.user}`);
     return [200, { ok: true }];
   }),
 
   // Queues the entry to run now (after any running gate connection); its next scheduled time is unchanged.
-  route('POST', `${G}/schedules/:id/run`, 'gate', async ({ s, g, params }) => {
+  route('POST', `${G}/schedules/:id/run`, 'gate-admin', async ({ s, g, params }) => {
     const sch = await dk.getSchedule(STORE, g.phoneNumber, params.id);
     if (!sch) return [404, { error: 'Schedule not found' }];
     if (!queueSchedule(sch)) return [409, { error: 'This schedule is already queued' }];
@@ -1159,8 +1321,8 @@ const ROUTES = [
   // PUT with a blank password keeps the saved one. Body: { enabled, serial, username, password,
   // channels: [{ channel, name }], clockOffset, frames, framesAfter, clipTries, events: 'access'|'all', backfillHours }.
   route('GET', `${G}/cameras`, 'gate', async ({ g }) => [200, { settings: await dk.getCameraSettings(STORE, g.phoneNumber) }]),
-  route('PUT', `${G}/cameras`, 'gate', ({ s, g, body }) => saveCameras(s, g, body)),
-  route('DELETE', `${G}/cameras`, 'gate', async ({ s, g }) => {
+  route('PUT', `${G}/cameras`, 'gate-admin', ({ s, g, body }) => saveCameras(s, g, body)),
+  route('DELETE', `${G}/cameras`, 'gate-admin', async ({ s, g }) => {
     const removed = await dk.deleteCameraSettings(STORE, g.phoneNumber);
     if (removed) {
       await dk.addEvent(STORE, g.phoneNumber, { user: s.user, action: 'camera', summary: 'Removed camera settings' });
@@ -1170,7 +1332,7 @@ const ROUTES = [
   }),
 
   // Grabs a live frame from each saved channel; frames are at .../snapshots/live/ch<N>.jpg.
-  route('POST', `${G}/cameras/test`, 'gate', async ({ s, g }) => {
+  route('POST', `${G}/cameras/test`, 'gate-admin', async ({ s, g }) => {
     const cfg = await dk.getCameraSettings(STORE, g.phoneNumber, { withPassword: true });
     if (!cfg) return [404, { error: 'Save the camera settings first' }];
     const channels = await dk.liveSnapshots(CAMERAS, cfg, g.dir);
@@ -1229,7 +1391,7 @@ const ROUTES = [
     return [200, { stopped }];
   }),
   // Deletes every saved picture and the snapshot log (refused while a run is going).
-  route('DELETE', `${G}/snapshots`, 'gate', async ({ s, g }) => {
+  route('DELETE', `${G}/snapshots`, 'gate-admin', async ({ s, g }) => {
     const cur = snapRuns.get(g.phoneNumber);
     if (cur && cur.state === 'running') return [409, { error: 'Stop the snapshot run first' }];
     const out = await dk.deleteSnapshots(STORE, g.phoneNumber, g.dir);
@@ -1254,16 +1416,11 @@ const ROUTES = [
     return undefined;
   }),
 
-  // Deletes the signed-in user's saved password; their schedules fail until they save one again.
-  route('DELETE', '/api/credentials', 'user', async ({ s }) => {
-    const removed = await dk.forgetCredential(STORE, s.user);
-    if (removed) DEBUG.write('schedule', `${s.user} deleted their saved password`);
-    return [200, { removed }];
-  }),
-
-  // Debug log (one for the whole server, see src/debug-log.ts): { enabled, file, size }; PUT { enabled }.
-  route('GET', '/api/debug-log', 'user', () => [200, DEBUG.info()]),
+  // Debug log (one for the whole server, see src/debug-log.ts): { enabled, file, size }; PUT { enabled }. It covers
+  // every gate, so only users who are admin of at least one gate may use it.
+  route('GET', '/api/debug-log', 'user', async ({ s }) => (await dk.isAnyGateAdmin(STORE, s.user) ? [200, DEBUG.info()] : [403, { error: DEBUG_ADMIN }])),
   route('PUT', '/api/debug-log', 'user', async ({ s, body }) => {
+    if (!await dk.isAnyGateAdmin(STORE, s.user)) return [403, { error: DEBUG_ADMIN }];
     const on = body.enabled === true;
     if (on !== debugOn) {
       if (!on) DEBUG.write('server', `Debug logs turned off by ${s.user}`);
@@ -1273,7 +1430,11 @@ const ROUTES = [
     }
     return [200, DEBUG.info()];
   }),
-  route('GET', '/api/debug-log/file', 'user', ({ res }) => { send(res, 200, DEBUG.read(), 'text/plain'); return undefined; }),
+  route('GET', '/api/debug-log/file', 'user', async ({ s, res }) => {
+    if (!await dk.isAnyGateAdmin(STORE, s.user)) return [403, { error: DEBUG_ADMIN }];
+    send(res, 200, DEBUG.read(), 'text/plain');
+    return undefined;
+  }),
 ];
 
 // Scheduled transfers: checked every 30 s and once at startup, so a time missed while the server was stopped
@@ -1317,7 +1478,7 @@ async function runScheduleQueue() {
   } finally { scheduleRunning = false; }
 }
 
-// Runs an entry's transfers in SCHEDULE_ACTIONS order with its owner's saved password. A failed transfer does
+// Runs an entry's transfers in SCHEDULE_ACTIONS order with the gate's DKS login. A failed transfer does
 // not stop the others; the entry's last result lists every error. Send is skipped when the working copy has
 // no changes. Snapshots do not use the gate connection.
 async function runSchedule(sch: Schedule) {
@@ -1326,9 +1487,9 @@ async function runSchedule(sch: Schedule) {
   const since = new Date();
   DEBUG.write('schedule', `Gate ${sch.phoneNumber}: schedule ${sch.id} started for ${sch.user} (${sch.actions.join(', ')})`);
   try {
-    const cred = await dk.getCredential(STORE, sch.user);
-    if (!cred) throw new Error(`No saved password for ${sch.user}. Save the schedule again to store it.`);
-    const g = await gateFor(cred, sch.phoneNumber);
+    const rec = await dk.getGate(STORE, sch.phoneNumber);
+    if (!rec) throw new Error('The gate is no longer managed here');
+    const g = asGate(rec, 'admin', sch.user);
     for (const what of dk.SCHEDULE_ACTIONS.filter((a) => sch.actions.includes(a))) {
       if (what === 'snapshots') {
         try {
@@ -1401,14 +1562,31 @@ const server = http.createServer(async (req, res) => {
     }
     const hasBody = req.method === 'POST' || req.method === 'PUT';
     if (hasBody && !/^application\/json/.test(req.headers['content-type'] || '')) return send(res, 415, { error: 'JSON required' });
-    const s = currentSession(req);
+    let s: Session | null;
+    if (req.headers.authorization !== undefined) {
+      // An API key: only its own gate's data routes, never the web-only ones; no cookie session is used.
+      const m = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization);
+      const k = m ? await dk.findApiKey(STORE, m[1]) : null;
+      if (!k) {
+        DEBUG.write('api', `${req.method} ${url.pathname}: refused, ${m ? 'invalid or expired API key' : 'not a Bearer key'}`);
+        return send(res, 401, { error: m ? 'Invalid or expired API key' : 'Use the header Authorization: Bearer <API key>' });
+      }
+      if (!r.scope.startsWith('gate') || r.webOnly || String(params.phone || '').replace(/\D/g, '') !== k.phone) {
+        return send(res, 403, { error: `This API key works only on /api/gates/${k.phone}/… (gate login, users, API keys and deleting data are web-only)` });
+      }
+      s = { tokenHash: '', user: `api:${k.name}`, gate: null, mustChangePassword: false, apiKey: { phone: k.phone, role: k.role } };
+    } else s = await currentSession(req);
     if (!s && r.scope !== 'public') return send(res, 401, { error: 'Not logged in' });
+    if (s && s.mustChangePassword && r.scope !== 'public' && !(r.method === 'PUT' && url.pathname === '/api/me/password')) {
+      return send(res, 403, { error: 'Choose a new password first', mustChangePassword: true });
+    }
     let out: Reply | undefined | void;
     try {
       const body = hasBody ? await readJson(req) : {};
-      const g = r.scope.startsWith('gate') ? await gateFor(s!, params.phone) : null;
-      out = g && !g.verified && (r.scope === 'gate' || (r.scope === 'gate-setup' && await dk.gateClaimed(STORE, g.phoneNumber)))
-        ? [403, { error: NOT_CONNECTED, notConnected: true }]
+      const g = !r.scope.startsWith('gate') ? null : s!.apiKey ? asGate((await dk.getGate(STORE, s!.apiKey.phone))!, s!.apiKey.role, s!.user)
+        : await gateFor(s!, params.phone);
+      out = g && r.scope === 'gate-admin' && g.role !== 'admin'
+        ? [403, { error: ADMIN_ONLY }]
         : await r.handler({ s, g, params, body, req, res });
     } catch (e) {
       const err = e as Error & { status?: number };
@@ -1439,6 +1617,10 @@ if (movedFiles && Object.keys(movedFiles).length) {
 for (const phone of await dk.migrateWorkingFiles(STORE)) {
   console.log(`Gate ${phone}: working copy moved into the values tables`);
   DEBUG.write('server', `Gate ${phone}: working copy moved into the values tables`);
+}
+if (await dk.userCount(STORE) === 0) {
+  SETUP_CODE = crypto.randomBytes(5).toString('hex');
+  console.log(`No account exists yet. First-account setup code: ${SETUP_CODE} (enter it on the page to create the first account, or run: node cli.ts create-admin <username>)`);
 }
 server.listen(PORT, HOST, () => {
   console.log(`DoorKing web UI: http://localhost:${PORT}${PUBLIC_HOST ? ` and https://${PUBLIC_HOST}` : ''}  (config ${CONFIG.file || 'none, defaults'}, media in ${ROOT})`);

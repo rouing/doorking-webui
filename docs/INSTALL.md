@@ -114,7 +114,7 @@ Relative paths are relative to the folder `config.json` is in. Unknown names and
 | `security.sessionIdleMinutes` | `30` | sign-out after this long without activity |
 | `security.maxFailedSignIns`, `.signInWindowMinutes` | `5`, `15` | after this many failed sign-ins within the window, that user name is refused for the rest of it |
 | `schedules.checkSeconds` | `30` | how often scheduled transfers are checked |
-| `cameras.ffmpeg` | `""` | the ffmpeg program; empty = `tools/bin`, else `ffmpeg` on the PATH |
+| `cameras.ffmpeg` | `""` | the ffmpeg program: a path (relative to `config.json`'s folder, e.g. `tools/bin/ffmpeg-linux-x64`), or a name looked up on the PATH (`ffmpeg`); empty = the copy in `tools/bin` if there is one, else `ffmpeg` on the PATH |
 | `cameras.tidyMinutes` | `60` | how often old snapshots and leftover pieces are cleaned up |
 | `gateDefaults.*` | `GATE_DEFAULTS` in `src/gate-pull.ts` | gate-match defaults (`siteName`, `memorySize`, `areaCodes`, `modelNumber`, `antiPassBack`, `interface1816`, `dialDelay`), used when a gate's Gate configuration leaves a value empty |
 
@@ -134,17 +134,35 @@ going to the server on port 8080), `npm run typecheck`, `npm test`.
 
 1. Open **http://localhost:8080** on the same machine. Other computers can't reach it: the server listens on
    `127.0.0.1` only. For access from anywhere, set up section 6a and open `https://<public name>`.
-2. **Sign in** with the DKS Cloud user and password.
-3. **Add a gate**: its system phone number and master code. Then **Open** it.
-4. **System Settings → Gate configuration**: set Site name, System memory, Area codes, Model, Anti-passback and
-   Interface 1816/1820 **to match the gate**, then **Save gate configuration**. DKS Cloud checks these on every
-   connection; a mismatch fails the pull (for example "Anti-Passback Mismatch").
-5. **Pull residents** and **Pull transactions** (sidebar, Gate connection). The first successful pull connects you
-   to the gate and opens its data.
-6. Optional: relay names (Relays page), Device association and **Gate cameras** (System Settings), and
+2. **Create the first account.** While no account exists, the page asks for a **setup code**: the server prints it
+   in its console when it starts (`journalctl -u doorking | grep "setup code"` with systemd). Pick a username and a
+   password of at least 12 characters. Or, on the server: `node cli.ts create-admin <username>` (asks for the
+   password). The first account becomes admin of every gate already on the server.
+3. **Add a gate**: system phone number, master code, the gate's **DKS user and password**, and the gate
+   configuration (Site name, System memory, Area codes, Model, Anti-passback, Interface 1816/1820) **matching the
+   gate**. The app checks the DKS login, then pulls the residents; the gate is added (you as its admin) only when
+   that works. A mismatch fails the pull with a message such as "Anti-Passback Mismatch".
+4. **Open** the gate and **Pull transactions** (sidebar, Gate connection).
+5. Optional: relay names (Relays page), Device association and **Gate cameras** (System Settings), and
    **Scheduled Transfers**.
+6. Create accounts for the other people under **System Settings → Gate users** (Admin or Read only), or share the
+   gate with existing accounts. There is no sign-up page.
 
-Repeat steps 3–5 for each gate. Each DKS user has their own gate list.
+Repeat step 3 for each gate.
+
+**Account commands** (for whoever runs the server; they use `config.json`'s database and ask for the password, so it
+never appears on the command line):
+
+| Command | Does |
+|---|---|
+| `node cli.ts create-admin <username>` | creates an account that becomes admin of every gate without an admin |
+| `node cli.ts reset-password <username>` | sets a temporary password for someone who forgot theirs (they choose a new one at sign-in); ends their sessions |
+| `node cli.ts grant <username> <gate phone> <admin\|readonly>` | gives an account access to a gate, or changes its role (keeps at least one admin) |
+
+**Moving from an install with DKS sign-in** (before 2026-11-13): on the first start, each gate someone had
+connected to becomes a managed gate with that person's master code and, if they had saved a schedule, their DKS
+login. Gates without one show "No DKS login saved yet" under System Settings → Gate login. Then create the first
+account (step 2): it becomes admin of those gates.
 
 ## 6. Keep it running
 
@@ -184,7 +202,8 @@ update the service after a Node upgrade). Logs: `journalctl -u doorking`.
 
 The app itself never listens on a public address. A reverse proxy serves HTTPS on the public address and passes
 requests to `127.0.0.1:8080`; `server.publicHost` in `config.json` is set to the name. Anyone who reaches the page can
-try to sign in; the DKS sign-in (with its failure limit) is what protects it.
+try to sign in; the local accounts (with the sign-in failure limit) protect it, and the first account needs the
+setup code from the server's console, so create it before (or right after) making the site public.
 
 With **Caddy** (Ubuntu: `sudo apt install caddy`), which gets and renews Let's Encrypt certificates itself:
 1. Create a DNS **A record** for the name pointing to the machine's public IP. Open ports **80 and 443** to the

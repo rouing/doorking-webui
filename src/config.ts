@@ -21,7 +21,7 @@ export interface ServerConfig {
   dks: { url: string };
   security: { sessionIdleMinutes: number; maxFailedSignIns: number; signInWindowMinutes: number };
   schedules: { checkSeconds: number };
-  cameras: { ffmpeg: string; tidyMinutes: number }; // ffmpeg: '' = tools/bin, else ffmpeg on the PATH
+  cameras: { ffmpeg: string; tidyMinutes: number }; // ffmpeg: '' = tools/bin, else ffmpeg on the PATH; a path is absolute
   gateDefaults: typeof GATE_DEFAULTS;
 }
 
@@ -109,6 +109,8 @@ export function loadConfig({ file, env = process.env, args = process.argv.slice(
   }
   s.server.publicHost = String(s.server.publicHost).trim().toLowerCase();
   for (const k of ['media', 'logs', 'keyFile'] as const) s.paths[k] = path.resolve(dir, s.paths[k]);
+  // A path (with a folder) is relative to the file's folder; a bare name such as "ffmpeg" is looked up on the PATH.
+  if (/[\\/]/.test(s.cameras.ffmpeg)) s.cameras.ffmpeg = path.resolve(dir, s.cameras.ffmpeg);
   return { file: fs.existsSync(f) ? f : null, ...s };
 }
 

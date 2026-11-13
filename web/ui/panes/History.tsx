@@ -1,15 +1,17 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { Button, Card, Flex, Heading, Table, Text } from '@radix-ui/themes';
 import type { HistoryEvent, HistoryReply } from '../../../src/types.ts';
-import { errorText, type GateApi } from '../api.ts';
+import { errorText, useReadOnly, type GateApi } from '../api.ts';
 import { useConfirm } from '../Confirm.tsx';
 import { fmtTime } from '../format.ts';
 
-const ACTIONS: Record<string, string> = { change: 'Change', revert: 'Revert', pull: 'Pull', send: 'Send', relay: 'Relay', camera: 'Camera' };
+const ACTIONS: Record<string, string> = { change: 'Change', revert: 'Revert', pull: 'Pull', send: 'Send', relay: 'Relay', camera: 'Camera',
+  access: 'Users', login: 'Gate login', apikey: 'API key', note: 'Note' };
 
-// Every user's last sign-in, then this gate's events (newest first). Rows with details expand on click, one at a
+// The gate's users with their last sign-in, then this gate's events (newest first). Rows with details expand on click, one at a
 // time; Revert undoes that change in the working copy only.
 export function History({ gapi, onReverted }: { gapi: GateApi; onReverted: () => void }) {
+  const readOnly = useReadOnly();
   const [history, setHistory] = useState<HistoryReply | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [info, setInfo] = useState('Loading…');
@@ -46,15 +48,16 @@ export function History({ gapi, onReverted }: { gapi: GateApi; onReverted: () =>
         refused if a later change touched the same data.
       </Text>
       <Card>
-        <Heading size="3" mb="2">Last sign-in</Heading>
+        <Heading size="3" mb="2">Gate users</Heading>
         <Table.Root size="1">
           <Table.Header>
-            <Table.Row><Table.ColumnHeaderCell>User</Table.ColumnHeaderCell><Table.ColumnHeaderCell>Last sign-in</Table.ColumnHeaderCell>
-              <Table.ColumnHeaderCell>Sign-ins</Table.ColumnHeaderCell></Table.Row>
+            <Table.Row><Table.ColumnHeaderCell>User</Table.ColumnHeaderCell><Table.ColumnHeaderCell>Role</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell>Last sign-in</Table.ColumnHeaderCell></Table.Row>
           </Table.Header>
           <Table.Body>
-            {(history?.signIns || []).map((u) => (
-              <Table.Row key={u.user}><Table.Cell>{u.user}</Table.Cell><Table.Cell>{fmtTime(u.last)}</Table.Cell><Table.Cell>{u.count}</Table.Cell></Table.Row>
+            {(history?.users || []).map((u) => (
+              <Table.Row key={u.username}><Table.Cell>{u.username}</Table.Cell><Table.Cell>{u.role === 'admin' ? 'Admin' : 'Read only'}</Table.Cell>
+                <Table.Cell>{u.lastSignIn ? fmtTime(u.lastSignIn) : 'never'}</Table.Cell></Table.Row>
             ))}
           </Table.Body>
         </Table.Root>
@@ -87,7 +90,7 @@ export function History({ gapi, onReverted }: { gapi: GateApi; onReverted: () =>
                     <Table.Cell>{result}</Table.Cell>
                     <Table.Cell>
                       {e.revertedBy ? `Reverted by ${e.revertedBy.user} ${fmtTime(e.revertedBy.time)}`
-                        : e.revertible ? <Button size="1" variant="soft" color="gray"
+                        : e.revertible && !readOnly ? <Button size="1" variant="soft" color="gray"
                           onClick={(ev) => { ev.stopPropagation(); revert(e); }}>Revert</Button> : ''}
                     </Table.Cell>
                   </Table.Row>

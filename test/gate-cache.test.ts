@@ -517,6 +517,18 @@ test('accounts: rules, scrypt hashes, unique usernames and emails, own settings 
   await dk.confirmEmail(store, 'john', 'john@example.com');
   await assert.rejects(() => dk.updateUserSettings(store, 'jane', { email: 'john@example.com' }), /already used/);
   assert.deepStrictEqual(await dk.updateUserSettings(store, 'jane', { email: '', dark: true }).then((x) => [x.email, x.dark]), ['', true]);
+  // Phone: international form; 10 digits = US/Canada; '' removes it; not unique.
+  assert.strictEqual(dk.checkUserPhone('(214) 555-0100'), '+12145550100');
+  assert.strictEqual(dk.checkUserPhone('1-214-555-0100'), '+12145550100');
+  assert.strictEqual(dk.checkUserPhone('+44 20 7946 0958'), '+442079460958');
+  assert.strictEqual(dk.checkUserPhone('  '), '');
+  assert.throws(() => dk.checkUserPhone('555-0100'), /10-digit/);
+  assert.throws(() => dk.checkUserPhone('+0 123 456 789'), /country code/);
+  assert.throws(() => dk.checkUserPhone('214 555 01OO'), /only have digits/);
+  assert.strictEqual((await dk.updateUserSettings(store, 'jane', { phone: '214.555.0100' })).phone, '+12145550100');
+  assert.strictEqual((await dk.updateUserSettings(store, 'john', { phone: '+1 214 555 0100' })).phone, '+12145550100');
+  assert.strictEqual((await dk.updateUserSettings(store, 'jane', { dark: false })).phone, '+12145550100'); // untouched
+  assert.strictEqual((await dk.updateUserSettings(store, 'jane', { phone: '' })).phone, '');
   // Own password change: needs the current one; ends the other sessions, keeps this one; clears must-change.
   const keep = await dk.findSession(store, await dk.createSession(store, 'jane'), 60000);
   const othertoken = await dk.createSession(store, 'jane');
@@ -585,6 +597,8 @@ test('email: confirmation, unconfirmed addresses never block, reset lookup, invi
   assert.deepStrictEqual((await dk.alertRecipients(store, '5550100')).map((r) => r.username), ['ann']);
   assert.strictEqual((await dk.getUser(store, 'dee')).notifyAccess, false);
   assert.ok((await dk.gateUsers(store, '5550100')).every((g) => g.invited === false));
+  await dk.updateUserSettings(store, 'bob', { phone: '2145550100' });
+  assert.strictEqual((await dk.gateUsers(store, '5550100')).find((g) => g.username === 'bob').phone, '+12145550100');
 }));
 
 test('email outbox: bodies encrypted until sent, retries with a growing wait, then given up', withStore(async (store) => {

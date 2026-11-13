@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Badge, Button, Callout, Card, Checkbox, Flex, Grid, Heading, Link, Select, Table, Text, TextField } from '@radix-ui/themes';
 import type { ApiKeyInfo, CameraSettings, DebugLogInfo, GateConfig as Config, GateLogin, GatePrefs, GateRole, GateUser, ResidentsReply } from '../../../src/types.ts';
 import { api, ApiError, errorText, gateUrl, useReadOnly, type GateApi } from '../api.ts';
-import { fmtTime } from '../format.ts';
+import { fmtIntlPhone, fmtTime } from '../format.ts';
 import { Field } from '../panes/fields.tsx';
 import { useConfirm } from '../Confirm.tsx';
 import { HelpTip } from '../HelpTip.tsx';
@@ -120,7 +120,7 @@ function GateUsersCard({ gapi, me, emailEnabled, onSessionChange }: { gapi: Gate
         </Text>
         <Table.Root size="1">
           <Table.Header>
-            <Table.Row>{['User', 'Email', 'Role', 'Added by', 'Last sign-in', ''].map((h, i) => <Table.ColumnHeaderCell key={i}>{h}</Table.ColumnHeaderCell>)}</Table.Row>
+            <Table.Row>{['User', 'Email', 'Phone', 'Role', 'Added by', 'Last sign-in', ''].map((h, i) => <Table.ColumnHeaderCell key={i}>{h}</Table.ColumnHeaderCell>)}</Table.Row>
           </Table.Header>
           <Table.Body>
             {users.map((u) => (
@@ -131,6 +131,7 @@ function GateUsersCard({ gapi, me, emailEnabled, onSessionChange }: { gapi: Gate
                   {u.invited && <Flex gap="2" align="center" mt="1"><Badge color="amber">invited</Badge>
                     {emailEnabled && <Button size="1" variant="ghost" onClick={() => resendInvite(u)}>Send again</Button>}</Flex>}
                 </Table.Cell>
+                <Table.Cell>{u.phone ? <a href={`tel:${u.phone}`}>{fmtIntlPhone(u.phone)}</a> : ''}</Table.Cell>
                 <Table.Cell><RoleSelect value={u.role} onChange={(r) => changeRole(u, r)} /></Table.Cell>
                 <Table.Cell>{u.grantedBy}</Table.Cell>
                 <Table.Cell>{u.lastSignIn ? fmtTime(u.lastSignIn) : 'never'}</Table.Cell>

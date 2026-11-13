@@ -94,12 +94,16 @@ Gate admins manage people under **System Settings → Gate users**:
 ### User Settings
 
 **User settings** (on the gate list, or under your name at the bottom of the left-hand menu) holds your own settings,
-which follow you to any browser: **Dark mode**, your **email**, **email notifications**, **Passkeys** and **changing
-your password** (asks for your current one, and signs you out everywhere else).
+which follow you to any browser: **Dark mode**, your **email**, your **phone** number, **email notifications**,
+**Passkeys** and **changing your password** (asks for your current one, and signs you out everywhere else).
 
 **Email:** after you type a new address, the app sends it a **confirmation link** (valid 24 hours); it shows "check
 your inbox" until you open it, and **Send the link again** if needed. Only a confirmed email is used. Each email can
 belong to one account only. If you had a confirmed email, it is told about the change.
+
+**Phone:** optional. Admins of your gates see it in their Gate users list, to reach you. Type a 10-digit US/Canada
+number, or `+` and the country code for other countries; it's saved in international form (for example
++1 (214) 555-0100).
 
 **Email notifications** (to your confirmed email):
 - when you're given access to a gate, removed from one, or your role changes (you can turn this off);

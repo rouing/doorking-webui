@@ -78,6 +78,7 @@ removed 2026-11-13), `localAccountsMigrated` (time the move from DKS sign-in to 
 | `created_at`, `created_by` | TIMESTAMPTZ, TEXT | when and by whom (`setup`, `cli` or a username) |
 | `last_sign_in`, `sign_ins` | TIMESTAMPTZ null, INTEGER | last sign-in (password or passkey) and the count |
 | `webauthn_id` | TEXT, null | random WebAuthn user handle (base64url) given to passkeys, so they don't hold the username |
+| `phone` | TEXT, null | the user's phone number in E.164 (`+12145550100`); optional, not unique, not verified; shown to admins of their gates |
 | `pending_email` | TEXT, null | an address waiting for its confirmation link (not unique; `email` holds only confirmed addresses since 2026-11-13) |
 | `notify_access`, `notify_alerts` | BOOLEAN | the user's email notifications: gate access changes; gate alerts as an admin |
 

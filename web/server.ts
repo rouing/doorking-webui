@@ -223,7 +223,7 @@ async function currentSession(req: IncomingMessage): Promise<Session | null> {
 }
 
 const NO_GATE = 'Gate not found, or you have no access to it';
-const meReply = (u: dk.User) => ({ username: u.username, email: u.email, pendingEmail: u.pendingEmail, dark: u.dark,
+const meReply = (u: dk.User) => ({ username: u.username, email: u.email, pendingEmail: u.pendingEmail, phone: u.phone, dark: u.dark,
   notifyAccess: u.notifyAccess, notifyAlerts: u.notifyAlerts });
 
 // The site name passkeys are tied to for this request: the public name (over HTTPS), or localhost on the server
@@ -1020,7 +1020,7 @@ const ROUTES = [
     const u = (await dk.getUser(STORE, s.user))!;
     const open = s.gate ? await dk.accessOf(STORE, s.gate, s.user) : null;
     const rec = open && s.gate ? await dk.getGate(STORE, s.gate) : null;
-    return [200, { loggedIn: true, user: u.username, email: u.email, pendingEmail: u.pendingEmail, dark: u.dark,
+    return [200, { loggedIn: true, user: u.username, email: u.email, pendingEmail: u.pendingEmail, phone: u.phone, dark: u.dark,
       notifyAccess: u.notifyAccess, notifyAlerts: u.notifyAlerts, mustChangePassword: u.mustChangePassword, emailEnabled: Boolean(MAILER),
       gate: rec && open ? await gateInfo({ ...rec, role: open }) : null, defaults, holidayList: dk.FIXED_HOLIDAYS }];
   }),
@@ -1073,11 +1073,11 @@ const ROUTES = [
 
   // The signed-in user's own settings: GET { username, email, dark }; PUT { email?, dark? }.
   route('GET', '/api/me', 'user', async ({ s }) => [200, meReply((await dk.getUser(STORE, s.user))!)]),
-  // { email?, dark?, notifyAccess?, notifyAlerts? }. A new email waits for its confirmation link (sent to it); the
+  // { email?, phone?, dark?, notifyAccess?, notifyAlerts? }. A new email waits for its confirmation link (sent to it); the
   // old confirmed address is told about the change.
   route('PUT', '/api/me', 'user', async ({ s, body }) => {
     const was = (await dk.getUser(STORE, s.user))!;
-    const u = await dk.updateUserSettings(STORE, s.user, { email: body.email, dark: body.dark, notifyAccess: body.notifyAccess, notifyAlerts: body.notifyAlerts });
+    const u = await dk.updateUserSettings(STORE, s.user, { email: body.email, dark: body.dark, phone: body.phone, notifyAccess: body.notifyAccess, notifyAlerts: body.notifyAlerts });
     if (u.pendingEmail && u.pendingEmail !== was.pendingEmail) {
       await sendVerification(u.username);
       if (u.email) await mailTo(u.email, dk.messages.emailChanged(u.username, u.pendingEmail), 'security');

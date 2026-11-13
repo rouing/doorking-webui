@@ -69,12 +69,12 @@ A user whose password was set by someone else (a new account, or the CLI's `rese
 | Method | Path | Level | Body | Result |
 |---|---|---|---|---|
 | GET | `/help` | public | | the user guide (`MANUAL.md`) as an HTML page (not under `/api`) |
-| GET | `/api/session` | public | | `{ loggedIn: false, setup?, emailEnabled }` (`setup`: no account exists yet), or `{ loggedIn: true, user, email, pendingEmail, dark, notifyAccess, notifyAlerts, mustChangePassword, emailEnabled, gate, defaults, holidayList }`; `gate`: `{ phoneNumber, siteName, addedAt, role }` |
+| GET | `/api/session` | public | | `{ loggedIn: false, setup?, emailEnabled }` (`setup`: no account exists yet), or `{ loggedIn: true, user, email, pendingEmail, phone, dark, notifyAccess, notifyAlerts, mustChangePassword, emailEnabled, gate, defaults, holidayList }`; `gate`: `{ phoneNumber, siteName, addedAt, role }` |
 | POST | `/api/session` | public | `{ user, password }` | local account; 200 `{ ok: true }` and the `sid` cookie; 401 wrong username or password; 429 too many failures |
 | DELETE | `/api/session` | public | | sign out: `{ ok: true }` |
 | POST | `/api/setup` | public | `{ setupCode, username, password, email? }` | only while no account exists: creates the first account (admin of every gate without an admin) and signs it in: 201 `{ ok, gates }`; 403 wrong setup code (printed in the server's console at start); 409 once an account exists |
-| GET | `/api/me` | user | | `{ username, email, pendingEmail, dark, notifyAccess, notifyAlerts }` (`email`: confirmed; `pendingEmail`: waiting for its link) |
-| PUT | `/api/me` | user | `{ email?, dark?, notifyAccess?, notifyAlerts? }` | your own settings; a new `email` becomes `pendingEmail` and gets a confirmation link (the old confirmed address is told); `""` removes it; 409 when another account has confirmed it |
+| GET | `/api/me` | user | | `{ username, email, pendingEmail, phone, dark, notifyAccess, notifyAlerts }` (`phone`: E.164 such as `+12145550100`, or `""`) (`email`: confirmed; `pendingEmail`: waiting for its link) |
+| PUT | `/api/me` | user | `{ email?, phone?, dark?, notifyAccess?, notifyAlerts? }` | your own settings; `phone` is stored in international form (10 digits = US/Canada, else `+` and the country code; `""` removes it; 400 when it doesn't look like a number); a new `email` becomes `pendingEmail` and gets a confirmation link (the old confirmed address is told); `""` removes it; 409 when another account has confirmed it |
 | POST | `/api/me/email/resend` | user | | sends the confirmation link again; 503 when email is off |
 | POST | `/api/email/verify` | public | `{ token }` | confirms the email from a link (`#verify=<token>`): `{ username, email }`; 400 invalid, used or expired |
 | POST | `/api/password-reset/request` | public | `{ identifier }` (username or confirmed email) | always 200 with the same message; a reset link (`#reset=`, 1 hour) goes to the account's confirmed email if there is one. 3 per account and 50 in total per 15 minutes; 503 when email is off |
@@ -103,7 +103,7 @@ A user whose password was set by someone else (a new account, or the CLI's `rese
 |---|---|---|---|---|
 | GET | `/login` | gate-admin | | `{ dksUser, dksPasswordSet }` (the password and master code are never returned) |
 | PUT | `/login` | gate-admin | `{ dksUser?, dksPassword? (empty keeps), masterCode? (empty keeps) }` | a new DKS login is checked with DKS Cloud, then saved: 200 `{ changed }`; a new master code starts a residents pull with it: 202 `{ checking: true }`, saved when the pull succeeds (progress via `/job`) |
-| GET | `/users` | gate-admin | | `{ users: [{ username, email, pendingEmail, invited, role, grantedBy, grantedAt, lastSignIn }] }` |
+| GET | `/users` | gate-admin | | `{ users: [{ username, email, pendingEmail, phone, invited, role, grantedBy, grantedAt, lastSignIn }] }` |
 | POST | `/users` | gate-admin | `{ username, password?, email?, role? ("readonly" default \| "admin") }` | creates an account with access to this gate: with `email` and no `password` (and email on), an **invitation** link goes to the email; otherwise `password` is a temporary one (changed at first sign-in) and an `email` gets a confirmation link. 201 `{ users, invited }`; 409 `{ exists: true }` when the username is taken (share instead) |
 | POST | `/users/{username}/invite` | gate-admin | | sends the invitation again (new link): `{ users }`; 409 already accepted |
 | POST | `/share` | gate-admin | `{ username, role? }` | gives an existing account access: `{ users }`; 404 no such user; 409 already has access |

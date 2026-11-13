@@ -11,14 +11,15 @@ const PASSWORD_MAX = 200;
 const SCRYPT = { N: 32768, r: 8, p: 1, keylen: 64 };
 const scrypt = promisify(crypto.scrypt) as (pw: string, salt: Buffer, len: number, o: crypto.ScryptOptions) => Promise<Buffer>;
 
-// email: the verified address ('' none); pendingEmail: an address waiting for its confirmation link. invited: the
+// email: the verified address ('' none); pendingEmail: an address waiting for its confirmation link. phone: E.164
+// ('' none; not verified). invited: the
 // account was created with an email invitation that hasn't been accepted yet (it has no password).
 export interface User {
-  username: string; email: string; pendingEmail: string; dark: boolean; mustChangePassword: boolean; notifyAccess: boolean;
+  username: string; email: string; pendingEmail: string; phone: string; dark: boolean; mustChangePassword: boolean; notifyAccess: boolean;
   notifyAlerts: boolean; invited: boolean; createdAt: string; createdBy: string; lastSignIn: string | null; signIns: number;
 }
 interface UserRow {
-  username: string; password_hash: string; email: string | null; pending_email: string | null; dark: boolean; must_change: boolean;
+  username: string; password_hash: string; email: string | null; pending_email: string | null; phone: string | null; dark: boolean; must_change: boolean;
   notify_access: boolean; notify_alerts: boolean; created_at: string; created_by: string; last_sign_in: string | null; sign_ins: number;
 }
 // The password hash of an invited account that hasn't chosen a password yet: nothing can match it.
@@ -27,7 +28,7 @@ const NO_PASSWORD = '!';
 const bad = (msg: string, status = 400) => Object.assign(new Error(msg), { status });
 export const userKey = (u: unknown): string => String(u || '').trim().toLowerCase();
 const fromRow = (r: UserRow): User => ({
-  username: r.username, email: r.email || '', pendingEmail: r.pending_email || '', dark: r.dark, mustChangePassword: r.must_change,
+  username: r.username, email: r.email || '', pendingEmail: r.pending_email || '', phone: r.phone || '', dark: r.dark, mustChangePassword: r.must_change,
   notifyAccess: r.notify_access, notifyAlerts: r.notify_alerts, invited: r.password_hash === NO_PASSWORD, createdAt: r.created_at, createdBy: r.created_by, lastSignIn: r.last_sign_in, signIns: r.sign_ins,
 });
 
@@ -45,6 +46,19 @@ export function checkPassword(pw: unknown): string {
   if (s.length < PASSWORD_MIN) throw bad(`Password must be at least ${PASSWORD_MIN} characters`);
   if (s.length > PASSWORD_MAX) throw bad(`Password must be at most ${PASSWORD_MAX} characters`);
   return s;
+}
+
+// The user's phone number in international form (E.164: + country code and digits), or '' for none. Spaces, dashes,
+// dots and brackets are ignored; 10 digits (or 11 starting with 1) are taken as US/Canada (+1).
+export function checkUserPhone(p: unknown): string {
+  const raw = String(p ?? '').trim();
+  if (!raw) return '';
+  const plus = raw.startsWith('+');
+  const digits = raw.replace(/[\s().\-]/g, '').replace(/^\+/, '');
+  if (!/^\d+$/.test(digits)) throw bad('A phone number may only have digits, spaces, dashes, brackets and a leading +');
+  const e164 = plus ? `+${digits}` : digits.length === 10 ? `+1${digits}` : digits.length === 11 && digits.startsWith('1') ? `+${digits}` : '';
+  if (!/^\+[1-9]\d{7,14}$/.test(e164)) throw bad('Enter a 10-digit US/Canada number, or + and the country code (for example +44 20 7946 0958)');
+  return e164;
 }
 
 // '' (no email) or a lower-case address.
@@ -192,11 +206,12 @@ export async function changeOwnPassword(store: Store, username: unknown, current
   await setPassword(store, r.username, next, { keepSession });
 }
 
-// The user's own settings: dark mode, the two email notifications, and email: '' removes it (confirmed and pending);
+// The user's own settings: dark mode, phone ('' removes it), the two email notifications, and email: '' removes it (confirmed and pending);
 // the confirmed address clears a pending change; any other address becomes pending until its link is opened.
-export async function updateUserSettings(store: Store, username: unknown, { email, dark, notifyAccess, notifyAlerts }:
-  { email?: unknown; dark?: unknown; notifyAccess?: unknown; notifyAlerts?: unknown }): Promise<User> {
+export async function updateUserSettings(store: Store, username: unknown, { email, dark, phone, notifyAccess, notifyAlerts }:
+  { email?: unknown; dark?: unknown; phone?: unknown; notifyAccess?: unknown; notifyAlerts?: unknown }): Promise<User> {
   const name = userKey(username);
+  if (phone !== undefined) await run(store, 'UPDATE users SET phone = $2 WHERE username = $1', [name, checkUserPhone(phone) || null]);
   if (email !== undefined) {
     const mail = checkEmail(email);
     const cur = await getUser(store, name);

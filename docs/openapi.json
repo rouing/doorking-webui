@@ -3054,6 +3054,10 @@
           "pendingEmail": {
             "type": "string"
           },
+          "phone": {
+            "type": "string",
+            "description": "E.164, e.g. +12145550100 ('' none; not verified)"
+          },
           "invited": {
             "type": "boolean"
           },

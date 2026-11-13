@@ -4,7 +4,7 @@ import { browserSupportsWebAuthn, startRegistration } from '@simplewebauthn/brow
 import type { PasskeyInfo, SessionReply } from '../../src/types.ts';
 import { api, errorText } from './api.ts';
 import { useConfirm } from './Confirm.tsx';
-import { fmtTime } from './format.ts';
+import { fmtIntlPhone, fmtTime } from './format.ts';
 
 const MIN = 12;
 
@@ -299,7 +299,17 @@ type SignedIn = Extract<SessionReply, { loggedIn: true }>;
 
 export function UserSettings({ session, onSaved }: { session: SignedIn; onSaved: () => void }) {
   const [email, setEmail] = useState(session.pendingEmail || session.email);
+  const [phone, setPhone] = useState(fmtIntlPhone(session.phone));
   const [info, setInfo] = useState('');
+  const [phoneInfo, setPhoneInfo] = useState('');
+  const savePhone = async () => {
+    try {
+      const r = await api<{ phone: string }>('PUT', '/api/me', { phone: phone.trim() });
+      setPhone(fmtIntlPhone(r.phone));
+      setPhoneInfo(r.phone ? `Saved as ${fmtIntlPhone(r.phone)}.` : 'Phone number removed.');
+      onSaved();
+    } catch (e) { setPhoneInfo(`Not saved: ${errorText(e)}`); }
+  };
   const save = async (body: Record<string, unknown>, done: string) => {
     try { await api('PUT', '/api/me', body); setInfo(done); onSaved(); } catch (e) { setInfo(`Not saved: ${errorText(e)}`); }
   };
@@ -339,6 +349,17 @@ export function UserSettings({ session, onSaved }: { session: SignedIn; onSaved:
             <Button onClick={() => save({ email: next }, !next ? 'Email removed.' : next === session.email ? 'Saved.' : `Saved. Open the link we sent to ${next} to confirm it.`)}>Save email</Button>
             <Text size="2" color="gray">{info}</Text>
           </Flex>
+        </Flex>
+      </Card>
+      <Card>
+        <Flex direction="column" gap="3" style={{ maxWidth: 480 }}>
+          <Heading size="3">Phone</Heading>
+          <Text size="2" color="gray">
+            Optional. Admins of your gates can see it, to reach you. A 10-digit number is taken as US/Canada; for other countries start
+            with + and the country code.
+          </Text>
+          <TextField.Root type="tel" inputMode="tel" value={phone} placeholder="(214) 555-0100 or +44 20 7946 0958" onChange={(e) => setPhone(e.target.value)} />
+          <Flex gap="3" align="center"><Button onClick={savePhone}>Save phone</Button><Text size="2" color="gray">{phoneInfo}</Text></Flex>
         </Flex>
       </Card>
       <Card>

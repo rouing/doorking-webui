@@ -106,7 +106,7 @@ export interface GateInfo { phoneNumber: string; siteName: string; addedAt: stri
 // Someone with access to a gate (G/users, History).
 // email: confirmed; pendingEmail: waiting for its confirmation link; invited: hasn't accepted their invitation yet.
 export interface GateUser {
-  username: string; email: string; pendingEmail: string; invited: boolean; role: GateRole; grantedBy: string; grantedAt: string; lastSignIn: string | null;
+  username: string; email: string; pendingEmail: string; phone: string; invited: boolean; role: GateRole; grantedBy: string; grantedAt: string; lastSignIn: string | null;
 }
 // G/api-keys: an API key of the gate (never the key itself, which is shown once when created).
 export interface ApiKeyInfo {
@@ -126,6 +126,7 @@ export type SessionReply =
     user: string;
     email: string; // confirmed
     pendingEmail: string; // waiting for its confirmation link
+    phone: string; // E.164 ('' none)
     dark: boolean;
     notifyAccess: boolean; // emails when added to, removed from or changed on a gate
     notifyAlerts: boolean; // gate alerts (as a gate admin)

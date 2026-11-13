@@ -49,7 +49,7 @@ Sign in (local account) ──> Your gates (admin / read only) ──> Open a ga
    users + sessions tables      gate_access                                   managed_gates (encrypted)
 ```
 1. **Accounts** (`src/users.ts`). People sign in with a local username and password; usernames and emails are
-   case-insensitive and unique. Passwords are scrypt hashes (minimum 12 characters). There is no sign-up page:
+   case-insensitive and unique. An optional phone number (E.164, not verified) is shown to admins of the user's gates. Passwords are scrypt hashes (minimum 12 characters). There is no sign-up page:
    gate admins create accounts (with a temporary password the user must replace at their first sign-in). Nobody
    can read or set another user's password from the web; whoever runs the server can (`node cli.ts reset-password`).
    After 5 failed sign-ins within 15 minutes a username is refused for the rest of that time.

@@ -108,4 +108,9 @@ export function downloadCsv(name: string, header: string[], rows: string[][]) {
   URL.revokeObjectURL(a.href);
 }
 
+// An account phone number (E.164) for display: +1 (214) 555-0100 for US/Canada, else as stored.
+export const fmtIntlPhone = (e164: string) => {
+  const m = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(e164 || '');
+  return m ? `+1 (${m[1]}) ${m[2]}-${m[3]}` : e164 || '';
+};
 export const fmtTime = (t: string | number | undefined | null) => (t ? new Date(t).toLocaleString('en-US') : '');

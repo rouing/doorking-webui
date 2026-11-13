@@ -108,11 +108,11 @@ export async function isAnyGateAdmin(store: Store, username: unknown): Promise<b
 
 // Everyone with access to the gate, admins first.
 export async function gateUsers(store: Store, phone: unknown): Promise<GateUser[]> {
-  return (await all<{ username: string; email: string | null; pending_email: string | null; invited: boolean; role: GateRole; granted_by: string;
+  return (await all<{ username: string; email: string | null; pending_email: string | null; phone: string | null; invited: boolean; role: GateRole; granted_by: string;
     granted_at: string; last_sign_in: string | null }>(store,
-    `SELECT a.username, u.email, u.pending_email, u.password_hash = '!' AS invited, a.role, a.granted_by, a.granted_at, u.last_sign_in
+    `SELECT a.username, u.email, u.pending_email, u.phone, u.password_hash = '!' AS invited, a.role, a.granted_by, a.granted_at, u.last_sign_in
       FROM gate_access a JOIN users u ON u.username = a.username WHERE a.phone = $1 ORDER BY a.role, a.username`, [phoneDigits(phone)]))
-    .map((r) => ({ username: r.username, email: r.email || '', pendingEmail: r.pending_email || '', invited: r.invited, role: r.role,
+    .map((r) => ({ username: r.username, email: r.email || '', pendingEmail: r.pending_email || '', phone: r.phone || '', invited: r.invited, role: r.role,
       grantedBy: r.granted_by, grantedAt: r.granted_at, lastSignIn: r.last_sign_in }));
 }
 

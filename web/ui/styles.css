@@ -1,0 +1,104 @@
+/* Layout pieces Radix Themes doesn't cover. Colours come from the theme's CSS variables. */
+body { margin: 0; }
+
+.app { display: flex; min-height: 100vh; }
+.sidebar {
+  width: 190px; flex-shrink: 0; position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column;
+  border-right: 1px solid var(--gray-a5); background: var(--gray-a2); box-sizing: border-box;
+  --nav-h: 30px; --nav-gap: var(--space-1); --nav-pad: var(--space-3); --nav-action-h: var(--space-6);
+  --nav-sep: var(--space-2); --nav-section: var(--space-3); --nav-font: var(--font-size-2);
+}
+/* Shorter windows: GateApp picks the roomiest density whose menu fits without scrolling. */
+.sidebar[data-density="1"] {
+  --nav-h: 26px; --nav-gap: 2px; --nav-action-h: 28px; --nav-sep: var(--space-1); --nav-section: var(--space-2);
+}
+.sidebar[data-density="2"] {
+  --nav-h: 22px; --nav-gap: 1px; --nav-pad: var(--space-2); --nav-action-h: 24px; --nav-sep: 2px;
+  --nav-section: var(--space-1); --nav-font: var(--font-size-1);
+}
+/* The menu scrolls only if even the tight density doesn't fit; the gate connection buttons and the user/sign-out
+   area stay pinned at the bottom. */
+.sidebar-nav { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.sidebar-bottom { flex-shrink: 0; }
+.sidebar .sidebar-nav, .sidebar .sidebar-bottom { gap: var(--nav-gap); padding: var(--nav-pad); }
+.sidebar .rt-Separator { margin-block: var(--nav-sep); }
+.sidebar .nav-section { margin-top: var(--nav-section); margin-bottom: 2px; }
+.sidebar .nav-gates { margin-bottom: var(--nav-section); }
+.sidebar .nav-action { height: var(--nav-action-h); font-size: var(--nav-font); }
+.content { flex: 1; min-width: 0; padding: var(--space-5); }
+/* Menu items: the same size whether selected (soft) or not (ghost). Radix draws ghost buttons smaller and pulls them
+   outward with negative margins, which made the selected item taller and let a hovered neighbour touch it. */
+.rt-Button.nav-item {
+  justify-content: flex-start; width: 100%; box-sizing: border-box; height: var(--nav-h); font-size: var(--nav-font);
+  margin: 0; padding: 0 var(--space-3);
+}
+
+/* "?" hover tips (HelpTip). */
+.help-tip {
+  display: inline-flex; align-items: center; margin-left: 4px; vertical-align: middle; color: var(--gray-10); cursor: help;
+  border-radius: 50%;
+}
+.help-tip:hover, .help-tip:focus-visible { color: var(--accent-11); }
+.help-tip:focus-visible { outline: 2px solid var(--accent-8); outline-offset: 1px; }
+
+/* Display message settings: fixed-width font, so the box (sized in ch) fits the gate's full message length. */
+.lcd-input, .lcd-input input { font-family: var(--code-font-family); }
+
+.time-input {
+  box-sizing: border-box; height: var(--space-5); padding: 0 var(--space-1); font: inherit; font-size: var(--font-size-1);
+  color: var(--gray-12); background: var(--color-surface); border: 1px solid var(--gray-a7); border-radius: var(--radius-2);
+  color-scheme: inherit;
+}
+.dark .time-input, .dark-theme .time-input { color-scheme: dark; }
+.time-input:focus { outline: 2px solid var(--accent-8); outline-offset: -1px; }
+
+.job-log {
+  max-height: 40vh; overflow: auto; margin: var(--space-2) 0 0; padding: var(--space-2);
+  background: var(--gray-a3); border-radius: var(--radius-2); font-size: 12px; white-space: pre-wrap;
+}
+
+/* Camera snapshots: thumbnails in the Transactions table and the full-size viewer */
+.snap-tile { position: relative; display: inline-block; vertical-align: middle; }
+.snap-tile > img { display: block; }
+img.snap-thumb { height: 36px; border-radius: 3px; cursor: pointer; }
+.snap-missing {
+  display: flex; align-items: center; justify-content: center; box-sizing: border-box; width: min(640px, 90vw); aspect-ratio: 16 / 9;
+  border: 1px dashed var(--gray-8); border-radius: 4px; background: var(--gray-a3); color: var(--gray-10); font-size: 48px; font-weight: bold;
+}
+.snap-tile.thumb .snap-missing { width: 64px; height: 36px; font-size: 18px; border-radius: 3px; cursor: pointer; }
+.snap-refresh {
+  position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; cursor: pointer;
+  background: rgba(0, 0, 0, .55); color: #fff; font-size: 14px; line-height: 22px; text-align: center;
+}
+.snap-refresh:hover:not(:disabled) { background: var(--accent-9); }
+.snap-tile.thumb .snap-refresh { top: 1px; right: 1px; width: 15px; height: 15px; font-size: 10px; line-height: 15px; }
+.snap-refresh.failed { background: var(--red-9); }
+.snap-refresh.busy { animation: snap-spin 1s linear infinite; }
+@keyframes snap-spin { to { transform: rotate(360deg); } }
+.snap-play {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none;
+  color: #fff; font-size: 14px; text-shadow: 0 0 3px #000;
+}
+.snap-partial {
+  position: absolute; left: 2px; top: 2px; padding: 0 4px; border-radius: 3px; pointer-events: none;
+  background: var(--amber-10); color: #fff; font-size: 10px; line-height: 14px;
+}
+.snap-figure { margin: 0; font-size: 12px; color: var(--gray-11); }
+.snap-figure img { display: block; max-width: min(640px, 90vw); border-radius: 4px; }
+video.snap-video { display: block; width: min(640px, 90vw); aspect-ratio: 16 / 9; background: #000; border-radius: 4px; }
+
+/* Live camera window */
+.live-body {
+  background: #000; min-height: 120px; margin-top: var(--space-2); border-radius: var(--radius-2);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+}
+.live-body img { display: block; width: 100%; height: auto; }
+.live-body p { margin: 0; padding: 12px; text-align: center; color: #d1d5db; }
+
+/* Resident/vendor Notes column: one line, full text on hover */
+.note-cell { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 760px) {
+  .app { flex-direction: column; }
+  .sidebar { width: 100%; height: auto; position: static; border-right: 0; border-bottom: 1px solid var(--gray-a5); }
+}

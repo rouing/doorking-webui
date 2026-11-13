@@ -1,0 +1,56 @@
+# Database login (postgres.url, pgpass) and the encryption key for master codes and saved passwords
+DB/
+postgres.url
+pgpass
+.pgpass
+*.pem
+*.key
+
+# Debug logs: gate phone numbers, recorder serials, error details
+logs/
+
+# Gate list: DKS users and master codes in plain text (imported into DB/ on first start)
+gates.json
+
+# Gate-scoped preferences: real site configuration
+prefs.json
+
+# Pulled gate data and working copies: resident names, phones, entry codes, cards, transactions
+DOWNLOADED/
+
+# DoorKing desktop app data, if copied in again
+*.DAT
+*.dat
+*.bin
+*.BIN
+*.map
+*.MAP
+*.TRA
+*.tra
+*.CSV
+*.csv
+export/
+
+# DoorKing's copyrighted material (decompiled DoorKing32, the manual PDF): kept locally only
+research/
+
+# ffmpeg builds are over GitHub's 100 MB file limit; the app falls back to ffmpeg on the PATH
+tools/bin/ffmpeg*
+
+# Conversation exports
+Gate System JavaScript Rebuild_*.json
+
+# Credentials used with the API / CLI (see README)
+login.json
+jar.txt
+.env
+.env.*
+
+# Node / OS / editor
+node_modules/
+npm-debug.log*
+web/dist/
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

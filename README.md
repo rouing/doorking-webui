@@ -335,14 +335,13 @@ serials, so `logs/` is in `.gitignore`.
 
 ## How data flows
 ```
-gate ──pull──> gate_files 'pulled' ──Reset/refresh──> 'base' (what the gate holds)
-                   │                     └──decode──> working copy as values: gate_residents, gate_cards,
-                   │                                  gate_settings, gate_working (edited by every page)
+gate ──pull──> gate_files 'base' (what the gate holds) ──decode──> working copy as values: gate_residents, gate_cards,
+                   │      unsent changes put back on top ─┘          gate_settings, gate_working (edited by every page)
                    └──round-trip and rebuild checks──> gate_state
 base + values ──build──> files ──send──> gate ──verify pull──> base := what was sent when they match
 ```
-- The pulled board files are kept in the database table `gate_files` (encrypted: `names.bin` holds the master
-  code): the latest pull and the base copy (what the gate holds).
+- The latest residents pull is kept in the database table `gate_files` (encrypted: `names.bin` holds the master
+  code) as the base copy: what the gate holds.
 - The **working copy is values**: `gate_residents`, `gate_cards`, `gate_settings` and `gate_working` (the text the
   app shows; the master code left out). Its board files are built from the base copy plus these values whenever
   they're needed (to show, compare or send). Bytes nothing decodes are stored too when they aren't blank
@@ -358,10 +357,14 @@ base + values ──build──> files ──send──> gate ──verify pull�
 - The gate's `.bin` memory images are the source of truth. The desktop app's `.DAT` files are not used.
 - Every edit (residents, settings, area codes, digits) changes only the **working copy**. Nothing reaches the
   gate until **Send**.
-- A residents pull refreshes the working copy only if it has no saved edits. Otherwise it is kept, and
-  **Reset to gate** (`DELETE .../working-copy`) starts again from the last pull.
+- A residents pull becomes the base at once. Unsent changes are put back on top of it (resident by directory code,
+  card by slot, setting by key); an item changed differently at the gate and here is a **conflict**, kept as the
+  working copy has it until someone chooses Keep mine or Take the gate's (sends wait). When the directory code digits
+  or the area-code mode changed, the gate's version is taken and unsent changes are dropped. **Reset to gate**
+  (`DELETE .../working-copy`) drops the unsent changes.
 - A send uploads the changed blocks, then pulls residents again. If the pull matches, the working copy becomes
-  the new base; if not, the working copy is kept and the differing blocks are logged.
+  the new base; if not, the pull is applied like any residents pull (what the gate doesn't hold stays unsent) and the
+  differing blocks are logged.
 - One gate connection (pull or send) runs at a time across all gates.
 - Transactions (`rcv_out.bin`) are read-only. A pull reads the gate's whole buffer (10,000 events, oldest
   overwritten first); the events after the part already saved are added to the transaction history

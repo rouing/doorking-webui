@@ -116,7 +116,7 @@ function syntheticGate() {
 
 // The working copy of PHONE: pulled files are the synthetic gate; edits go through the app's edit functions.
 const PHONE = '5550100';
-const pullInto = (store, files = syntheticGate()) => dk.savePulledFiles(store, PHONE,
+const pullInto = (store, files = syntheticGate()) => dk.applyPull(store, PHONE,
   { 'names.bin': files.names, 'phone.bin': files.phone, 'cards.bin': files.cards });
 function withPull(fn) {
   return withStore(async (store, dir) => { await pullInto(store); await fn(store, dir); });
@@ -132,7 +132,7 @@ const MAP_SIZE = 64000 / 128;
 
 test('ensureCache makes a working copy from the pull: files stored encrypted, the working copy as values', withPull(async (store) => {
   const status = await dk.ensureCache(store, PHONE);
-  assert.deepStrictEqual([status.exists, status.edited, status.newerPull], [true, false, false]);
+  assert.deepStrictEqual([status.exists, status.edited, status.conflicts], [true, false, []]);
   const pulled = syntheticGate();
   const w = await working(store);
   for (const n of ['names', 'phone', 'cards']) assert.ok(w[n].equals(pulled[n]), `${n}.bin is built back exactly`);
@@ -153,7 +153,7 @@ test('an edit is stored as values; the files and change map are built from base 
   assert.strictEqual(map.length, MAP_SIZE);
   assert.deepStrictEqual([...map.keys()].filter((i) => map[i]), [0]);
   assert.strictEqual((await store.db.query("SELECT value FROM gate_settings WHERE key = 'talkTime'")).rows[0].value, '2:30');
-  assert.ok((await dk.readPulledFile(store, PHONE, 'names.bin')).data.equals(syntheticGate().names), 'pulled copy is unchanged');
+  assert.ok((await dk.readBaseFiles(store, PHONE)).names.equals(syntheticGate().names), 'the gate\'s copy is unchanged');
   assert.strictEqual((await dk.cacheStatus(store, PHONE)).edited, true);
 }));
 
@@ -218,34 +218,106 @@ test('names.bin may switch area-code layout (0x380 bytes shorter)', withPull(asy
   assert.ok((await dk.prepareSend(store, PHONE)).changedBlocks['names.bin'].length > 0);
 }));
 
-test('syncCacheAfterPull refreshes an unedited copy and keeps an edited one', withPull(async (store) => {
-  await dk.ensureCache(store, PHONE);
-  const newer = syntheticGate();
-  newer.names.write('Smith, Jo ', 0xf80, 10, 'latin1');
-  await pullInto(store, newer);
-  assert.strictEqual((await dk.cacheStatus(store, PHONE)).newerPull, true);
-  let r = await dk.syncCacheAfterPull(store, PHONE);
-  assert.deepStrictEqual([r.refreshed, r.status.newerPull], [true, false]);
-  assert.ok((await working(store)).names.equals(newer.names));
+test('a residents pull updates the working copy at once, with unsent changes kept on top of the gate\'s', withStore(async (store) => {
+  assert.strictEqual((await pullInto(store)).outcome, 'new');
+  assert.strictEqual((await pullInto(store)).outcome, 'unchanged');
+  const g1 = dk.applyResidentEdit(syntheticGate(), { directoryCode: '101', name: 'Smith, Jo' });
+  assert.strictEqual((await pullInto(store, g1)).outcome, 'refreshed'); // no unsent changes: the working copy is the pull
+  assert.ok((await working(store)).names.equals(g1.names));
+  // Unsent here: talk time and 102's phone. Meanwhile at the gate: the outside line digit and 101's name.
   await setTalkTime(store, '2:30');
-  await pullInto(store, syntheticGate());
-  r = await dk.syncCacheAfterPull(store, PHONE);
-  assert.deepStrictEqual([r.refreshed, r.status.newerPull], [false, true]);
-  assert.strictEqual((await store.db.query("SELECT value FROM gate_settings WHERE key = 'talkTime'")).rows[0].value, '2:30');
+  await saveWorking(store, dk.applyResidentEdit(await working(store), { directoryCode: '102', phone: '5550142' }));
+  const g2 = dk.applyResidentEdit(g1, { directoryCode: '101', name: 'Smith, John' });
+  g2.names[0x1d] = 9;
+  const r = await pullInto(store, g2);
+  assert.deepStrictEqual([r.outcome, r.kept, r.fromGate, r.conflicts, r.notKept, r.status.conflicts], ['rebased', 2, 2, [], [], []]);
+  const w = dk.decodeWorking(await working(store));
+  assert.deepStrictEqual([w.settings.talkTime, w.settings.outsideLineDigit], ['2:30', '9']);
+  const res = (code) => w.residents.find((x) => x.directoryCode === code);
+  assert.deepStrictEqual([res('101').name, res('102').phone], ['Smith, John', dk.decodeWorking(dk.applyResidentEdit(g2, { directoryCode: '102', phone: '5550142' })).residents[1].phone]);
+  // The gate's copy is the pull, and only the unsent changes differ from it.
+  assert.ok((await dk.readBaseFiles(store, PHONE)).names.equals(g2.names));
+  const unsent = dk.diffStates(dk.decodeWorking(g2), w);
+  assert.deepStrictEqual([Object.keys(unsent.residents), Object.keys(unsent.settings)], [['102'], ['talkTime']]);
+  // After a send the gate confirmed, nothing is unsent.
+  await dk.replaceBase(store, PHONE, (await dk.prepareSend(store, PHONE)).files);
+  assert.deepStrictEqual([(await dk.cacheStatus(store, PHONE)).edited, (await dk.readBaseFiles(store, PHONE)).names.equals(g2.names)], [false, false]);
+}));
+
+test('an item changed differently at the gate and here is a conflict: the change here is kept until decided, sends wait', withPull(async (store) => {
+  await setTalkTime(store, '2:30');
+  await saveWorking(store, dk.applyResidentEdit(await working(store), { directoryCode: '101', name: 'Smith, Jane' }));
+  const g = dk.applyResidentEdit(syntheticGate(), { directoryCode: '101', name: 'Smith, Joan' });
+  g.names[0x10] = 90; // talk time 1:30 at the gate
+  const r = await pullInto(store, g);
+  assert.deepStrictEqual([r.outcome, r.kept, r.conflicts.map((c) => c.label)], ['rebased', 2, ['Directory code 101 (Smith, Jane)', 'Talk time (m:ss)']]);
+  assert.deepStrictEqual(r.status.conflicts.map((c) => [c.kind, c.key, c.gate, c.mine]),
+    [['resident', '101', 'Name "Smith, Joan"', 'Name "Smith, Jane"'], ['setting', 'talkTime', '"1:30"', '"2:30"']]);
+  await assert.rejects(() => dk.prepareSend(store, PHONE), (e) => e.status === 409 && /2 conflict/.test(e.message));
+  assert.strictEqual((await pullInto(store, g)).outcome, 'unchanged');
+  assert.strictEqual((await dk.cacheStatus(store, PHONE)).conflicts.length, 2); // still to decide
+  let st = await dk.resolveConflict(store, PHONE, 'setting', 'talkTime', 'gate');
+  assert.deepStrictEqual(st.conflicts.map((c) => c.key), ['101']);
+  assert.strictEqual(dk.decodeWorking(await working(store)).settings.talkTime, '1:30');
+  st = await dk.resolveConflict(store, PHONE, 'resident', '101', 'mine');
+  assert.deepStrictEqual(st.conflicts, []);
+  assert.strictEqual(dk.decodeWorking(await working(store)).residents.find((x) => x.directoryCode === '101').name, 'Smith, Jane');
+  assert.ok((await dk.prepareSend(store, PHONE)).changedBlocks['names.bin'].length);
+  await assert.rejects(() => dk.resolveConflict(store, PHONE, 'resident', '101', 'mine'), (e) => e.status === 404);
+  await assert.rejects(() => dk.resolveConflict(store, PHONE, 'resident', '101', 'both'), (e) => e.status === 400);
+}));
+
+test('a resident removed at the gate but changed here is a conflict; taking the gate\'s removes it', withPull(async (store) => {
+  await saveWorking(store, dk.applyResidentEdit(await working(store), { directoryCode: '102', entryCode: '4321' }));
+  const r = await pullInto(store, dk.removeDirectoryCode(syntheticGate(), '102'));
+  assert.deepStrictEqual(r.status.conflicts.map((c) => [c.key, c.gate, c.mine]), [['102', 'removed', 'ACME Deliveries']]);
+  await dk.resolveConflict(store, PHONE, 'resident', '102', 'gate');
+  assert.deepStrictEqual(dk.decodeWorking(await working(store)).residents.map((x) => x.directoryCode), ['101', '103']);
+  assert.strictEqual((await dk.cacheStatus(store, PHONE)).edited, false);
+}));
+
+test('a layout change drops unsent changes; a change the files can\'t take is reported and left out', withPull(async (store) => {
+  await setTalkTime(store, '2:30');
+  const r = await pullInto(store, dk.convertDirDigits(syntheticGate(), 4));
+  assert.deepStrictEqual([r.outcome, r.dropped.count, (await dk.cacheStatus(store, PHONE)).edited], ['dropped', 1, false]);
+  assert.match(r.dropped.reason, /digits/);
+  // Here a new code 1104 gets entry code 9999; at the gate someone else (1105) got 9999 meanwhile.
+  const base = await working(store);
+  await saveWorking(store, dk.addEntry(base, { directoryCode: '1104', name: 'New, Person', entryCode: '9999' }));
+  const g = dk.addEntry(base, { directoryCode: '1105', name: 'Gate, Added', entryCode: '9999' });
+  const r2 = await pullInto(store, g);
+  assert.deepStrictEqual([r2.outcome, r2.kept, r2.notKept.map((n) => n.label)], ['rebased', 0, ['Directory code 1104 (New, Person)']]);
+  assert.match(r2.notKept[0].error, /9999/);
+  assert.ok((await working(store)).names.equals(g.names));
+}));
+
+test('migratePulledCopies applies a pull kept apart before 2026-11-13, then removes it', withPull(async (store) => {
+  await setTalkTime(store, '2:30');
+  const g = syntheticGate();
+  g.names[0x1d] = 9;
+  for (const [n, d] of [['names.bin', g.names], ['phone.bin', g.phone], ['cards.bin', g.cards]]) {
+    await store.db.query("INSERT INTO gate_files (phone, copy, name, data, saved_at) VALUES ($1, 'pulled', $2, $3, $4)",
+      [PHONE, n, dk.encryptBytes(store, d), T1]);
+  }
+  assert.deepStrictEqual(await dk.migratePulledCopies(store), [{ phone: PHONE, outcome: 'rebased' }]);
+  assert.deepStrictEqual(await dk.migratePulledCopies(store), []);
+  const w = dk.decodeWorking(await working(store));
+  assert.deepStrictEqual([w.settings.talkTime, w.settings.outsideLineDigit], ['2:30', '9']);
+  assert.strictEqual((await store.db.query("SELECT COUNT(*) AS n FROM gate_files WHERE copy = 'pulled'")).rows[0].n, 0);
 }));
 
 test('resetCache replaces saved edits with the last pull', withPull(async (store) => {
   await dk.ensureCache(store, PHONE);
   await setTalkTime(store, '2:30');
   const status = await dk.resetCache(store, PHONE);
-  assert.deepStrictEqual([status.edited, status.newerPull], [false, false]);
+  assert.deepStrictEqual([status.edited, status.conflicts], [false, []]);
   assert.ok((await working(store)).names.equals(syntheticGate().names));
   assert.ok((await dk.cacheFileData(store, PHONE, 'names.map')).equals(Buffer.alloc(MAP_SIZE)));
 }));
 
-test('resetCache drops the working copy when a file is no longer pulled', withPull(async (store) => {
+test('resetCache drops the working copy when a gate file is missing', withPull(async (store) => {
   await dk.ensureCache(store, PHONE);
-  await store.db.query("DELETE FROM gate_files WHERE copy = 'pulled' AND name = 'cards.bin'");
+  await store.db.query("DELETE FROM gate_files WHERE copy = 'base' AND name = 'cards.bin'");
   const status = await dk.resetCache(store, PHONE);
   assert.strictEqual(status.files.find((f) => f.name === 'cards.bin').cached, false);
   assert.strictEqual(await dk.cacheFileData(store, PHONE, 'cards.bin'), null);
@@ -270,15 +342,15 @@ test('prepareSend returns every file with its .map and the changed blocks', with
   assert.ok(files['names.bin'].equals((await working(store)).names));
 }));
 
-test('prepareSend refuses when nothing changed, files are missing, or a newer pull differs', withPull(async (store) => {
+test('prepareSend refuses when nothing changed, files are missing, or conflicts wait', withPull(async (store) => {
   await dk.ensureCache(store, PHONE);
   await assert.rejects(() => dk.prepareSend(store, PHONE), (e) => e.status === 409 && /no changes/.test(e.message));
   await setTalkTime(store, '2:30');
   const newer = syntheticGate();
   newer.names[0x10] = 90;
   await pullInto(store, newer);
-  await assert.rejects(() => dk.prepareSend(store, PHONE), (e) => e.status === 409 && /Reset to gate/.test(e.message));
-  await store.db.query("DELETE FROM gate_files WHERE copy = 'pulled' AND name = 'cards.bin'");
+  await assert.rejects(() => dk.prepareSend(store, PHONE), (e) => e.status === 409 && /conflict/.test(e.message));
+  await store.db.query("DELETE FROM gate_files WHERE copy = 'base' AND name = 'cards.bin'");
   await dk.resetCache(store, PHONE);
   await assert.rejects(() => dk.prepareSend(store, PHONE), (e) => e.status === 409 && /missing files/.test(e.message));
 }));
@@ -347,7 +419,7 @@ test('importGateFiles and migrateWorkingFiles move the files kept on disk into t
   assert.ok((await working(store)).names.equals(edited.names), 'the unsent edit is kept, as values');
   assert.strictEqual((await store.db.query("SELECT name FROM gate_residents WHERE directory_code = '101'")).rows[0].name, 'Edited, Unsent');
   assert.strictEqual((await dk.cacheStatus(store, PHONE)).edited, true);
-  assert.strictEqual((await dk.readPulledFile(store, PHONE, 'rcv_out.bin')).data.length, 100);
+  assert.strictEqual((await store.db.query("SELECT COUNT(*) AS n FROM gate_files WHERE copy = 'pulled' AND name = 'rcv_out.bin'")).rows[0].n, 1);
 }));
 
 // The synthetic gate with what a real one also holds: a master code, read-only values, undecoded non-blank bytes.
@@ -598,9 +670,9 @@ test('transaction history keeps events that leave the gate buffer and adds only 
 }));
 
 test('rcv_out.bin is not kept: a pull skips it, and the stored ones are merged once and deleted', withStore(async (store) => {
-  await dk.savePulledFiles(store, PHONE, { 'rcv_out.bin': rcv(10, 11), 'names.bin': syntheticGate().names });
-  assert.strictEqual(await dk.readPulledFile(store, PHONE, 'rcv_out.bin'), null);
-  assert.ok(await dk.readPulledFile(store, PHONE, 'names.bin'));
+  await dk.applyPull(store, PHONE, { 'rcv_out.bin': rcv(10, 11), 'names.bin': syntheticGate().names });
+  const kept = (await store.db.query('SELECT copy, name FROM gate_files')).rows.map((r) => `${r.copy}/${r.name}`);
+  assert.deepStrictEqual(kept, ['base/names.bin']);
   // As kept before 2026-11-13: one gate already merged (nothing new), one never merged.
   const at = new Date(2026, 9, 21, 12);
   await dk.mergeTransactions(store, PHONE, rcv(10, 11), at);

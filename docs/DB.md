@@ -311,7 +311,7 @@ one at start, adding only events not yet saved, and deleted it).
 | Column | Type | Meaning |
 |---|---|---|
 | `phone` | TEXT | gate |
-| `copy` | TEXT | `pulled` (the latest pull) or `base` (as pulled when the working copy was made: what the gate holds). `working` was the working copy as files until 2026-11-12 (now values, below); `migrateWorkingFiles` converts any left |
+| `copy` | TEXT | `base`: the latest residents pull, i.e. what the gate holds. Until 2026-11-13 a newer pull waited as `pulled` until Reset to gate (`migratePulledCopies` applies any left as a pull, then deletes them); `working` was the working copy as files until 2026-11-12 (`migrateWorkingFiles` converts any left) |
 | `name` | TEXT | `names.bin`, `phone.bin`, `cards.bin` (`rcv_out.bin` isn't kept; see `tx_history`) |
 | `data` | BYTEA | the file, **encrypted** (12-byte IV, 16-byte tag, ciphertext) |
 | `saved_at` | TIMESTAMPTZ | when it was pulled |
@@ -322,16 +322,25 @@ built working copy. The layouts of the files are in [BITMAP.md](BITMAP.md). Unti
 
 ### `gate_residents`, `gate_cards`, `gate_settings`, `gate_working`: the working copy as values (`src/gate-state.ts`)
 
-The working copy is these rows. **Reset to gate** (and a residents pull while there are no unsent edits) fills them
-from the pull; every edit replaces them. The values are the text the app shows, so with no unsent edits they show
-what the gate holds. The board files to show, compare or send are built from them (below).
+The working copy is these rows. **Reset to gate** fills them from the base; every edit replaces them. The values are
+the text the app shows, so with no unsent edits they show what the gate holds. The board files to show, compare or
+send are built from them (below).
+
+**A residents pull** (`applyPull`) becomes the base at once: with no unsent changes the rows are the pull's values;
+otherwise the unsent changes (old base to working copy, compared per resident by directory code, card by slot and
+editable setting by key) are put back on top of the pull's values (`rebasePlan`). An item changed differently at the
+gate and here is a conflict, listed in `gate_working.conflicts` (`[{ kind, key, label }]`) and kept as the working
+copy has it until it's decided (`resolveConflict`: mine, or the gate's value); sends are refused meanwhile. Changes the
+files can't take (for example an entry code the gate now gives to someone else) are left out, one by one, and named
+in the job log. When the directory code digits or area-code mode changed on either side, or the pull fails its
+round-trip check, the pull's values are taken and the unsent changes dropped.
 
 | Table | Columns |
 |---|---|
 | `gate_residents` | `phone`, `seq` (order), `directory_code`, `type` (`Resident`/`Vendor`), `name`, `hidden`, `area_code`, `phone_number` (`555-0142`), `entry_code`, `security_level`, `floor`, `elevator_ref`, `entry_offset` / `record_offset` (where the entry is in `names.bin` / `phone.bin`). Primary key (`phone`, `seq`) |
 | `gate_cards` | `phone`, `slot` (record number in `cards.bin`), `card_number` (5 digits), `directory_code` (`''` = not assigned, null = not a directory code), `raw_code` (bytes 2-3 as hex when not a directory code, e.g. a mass-enabled `AB` record). Primary key (`phone`, `slot`) |
 | `gate_settings` | `phone`, `key` (as in `src/gate-settings.ts`), `grp` (page), `name`, `value` (e.g. `1:00`, `Off`, `0000001` = days Sun…Sat, `''` = not set). Read-only settings (dial type, multiple systems, system memory, memory chips, download stamps) are stored and written back too; users can't change them. The master code is left out (it is in `managed_gates`). Primary key (`phone`, `key`) |
-| `gate_working` | `phone` (primary key), `dir_digits` (1-4), `area_code_mode` (255 or 10), `area_codes` (JSONB: the area-code table, one entry per slot, null = free), `middle_pointer` (`names.bin` `0xF8`-`0xFA` as hex), `base_ok` (the base passed the round-trip check; false locks editing), `saved_at` (last edit), `extra` (JSONB: the `names.bin` bytes before the directory that nothing decodes and that aren't blank, i.e. not `FF` or, at `100`-`113`, `144`, `179`-`18C`, a space; as `{ "037": "01" }`, hex offset to hex bytes), `sizes` (JSONB: `{ names, phone, cards }` file lengths) |
+| `gate_working` | `phone` (primary key), `dir_digits` (1-4), `area_code_mode` (255 or 10), `area_codes` (JSONB: the area-code table, one entry per slot, null = free), `middle_pointer` (`names.bin` `0xF8`-`0xFA` as hex), `base_ok` (the base passed the round-trip check; false locks editing), `saved_at` (last edit), `conflicts` (JSONB, the conflicts to decide, above), `extra` (JSONB: the `names.bin` bytes before the directory that nothing decodes and that aren't blank, i.e. not `FF` or, at `100`-`113`, `144`, `179`-`18C`, a space; as `{ "037": "01" }`, hex offset to hex bytes), `sizes` (JSONB: `{ names, phone, cards }` file lengths) |
 | `gate_state` | the checks of the latest pull: `phone` (primary key), `pulled_at`, `checked_at`, `round_trip_ok`, `problems` (JSONB: `[{ file, bytes, offsets, settings?, error? }]`), `rebuild_ok`, `rebuild_problems` (the rebuild check, same shape; null for pulls checked before 2026-11-13) |
 
 At start, `addMissingValues` (`src/gate-cache.ts`) adds what a working copy saved before the app stored it (setting

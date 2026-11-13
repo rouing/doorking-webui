@@ -120,7 +120,7 @@ number, or `+` and the country code for other countries; it's saved in internati
 ## 4. How changes reach the gate
 
 The app keeps two versions of each gate's information on this computer:
-- **what the gate has**, from the last time you pulled from it;
+- **what the gate has**, as of the last time you pulled from it (each pull updates it);
 - **your working copy**, where all your changes go.
 
 Your changes reach the gate only when you click **Send to gate**. Until then you can change your mind. Colours show
@@ -132,8 +132,8 @@ where each value stands:
 | **Green** | saved, but not on the gate yet: click **Send to gate** |
 | No colour | the same as on the gate |
 
-Hold the mouse over a value to see what the gate has. **Reset to gate** throws away every change you haven't sent and
-starts again from the last pull.
+Hold the mouse over a value to see what the gate has. **Reset to gate** throws away every change you haven't sent, so
+your working copy matches the gate again.
 
 ## 5. Getting data from the gate and sending changes
 
@@ -148,8 +148,19 @@ Talking to the gate takes a minute or more. A progress window in the bottom-righ
 make it smaller, and **Show progress** brings it back. Only one gate can be contacted at a time; if someone else is
 using the connection, wait for them to finish.
 
-If you pull residents while you have changes you haven't sent, your changes are kept. Use **Reset to gate** if you'd
-rather start again from what the gate has.
+If you pull residents while you have changes you haven't sent, the app takes what's new at the gate and keeps your
+changes on top of it. The progress window says how many of each.
+- **Conflicts:** if someone changed the same thing at the gate (for example the same resident's phone, or a setting)
+  and you changed it differently, a red box on the Residents page and the settings pages lists it, with what the gate
+  has and what you have. Your change stays until you choose **Keep mine** or **Take the gate's**. Send to gate waits
+  until every one is decided.
+- **Big changes at the gate:** if the number of digits in directory codes or the area-code setting changed (at the gate
+  or in your unsent changes), the app takes the gate's version and your unsent changes are dropped; the progress
+  window says so.
+- A change that no longer fits (for example an entry code the gate has given to someone else in the meantime) is left
+  out and named in the progress window.
+
+Use **Reset to gate** if you'd rather throw away your unsent changes and start again from what the gate has.
 
 ## 6. Residents and vendors
 
@@ -387,7 +398,7 @@ same ones as in the DMSS or SmartPSS app), and the camera channels to use. Click
 | "Too many failed sign-ins" | Wait 15 minutes, then try again. |
 | A pull fails with "… Mismatch" | A Gate configuration setting doesn't match the gate. Fix the one named. |
 | "A gate connection is already running" | Someone (or a schedule) is talking to a gate. Wait and try again. |
-| Send to gate won't work | Read the red message: usually duplicates on the Residents page, or a newer pull (click **Reset to gate**). |
+| Send to gate won't work | Read the red message: usually duplicates on the Residents page, or conflicts to decide (**Keep mine** or **Take the gate's**). |
 | Save is greyed out on the Relays page | Two tones use the same digit; change one of the red boxes. |
 | "This change can't be stored as gate values" | The app couldn't record that change safely, so nothing was saved. Tell the person who supports the app what you changed. |
 | "Editing is locked for this gate" | The app found something in the gate's data it can't rebuild exactly, so it won't let changes through. Tell the person who supports the app. |

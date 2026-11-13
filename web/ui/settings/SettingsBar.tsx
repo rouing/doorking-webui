@@ -3,6 +3,7 @@ import { Box, Button, Callout, Flex, Text, TextField } from '@radix-ui/themes';
 import type { GateSettingRow, SendPreview } from '../../../src/types.ts';
 import { errorText, type GateApi } from '../api.ts';
 import { useConfirm } from '../Confirm.tsx';
+import { ConflictList } from '../panes/WorkingCopyBar.tsx';
 import { gsShow, type GateSettings } from './useGateSettings.ts';
 
 const HINTS: [string, string][] = [['holiday', 'MM/DD'], ['Tone', '1-9'], ['EntryCodeRange', '0000'], ['outsideLineDigit', '0-9']];
@@ -86,11 +87,11 @@ export function SettingsBar({ gs, gapi, onReload, onJobStarted, blocked }: {
 
   const reset = async () => {
     if (!await confirm({ title: 'Reset to gate?', action: 'Reset', color: 'red',
-      body: 'Replace the working copy with the last files pulled from the gate? Saved changes will be lost.' })) return;
+      body: 'Throw away every change not sent to the gate (on every page), so the working copy matches what the gate holds?' })) return;
     try {
       await gapi('DELETE', '/working-copy');
       gs.discard();
-      setResult({ title: 'Working copy reset to the last pull', lines: [] });
+      setResult({ title: 'Working copy reset to the gate', lines: [] });
       await gs.load();
       await onReload();
     } catch (e) { setResult({ title: 'Reset failed', lines: [errorText(e)] }); }
@@ -116,7 +117,6 @@ export function SettingsBar({ gs, gapi, onReload, onJobStarted, blocked }: {
     gs.pending.length ? `${gs.pending.length} setting(s) saved, not sent (block(s) ${gs.blocks.join(', ')})` : '',
     `gate pulled ${new Date(gs.reply!.pulled).toLocaleString()}`,
     gs.pending.length ? `working copy saved ${new Date(gs.reply!.saved).toLocaleString()}` : '',
-    gs.newerPull ? 'a newer pull exists; Reset to gate to use it' : '',
   ].filter(Boolean).join(' · ');
 
   return (
@@ -129,12 +129,13 @@ export function SettingsBar({ gs, gapi, onReload, onJobStarted, blocked }: {
         <Button onClick={save} disabled={!loaded || !n || Boolean(blocked)} title={blocked}>Save to working copy</Button>
         <Button variant="soft" color="gray" onClick={() => { gs.discard(); setResult(null); }} disabled={!loaded || !n}>Discard unsaved</Button>
         <Button variant="soft" color="gray" onClick={reset} disabled={!loaded || (!gs.pending.length && !gs.blocks.length)}>Reset to gate</Button>
-        <Button variant="soft" onClick={send} disabled={!loaded || n > 0 || !gs.blocks.length || gs.newerPull}
-          title={n ? 'Save or discard unsaved changes first' : gs.newerPull ? 'A newer pull exists; Reset to gate first' : 'Send the working copy to the gate'}>
+        <Button variant="soft" onClick={send} disabled={!loaded || n > 0 || !gs.blocks.length || gs.conflicts.length > 0}
+          title={n ? 'Save or discard unsaved changes first' : gs.conflicts.length ? 'Decide the conflicts first' : 'Send the working copy to the gate'}>
           Send to gate
         </Button>
       </Flex>
       <Text size="2" color="gray">{status}</Text>
+      <ConflictList conflicts={gs.conflicts} gapi={gapi} onDecided={async () => { await gs.load(); await onReload(); }} />
       {result && (
         <Callout.Root color={result.title.includes('failed') || result.title.includes('not possible') ? 'red' : 'blue'}>
           <Callout.Text><strong>{result.title}</strong></Callout.Text>

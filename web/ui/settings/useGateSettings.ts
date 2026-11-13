@@ -38,7 +38,7 @@ export function useGateSettings(gapi: GateApi) {
   return {
     reply, error, fields, edits, current, edit, field, save, discard, load, pending,
     blocks: (names && names.changedBlocks) || [],
-    newerPull: Boolean(reply && reply.cache.newerPull),
+    conflicts: reply ? reply.cache.conflicts : [],
     changes: pending.map((s) => `${s.name}: ${gsShow(s.gate)} → ${gsShow(s.value)}`),
   };
 }

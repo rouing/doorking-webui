@@ -68,6 +68,10 @@ export interface TransactionRow {
 // GET G/data: views of the pulled files (null where the file isn't there).
 export interface DataReply { transactions: { updated: string; rows: TransactionRow[] } | null; [view: string]: unknown }
 
+// An item changed differently at the gate and in the working copy since the last pull: decided with Keep mine or
+// Take the gate's (POST G/working-copy/conflicts). gate / mine: how the two values differ, in words.
+export interface ConflictView { kind: 'resident' | 'card' | 'setting'; key: string; label: string; gate: string; mine: string }
+
 // GET G/residents: the working copy's residents and vendors.
 export interface ResidentsReply {
   rows: ResidentRow[];
@@ -76,7 +80,7 @@ export interface ResidentsReply {
   areaCodes: { index: number; code: string | null; uses: number }[];
   emptyCodes: string[];
   dirDigits: number;
-  cache: { exists: boolean; edited: boolean; newerPull: boolean };
+  cache: { exists: boolean; edited: boolean; conflicts: ConflictView[] };
   pulled: string;
   saved: string;
   // Directory codes, entry codes and cards held by more than one entry; a send is refused while any exist.
@@ -92,7 +96,7 @@ export interface GateSettingRow {
 export interface SettingsReply {
   pulled: string;
   saved: string;
-  cache: { newerPull: boolean; files: { name: string; changedBlocks?: number[] }[] };
+  cache: { conflicts: ConflictView[]; files: { name: string; changedBlocks?: number[] }[] };
   fields: GateSettingRow[];
 }
 

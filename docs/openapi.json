@@ -233,7 +233,7 @@
         ],
         "summary": "Send the working copy to the gate",
         "x-role": "admin",
-        "description": "**Changes the gate.** Sends the changed blocks, then pulls residents to check the gate holds them. Refused (409) with duplicates, a newer pull, or a missing working copy.\n\n**Admin key only** (403 for a read-only key).",
+        "description": "**Changes the gate.** Sends the changed blocks, then pulls residents to check the gate holds them. Refused (409) with duplicates, conflicts not yet decided, or a missing working copy.\n\n**Admin key only** (403 for a read-only key).",
         "parameters": [
           {
             "$ref": "#/components/parameters/phone"
@@ -868,7 +868,7 @@
         ],
         "summary": "Working copy status",
         "x-role": "readonly",
-        "description": "**Read-only or admin key.**",
+        "description": "Whether anything is unsent, the changed blocks per file, and the conflicts to decide. Each residents pull updates the working copy at once, with unsent changes kept on top.\n\n**Read-only or admin key.**",
         "parameters": [
           {
             "$ref": "#/components/parameters/phone"
@@ -888,8 +888,12 @@
                     "edited": {
                       "type": "boolean"
                     },
-                    "newerPull": {
-                      "type": "boolean"
+                    "conflicts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Conflict"
+                      },
+                      "description": "changes to decide before a send"
                     },
                     "files": {
                       "type": "array",
@@ -919,7 +923,7 @@
         ],
         "summary": "Reset to gate",
         "x-role": "admin",
-        "description": "Throws away unsent changes: the working copy becomes the last pull.\n\n**Admin key only** (403 for a read-only key).",
+        "description": "Throws away unsent changes and conflicts: the working copy becomes what the gate holds (the last pull).\n\n**Admin key only** (403 for a read-only key).",
         "parameters": [
           {
             "$ref": "#/components/parameters/phone"
@@ -2162,6 +2166,109 @@
           }
         }
       }
+    },
+    "/api/gates/{phone}/working-copy/conflicts": {
+      "post": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Decide a conflict",
+        "x-role": "admin",
+        "description": "Keeps the working copy's value (`mine`) or takes the gate's (`gate`, saved like an edit; recorded in History).\n\n**Admin key only** (403 for a read-only key).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "key",
+                  "choice"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "resident",
+                      "card",
+                      "setting"
+                    ]
+                  },
+                  "key": {
+                    "type": "string"
+                  },
+                  "choice": {
+                    "type": "string",
+                    "enum": [
+                      "mine",
+                      "gate"
+                    ]
+                  }
+                }
+              },
+              "example": {
+                "kind": "resident",
+                "key": "101",
+                "choice": "gate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The working copy status, as GET .../working-copy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "exists": {
+                      "type": "boolean"
+                    },
+                    "edited": {
+                      "type": "boolean"
+                    },
+                    "conflicts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Conflict"
+                      },
+                      "description": "changes to decide before a send"
+                    },
+                    "files": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2576,9 +2683,12 @@
             "type": "boolean",
             "description": "the working copy has changes not sent to the gate"
           },
-          "newerPull": {
-            "type": "boolean",
-            "description": "a pull newer than the working copy's base differs from it"
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Conflict"
+            },
+            "description": "changes to decide before a send"
           }
         }
       },
@@ -3386,6 +3496,45 @@
             ]
           }
         }
+      },
+      "Conflict": {
+        "type": "object",
+        "description": "An item changed differently at the gate and in the working copy since the last pull. The working copy keeps its value until it is decided (POST .../working-copy/conflicts); sends are refused (409) until then.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "resident",
+              "card",
+              "setting"
+            ]
+          },
+          "key": {
+            "type": "string",
+            "description": "directory code, card slot or setting key"
+          },
+          "label": {
+            "type": "string",
+            "example": "Directory code 101 (Smith, J)"
+          },
+          "gate": {
+            "type": "string",
+            "description": "the gate's value, in words (only what differs)",
+            "example": "Phone \"5550100\""
+          },
+          "mine": {
+            "type": "string",
+            "description": "the working copy's value, in words",
+            "example": "Phone \"5550199\""
+          }
+        },
+        "required": [
+          "kind",
+          "key",
+          "label",
+          "gate",
+          "mine"
+        ]
       }
     }
   }

@@ -179,17 +179,18 @@ function orderDirectory(names: Buffer, residents: ResidentValues[]): void {
   entries.forEach((e, i) => e.copy(names, start + i * DIR_ENTRY_SIZE));
 }
 
-// Puts the phone records where the working copy has them (each row's recordOffset). They stay where the edits put
-// them unless every record has a distinct, aligned position inside the file.
+// Puts the phone records in the working copy's order (by each row's recordOffset), in the record slots the edits
+// left in use, as orderDirectory does for the directory. They stay as they are unless every record has a distinct
+// stored position.
 function orderPhone(bufs: BoardBuffers, residents: ResidentValues[]): Buffer {
   const want = new Map(residents.filter((r) => r.recordOffset != null).map((r) => [r.directoryCode, r.recordOffset!]));
   const rows = residentRows(bufs).rows.filter((r) => r.recordOffset !== null);
-  const to = rows.map((r) => want.get(r.directoryCode));
-  if (rows.length !== want.size || new Set(to).size !== to.length
-    || to.some((o) => o === undefined || o % PHONE_RECORD || o + PHONE_RECORD > bufs.phone.length)
-    || rows.every((r, i) => r.recordOffset === to[i])) return bufs.phone;
-  const out = Buffer.alloc(bufs.phone.length, 0xff);
-  rows.forEach((r, i) => bufs.phone.copy(out, to[i]!, r.recordOffset!, r.recordOffset! + PHONE_RECORD));
+  if (rows.length !== want.size || rows.some((r) => !want.has(r.directoryCode)) || new Set(want.values()).size !== want.size) return bufs.phone;
+  const slots = rows.map((r) => r.recordOffset!).sort((a, b) => a - b);
+  const order = [...rows].sort((a, b) => want.get(a.directoryCode)! - want.get(b.directoryCode)!);
+  if (order.every((r, i) => r.recordOffset === slots[i])) return bufs.phone;
+  const out = Buffer.from(bufs.phone);
+  order.forEach((r, i) => bufs.phone.copy(out, slots[i], r.recordOffset!, r.recordOffset! + PHONE_RECORD));
   return out;
 }
 
@@ -345,6 +346,96 @@ export function undoValues(current: WorkingState, patch: ValuesPatch): WorkingSt
   return out;
 }
 
+// Rebasing unsent changes onto a newer pull. A conflict: an item both the gate and the working copy changed
+// differently since the old base (resident by directory code, card by slot, setting by key). The working copy keeps
+// its value until someone chooses Keep mine or Take the gate's.
+export type ConflictKind = 'resident' | 'card' | 'setting';
+export interface Conflict { kind: ConflictKind; key: string; label: string }
+// One unsent change to put back: the item's value (null = removed).
+export interface ItemChange { kind: ConflictKind; key: string; label: string; value: ResidentValues | GateCard | string | null }
+export interface RebasePlan { gate: WorkingState; changes: ItemChange[]; conflicts: Conflict[]; fromGate: number; layoutChanged: boolean }
+
+const residentKey = (r: ResidentValues | null) => r && Object.fromEntries([...VALUE_FIELDS, 'directoryCode'].map((k) => [k, (r as never)[k]]));
+// Whether two values of an item are the same (residents compare values, not where they sit in the files).
+export function sameItem(kind: ConflictKind, a: unknown, b: unknown): boolean {
+  return kind === 'resident' ? same(residentKey(a as ResidentValues | null), residentKey(b as ResidentValues | null)) : same(a, b);
+}
+const EDITABLE = new Set(GATE_SETTING_FIELDS.filter((f) => f.editable && !f.secret).map((f) => f.key));
+
+// The items of a working copy by kind and key (only editable settings: read-only ones always come from the gate).
+export function itemsOf(w: WorkingState): Record<ConflictKind, Map<string, ResidentValues | GateCard | string>> {
+  return {
+    resident: residentMap(w),
+    card: cardMap(w),
+    setting: new Map(Object.entries(w.settings).filter(([k]) => EDITABLE.has(k))),
+  };
+}
+function itemLabel(kind: ConflictKind, key: string, ...values: unknown[]): string {
+  if (kind === 'card') return `Card slot ${key}`;
+  if (kind === 'setting') return GATE_SETTING_FIELDS.find((f) => f.key === key)?.name || key;
+  const name = values.map((v) => (v as ResidentValues | null)?.name).find((n) => n && n.trim());
+  return `Directory code ${key}${name ? ` (${name})` : ''}`;
+}
+
+// Works out how to put the unsent changes (oldBase -> mine) on top of a newer pull (gate). Per item: unchanged in the
+// working copy -> the gate's; changed only in the working copy, or both to the same -> the working copy's; changed
+// differently on both -> a conflict, keeping the working copy's. Earlier conflicts stay while their item still
+// differs from the gate. layoutChanged: the directory code digits or area-code mode changed on either side, so the
+// changes can't be put back item by item (the caller takes the gate's version).
+export function rebasePlan(oldBase: WorkingState, mine: WorkingState, gate: WorkingState, earlier: Conflict[] = []): RebasePlan {
+  const layoutChanged = oldBase.dirDigits !== gate.dirDigits || oldBase.areaCodeMode !== gate.areaCodeMode
+    || oldBase.dirDigits !== mine.dirDigits || oldBase.areaCodeMode !== mine.areaCodeMode;
+  const plan: RebasePlan = { gate, changes: [], conflicts: [], fromGate: 0, layoutChanged };
+  if (layoutChanged) return plan;
+  const [b, m, g] = [itemsOf(oldBase), itemsOf(mine), itemsOf(gate)];
+  for (const kind of ['resident', 'card', 'setting'] as const) {
+    for (const key of new Set([...b[kind].keys(), ...m[kind].keys(), ...g[kind].keys()])) {
+      const [vb, vm, vg] = [b[kind].get(key) ?? null, m[kind].get(key) ?? null, g[kind].get(key) ?? null];
+      if (sameItem(kind, vm, vb)) {
+        if (!sameItem(kind, vg, vb)) plan.fromGate++;
+        continue;
+      }
+      if (sameItem(kind, vm, vg)) continue;
+      const label = itemLabel(kind, key, vm, vg, vb);
+      plan.changes.push({ kind, key, label, value: vm });
+      const conflicted = !sameItem(kind, vg, vb) || earlier.some((c) => c.kind === kind && c.key === key);
+      if (conflicted) plan.conflicts.push({ kind, key, label });
+    }
+  }
+  return plan;
+}
+
+// A working copy with one item set (null removes it). A resident keeps the gate's place in the files when it has one.
+export function withItem(w: WorkingState, kind: ConflictKind, key: string, value: ResidentValues | GateCard | string | null): WorkingState {
+  if (kind === 'setting') return { ...w, settings: { ...w.settings, [key]: value as string } };
+  if (kind === 'card') {
+    const cards = w.cards.filter((c) => String(c.slot) !== key);
+    return { ...w, cards: (value ? [...cards, value as GateCard] : cards).sort((a, c) => a.slot - c.slot) };
+  }
+  const at = w.residents.find((r) => r.directoryCode === key);
+  const rest = w.residents.filter((r) => r.directoryCode !== key);
+  if (!value) return { ...w, residents: rest };
+  const r = { ...(value as ResidentValues), entryOffset: at?.entryOffset, recordOffset: at?.recordOffset };
+  return { ...w, residents: [...rest, r].sort((a, c) => a.directoryCode.localeCompare(c.directoryCode)) };
+}
+
+const FIELD_LABELS: Record<string, string> = {
+  name: 'Name', type: 'Type', hidden: 'Hidden', areaCode: 'Area code', phone: 'Phone', entryCode: 'Entry code',
+  securityLevel: 'Security level', floor: 'Floor', elevatorRef: 'Elevator', cardNumber: 'Card', directoryCode: 'Directory code',
+};
+// How the gate's and the working copy's values of a conflicted item differ, in words: { gate, mine }.
+export function describeConflict(kind: ConflictKind, gate: unknown, mine: unknown): { gate: string; mine: string } {
+  if (gate == null || mine == null) {
+    const what = (v: unknown) => (kind === 'setting' ? `"${v}"` : kind === 'card' ? `card ${(v as GateCard).cardNumber}`
+      : (v as ResidentValues).name || '(empty slot)');
+    return { gate: gate == null ? 'removed' : what(gate), mine: mine == null ? 'removed' : what(mine) };
+  }
+  if (kind === 'setting') return { gate: `"${gate}"`, mine: `"${mine}"` };
+  const fields = Object.keys(FIELD_LABELS).filter((k) => k in (gate as object) && !same((gate as never)[k], (mine as never)[k]));
+  const text = (v: unknown) => fields.map((k) => `${FIELD_LABELS[k]} ${JSON.stringify((v as never)[k] ?? '')}`).join(', ');
+  return { gate: text(gate), mine: text(mine) };
+}
+
 // Offsets (hex) where two buffers differ, and how many.
 function differences(a: Buffer, b: Buffer): { bytes: number; offsets: number[] } {
   if (a.length !== b.length) return { bytes: Math.max(a.length, b.length), offsets: [] };
@@ -477,13 +568,13 @@ interface ResidentDbRow {
   entry_offset: number | null; record_offset: number | null;
 }
 
-// The working copy's values, { baseOk, savedAt }, or null when there is none.
+// The working copy's values, { baseOk, savedAt, conflicts }, or null when there is none.
 export async function loadWorkingState(store: Store, phone: unknown):
-  Promise<{ state: WorkingState; baseOk: boolean; savedAt: Date } | null> {
+  Promise<{ state: WorkingState; baseOk: boolean; savedAt: Date; conflicts: Conflict[] } | null> {
   const p = phoneDigits(phone);
   const head = await one<{ dir_digits: number; area_code_mode: number; area_codes: (string | null)[]; middle_pointer: string;
-    base_ok: boolean; saved_at: string; extra: Record<string, string> | null; sizes: WorkingState['sizes'] | null }>(store,
-    'SELECT dir_digits, area_code_mode, area_codes, middle_pointer, base_ok, saved_at, extra, sizes FROM gate_working WHERE phone = $1', [p]);
+    base_ok: boolean; saved_at: string; extra: Record<string, string> | null; sizes: WorkingState['sizes'] | null; conflicts: Conflict[] }>(store,
+    'SELECT dir_digits, area_code_mode, area_codes, middle_pointer, base_ok, saved_at, extra, sizes, conflicts FROM gate_working WHERE phone = $1', [p]);
   if (!head) return null;
   const [res, cards, settings] = await Promise.all([
     all<ResidentDbRow>(store, 'SELECT * FROM gate_residents WHERE phone = $1 ORDER BY seq', [p]),
@@ -494,6 +585,7 @@ export async function loadWorkingState(store: Store, phone: unknown):
   return {
     baseOk: head.base_ok,
     savedAt: new Date(head.saved_at),
+    conflicts: head.conflicts,
     state: {
       dirDigits: head.dir_digits,
       areaCodeMode: head.area_code_mode,
@@ -511,6 +603,11 @@ export async function loadWorkingState(store: Store, phone: unknown):
       ...(head.sizes && { sizes: head.sizes }),
     },
   };
+}
+
+// Replaces the working copy's list of conflicts (saving values leaves it as it is).
+export async function setConflicts(store: Store, phone: unknown, conflicts: Conflict[]): Promise<void> {
+  await run(store, 'UPDATE gate_working SET conflicts = $2 WHERE phone = $1', [phoneDigits(phone), JSON.stringify(conflicts)]);
 }
 
 // Removes the working copy's values.

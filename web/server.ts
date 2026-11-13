@@ -530,39 +530,62 @@ const gateData = async (phone: string) => {
   return loadData(pulledAt, w && w.state, prefs.deviceAssociation, tx);
 };
 
-// Runs the round-trip check on the gate's latest pull (gate-state.ts) and records it. Returns a line for the job log.
-async function recordGateState(phone: string): Promise<string> {
-  const pulled = await dk.readPulledFiles(STORE, phone, dk.CACHE_FILES);
-  if (dk.CACHE_FILES.some((n) => !pulled[n])) return 'Round-trip check skipped: the pull is missing a file';
+// The board files of a pull, or null when one is missing.
+const boardOf = (files: Record<string, Buffer>): BoardBuffers | null => (dk.CACHE_FILES.every((n) => files[n])
+  ? { names: files['names.bin'], phone: files['phone.bin'], cards: files['cards.bin'] } : null);
+
+// Runs the round-trip and rebuild checks on a pull (gate-state.ts; files: the pull, else the gate's stored files) and
+// records them. Returns a line for the job log.
+async function recordGateState(phone: string, files?: BoardBuffers | null): Promise<string> {
+  const pulled = files === undefined ? await dk.readBaseFiles(STORE, phone) : files;
+  if (!pulled) return 'Round-trip check skipped: the pull is missing a file';
   const prefs = await prefsOf(phone);
   const gate = await dk.getGate(STORE, phone);
-  const check = await dk.checkPull(STORE, phone,
-    { names: pulled['names.bin'].data, phone: pulled['phone.bin'].data, cards: pulled['cards.bin'].data },
-    pulled['names.bin'].savedAt, { areaCodeSlots: dk.areaCodeLimit((prefs.gateConfig || {}).areaCodes || defaults.areaCodes),
-      masterCode: gate ? gate.masterCode : undefined });
+  const check = await dk.checkPull(STORE, phone, pulled, new Date(),
+    { areaCodeSlots: dk.areaCodeLimit((prefs.gateConfig || {}).areaCodes || defaults.areaCodes), masterCode: gate ? gate.masterCode : undefined });
   const line = (check.ok ? 'Round-trip check passed: the files rebuild byte for byte from their values'
-    : `Round-trip check FAILED (editing stays locked after Reset to gate): ${JSON.stringify(check.problems).slice(0, 500)}`)
+    : `Round-trip check FAILED (editing stays locked): ${JSON.stringify(check.problems).slice(0, 500)}`)
     + (check.rebuild.ok ? '; rebuild from values alone passed' : `; rebuild from values alone differs: ${JSON.stringify(check.rebuild.problems).slice(0, 500)}`);
   DEBUG.write('gate', `Gate ${phone}: ${line}`);
   return line;
+}
+
+// Job log lines for what a residents pull did to the working copy (gate-cache.ts applyPull).
+function pullLines(r: dk.PullResult): string[] {
+  const s = (n: number) => (n === 1 ? '' : 's');
+  if (r.outcome === 'new') return ['Working copy made from this pull'];
+  if (r.outcome === 'unchanged') return ['The gate holds the same data as before'];
+  if (r.outcome === 'refreshed') return ['Working copy updated from this pull (it had no unsent changes)'];
+  if (r.outcome === 'dropped') {
+    return [`Your ${r.dropped!.count} unsent change${s(r.dropped!.count)} were dropped and the working copy now matches the gate: ${r.dropped!.reason}`];
+  }
+  return [
+    `Working copy updated from this pull: ${r.fromGate} change${s(r.fromGate)} from the gate taken, ${r.kept} unsent change${s(r.kept)} kept on top`,
+    ...(r.conflicts.length ? [`${r.conflicts.length} conflict${s(r.conflicts.length)} to decide before sending (changed differently at the gate and here): ${
+      r.conflicts.map((c) => c.label).join('; ')}`] : []),
+    ...r.notKept.map((n) => `Couldn't keep your change to ${n.label} (${n.error}); the gate's value is used`),
+  ];
+}
+
+// Applies a residents pull to the working copy (no edit is saved meanwhile) and logs what happened.
+async function applyResidentsPull(g: Gate, files: Record<string, Buffer>, log: (line: string) => void): Promise<void> {
+  const r = await serial(g.phoneNumber, () => dk.applyPull(STORE, g.phoneNumber, files));
+  for (const line of pullLines(r)) log(line);
 }
 
 function startPull(g: Gate, what: dk.PullKind, info: JobInfo = {}): Promise<JobState> {
   const pulled = (j: JobState) => { if (what === 'transactions' && j.state === 'done') queueSnapshots(g.phoneNumber, g.dir); return j; };
   return startJob(g, what, () => sessionRequest(g, what), async (log, request) => {
     const { files } = await dk.pullFromGate(client(), what, request, { onStatus: log });
-    await dk.savePulledFiles(STORE, g.phoneNumber, files);
-    for (const [f, data] of Object.entries(files)) log(`${dk.CACHE_FILES.includes(f) ? 'Saved' : 'Read'} ${f} (${data.length} bytes)`);
+    for (const [f, data] of Object.entries(files)) log(`Read ${f} (${data.length} bytes)`);
     if (files['rcv_out.bin']) {
       const m = await dk.mergeTransactions(STORE, g.phoneNumber, files['rcv_out.bin']);
       log(`Transaction history: ${m.added} new event${m.added === 1 ? '' : 's'}, ${m.kept} already saved`);
       if (m.gap) log('No overlap with the saved history: events may be missing since the last pull, or the gate\'s buffer was cleared');
     }
     if (what === 'residents') {
-      log(await recordGateState(g.phoneNumber));
-      const { refreshed } = await dk.syncCacheAfterPull(STORE, g.phoneNumber);
-      log(refreshed ? 'Working copy refreshed from this pull'
-        : 'Working copy has saved changes and was kept; use Reset to gate to start from this pull');
+      log(await recordGateState(g.phoneNumber, boardOf(files)));
+      await applyResidentsPull(g, files, log);
     }
   }, info).then(pulled);
 }
@@ -582,7 +605,8 @@ async function prepareGateSend(g: Gate): Promise<PreparedSend> {
 }
 
 // Sends the working copy, then pulls residents again to check the gate now holds it.
-// Match: the pull becomes the new base. Mismatch: the working copy is kept and the differing blocks are logged.
+// Match: the pull becomes the base and the working copy. Mismatch: the pull is applied like any residents pull (the
+// changes not on the gate stay unsent) and the differing blocks are logged.
 // prepared: from prepareGateSend, awaited before the busy check so the job is claimed without a gap.
 function startSend(g: Gate, prepared: PreparedSend, info: JobInfo = {}): Promise<JobState> {
   return startJob(g, 'send', () => sessionRequest(g, 'send', { residentCounts: prepared.counts }), async (log, request) => {
@@ -591,14 +615,14 @@ function startSend(g: Gate, prepared: PreparedSend, info: JobInfo = {}): Promise
     await dk.pushToGate(client(), request, { files: prepared.files, maps: prepared.maps, onStatus: log });
     log('Send finished; pulling residents to check');
     const { files } = await dk.pullFromGate(client(), 'residents', pullRequest, { onStatus: log });
-    await dk.savePulledFiles(STORE, g.phoneNumber, files);
-    log(await recordGateState(g.phoneNumber));
+    log(await recordGateState(g.phoneNumber, boardOf(files)));
     const check = await dk.verifySend(STORE, g.phoneNumber, files);
     if (!check.matches) {
-      throw new Error(`Check pull differs from the working copy: ${JSON.stringify(check.differentBlocks)}. Working copy kept.`);
+      await applyResidentsPull(g, files, log);
+      throw new Error(`Check pull differs from the working copy: ${JSON.stringify(check.differentBlocks)}. What the gate doesn't hold is still unsent.`);
     }
-    await dk.resetCache(STORE, g.phoneNumber);
-    log('Check passed: the gate holds the working copy. The working copy base now matches the gate.');
+    await serial(g.phoneNumber, () => dk.replaceBase(STORE, g.phoneNumber, files));
+    log('Check passed: the gate holds the working copy, which now matches the gate.');
   }, {
     ...info,
     details: Object.entries(prepared.changedBlocks).filter(([, b]) => b.length)
@@ -1435,10 +1459,14 @@ const ROUTES = [
   route('PUT', `${G}/settings`, 'gate-admin', ({ s, g, body }) => withHistory(s, g,
     { summary: 'Changed gate settings' }, async () => saveSettings(g, body, await commandRelays(g.phoneNumber)))),
 
-  // The working copy: status, reset to the last pull, and file downloads (.bin / .map).
+  // The working copy: status (with the conflicts to decide), reset to the gate (drops unsent changes), deciding a
+  // conflict ({ kind: resident|card|setting, key, choice: mine|gate }), and file downloads (.bin / .map).
   route('GET', `${G}/working-copy`, 'gate', async ({ g }) => [200, await dk.cacheStatus(STORE, g.phoneNumber)]),
   route('DELETE', `${G}/working-copy`, 'gate-admin', ({ s, g }) => withHistory(s, g,
-    { summary: 'Reset the working copy to the last pull' }, async () => [200, await dk.resetCache(STORE, g.phoneNumber)])),
+    { summary: 'Reset the working copy to the gate (unsent changes dropped)' }, async () => [200, await dk.resetCache(STORE, g.phoneNumber)])),
+  route('POST', `${G}/working-copy/conflicts`, 'gate-admin', ({ s, g, body }) => withHistory(s, g,
+    { summary: `${body.choice === 'gate' ? 'Took the gate\'s value' : 'Kept my change'} for a conflict (${String(body.kind)} ${String(body.key)})` },
+    async () => [200, await dk.resolveConflict(STORE, g.phoneNumber, body.kind, body.key, body.choice)])),
   route('GET', `${G}/files/:name`, 'gate-admin', async ({ g, params, res }) => { await sendFile(res, g.phoneNumber, params.name); }),
 
   // Gate-scoped local preferences (relay labels, Device Association, gate config), keyed by phone number.
@@ -1865,6 +1893,11 @@ for (const { phone, added } of await dk.migrateRcvOut(STORE)) {
 for (const phone of await dk.migrateWorkingFiles(STORE)) {
   console.log(`Gate ${phone}: working copy moved into the values tables`);
   DEBUG.write('server', `Gate ${phone}: working copy moved into the values tables`);
+}
+// Once per gate: a newer pull still kept apart (the old `pulled` copy) is applied to the working copy and removed.
+for (const { phone, outcome } of await dk.migratePulledCopies(STORE)) {
+  console.log(`Gate ${phone}: separate pulled copy applied (${outcome}) and removed`);
+  DEBUG.write('server', `Gate ${phone}: separate pulled copy applied (${outcome}) and removed`);
 }
 // Values stored since a working copy was saved (settings, extra bytes, file sizes) are added.
 for (const phone of await dk.addMissingValues(STORE)) {

@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS gate_state (phone TEXT PRIMARY KEY, pulled_at TIMESTA
   round_trip_ok BOOLEAN NOT NULL, problems JSONB NOT NULL, rebuild_ok BOOLEAN, rebuild_problems JSONB);
 CREATE TABLE IF NOT EXISTS gate_working (phone TEXT PRIMARY KEY, dir_digits INTEGER NOT NULL, area_code_mode INTEGER NOT NULL,
   area_codes JSONB NOT NULL, middle_pointer TEXT NOT NULL, base_ok BOOLEAN NOT NULL, saved_at TIMESTAMPTZ NOT NULL, extra JSONB,
-  sizes JSONB);
+  sizes JSONB, conflicts JSONB NOT NULL DEFAULT '[]');
 CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password_hash TEXT NOT NULL, email TEXT UNIQUE,
   dark BOOLEAN NOT NULL, must_change BOOLEAN NOT NULL, created_at TIMESTAMPTZ NOT NULL, created_by TEXT NOT NULL,
   last_sign_in TIMESTAMPTZ, sign_ins INTEGER NOT NULL, webauthn_id TEXT, pending_email TEXT, phone TEXT,
@@ -95,5 +95,6 @@ ALTER TABLE gate_working ADD COLUMN IF NOT EXISTS area_codes JSONB NOT NULL DEFA
 ALTER TABLE gate_working ADD COLUMN IF NOT EXISTS middle_pointer TEXT NOT NULL DEFAULT 'ffffff';
 ALTER TABLE gate_working ADD COLUMN IF NOT EXISTS extra JSONB;
 ALTER TABLE gate_working ADD COLUMN IF NOT EXISTS sizes JSONB;
+ALTER TABLE gate_working ADD COLUMN IF NOT EXISTS conflicts JSONB NOT NULL DEFAULT '[]';
 ALTER TABLE gate_state ADD COLUMN IF NOT EXISTS rebuild_ok BOOLEAN;
 ALTER TABLE gate_state ADD COLUMN IF NOT EXISTS rebuild_problems JSONB;

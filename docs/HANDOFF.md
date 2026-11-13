@@ -383,7 +383,7 @@ Snapshots: `BAK\ACCT0001_step25_before_dirdigits`, `BAK\ACCT0001_step26_4digit_c
     board-files.ts    parse names/phone/cards/rcv_out .bin  (+ all names.bin regions)
     residents-edit.ts  WRITE path: applyResidentEdit / deleteResident / removeDirectoryCode / addEntry / emptySlots
     gate-settings.ts  editable FIELDS (typed decode/encode) for the settings editors
-    gate-cache.ts     board files in gate_files (pulled/base/working, encrypted); reset/send/verify; importGateFiles
+    gate-cache.ts     the gate's files in gate_files (base, encrypted); applyPull (rebase, conflicts); reset/send/verify
     gate-state.ts     gate_residents/gate_cards/gate_settings from each pull; checkRoundTrip, saveGateState
     gate-pull.ts      buildSessionRequest, pullFromGate, pushToGate, controlRelays, checkRelays
     dks-cloud.ts      SOAP client (CheckLogin, GetRelays, SetRelays, SendResidentData,
@@ -554,13 +554,21 @@ The web UI calls gate routes through `gateApi(phone)` in `web/ui/api.ts` (`gapi(
 
 ### 4.2 Working-copy model (`gate-cache.ts` + `gate-state.ts`; files on disk until 2026-11-12)
 Per gate and file, rows in `gate_files` (data encrypted with `encryptBytes`):
-- `pulled` — the latest residents pull (`rcv_out.bin` isn't kept since 2026-11-13; §3.6).
-- `base` — the files as pulled when the working copy was made (what the gate holds).
+- `base` — the latest residents pull: what the gate holds (`rcv_out.bin` isn't kept since 2026-11-13; §3.6). Until
+  2026-11-13 a newer pull waited as `pulled` until Reset to gate; now each pull becomes the base at once.
 - The **working copy is values** (phase 3, 2026-11-12): `gate_residents`, `gate_cards`, `gate_settings`,
   `gate_working` (digits, area-code layout and table, middle pointer, `base_ok`). `loadCopies` builds the working
   files with `buildFiles(base, values)` on every read; `writeCacheFiles` decodes the new files (`decodeWorking`),
   rebuilds, and saves the values only if the rebuild is byte-identical (else 409, nothing saved; 409 too while
-  `base_ok` is false). `resetCache` = base := pulled, values := decode(pulled), `base_ok` := its round-trip check.
+  `base_ok` is false). `resetCache` = values := decode(base) (unsent changes and conflicts dropped). `applyPull` (each
+  residents pull, 2026-11-13): base := pull; with unsent changes, `rebasePlan` diffs old base → working copy per item
+  (resident by code, card by slot, editable setting) and puts the changes on the pull's values; both sides changed
+  differently = conflict (`gate_working.conflicts`, working copy's value kept; Keep mine / Take the gate's via
+  `resolveConflict`; sends refused meanwhile); `buildRebase` builds all at once, else one at a time and reports those
+  the files can't take; a digits / area-code-mode change on either side (user's choice: take the gate's) or a pull
+  failing the round-trip check drops the changes. Phone record positions are applied as an order (like the
+  directory's), so a code removed at the gate doesn't leave a gap. After a send, a matching check pull replaces the
+  base and working copy (`replaceBase`); a mismatching one is applied like any pull.
   `migrateWorkingFiles` converted the old `working` file copies once (verified, then deleted).
 - The `.map` (one byte per 128-byte block, 1 = block differs from base: what a send uploads) is computed by
   `blockMap(base, built working)`; `cacheFileData` builds it for the download route.
@@ -594,8 +602,7 @@ After each residents pull and each send's check pull, `recordGateState` → `sav
 747 settings) after one fix: day masks decoded `FF` (not set) as `0000000` and wrote it back as `00`; they now
 decode to `''` and keep `FF` (Hold Open **Clear** writes `''` too). On a blank file the Security Levels relay and
 floor masks also turn `FF` into `00`; real gates hold `00` there, so those encoders were left alone.
-A fresh residents pull refreshes the working copy **only if it has no unsaved edits**; otherwise it is
-kept and the user must **Reset to gate** to start from the new pull.
+A residents pull updates the working copy at once, with unsent changes kept on top (`applyPull`, above).
 
 ---
 

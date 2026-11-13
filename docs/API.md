@@ -126,8 +126,14 @@ fixed-date holiday list.
 | POST | `/send` | gate-admin | `{ confirm: true }` | 202, sends the working copy, then pulls residents to check the gate holds it |
 
 Read-only users may pull. A send (and its preview) is
-refused (409) when the working copy is missing files, a newer pull differs from its base (**Reset to gate** first),
-or two or more entries share a directory code, entry code or card (the error lists them; see `duplicates` below).
+refused (409) when the working copy is missing files, conflicts with the gate aren't decided yet (below), or two or
+more entries share a directory code, entry code or card (the error lists them; see `duplicates` below).
+
+A residents pull updates the working copy at once: its files become what the gate holds, and unsent changes are put
+back on top (resident by directory code, card by slot, setting by key). An item changed differently at the gate and
+here is a **conflict**: the working copy keeps its value until someone decides. When the directory code digits or the
+area-code mode changed (at the gate or in the working copy), the gate's version is taken and unsent changes are
+dropped. The pull's job log says which happened.
 
 ## Residents and vendors (working copy; prefix `/api/gates/{phone}`)
 
@@ -155,8 +161,9 @@ card numbers are 00001–65407.
 | GET | `/settings` | gate | | `{ fields: [{ key, group, name, offset, size, value, gate, editable, secret, note, maxLength }], pulled, saved, cache }`; secret values are masked. Read-only fields (`editable: false`) include `dialType` (`Tone`/`Rotary`), `multipleSystems` (`Yes`/`No`), `systemMemory` (e.g. `3000`), `memoryChips` (`Standard`/`MemPLUS`/`Anti-pass back`) and `downloadStamp1`/`2` (`2026-11-05 17:40:00 UTC`); a value that doesn't fit shows as `? (<hex>)` |
 | PUT | `/settings` | gate-admin | `{ "<field key>": value, … }` | saves editable fields to the working copy: `{ changed, changedBlocks }`; 400 when nothing changed, or when it changes a tone-open digit (`relay{0-2}Tone…`) and two tones of relays 0–2 would share a digit (Tracker command relays are left out) |
 | GET | `/data` | gate | | `{ transactions }`: `{ updated, rows }` from the transaction history, `updated` = the last transactions pull, `null` before the first; names looked up in the working copy's values (`gate_residents`, `gate_cards`) (until 2026-11-12 also `residents`, `holdOpen`, `holidays`, `securityLevels`, `facilityCodes`, `elevator`; use `/residents` and `/settings` for those) |
-| GET | `/working-copy` | gate | | `{ exists, edited, newerPull, files }` |
-| DELETE | `/working-copy` | gate-admin | | Reset to gate: the working copy becomes the last pull |
+| GET | `/working-copy` | gate | | `{ exists, edited, conflicts: [{ kind, key, label, gate, mine }], files }`; `kind` is `resident`, `card` or `setting`, `gate`/`mine` say in words how the two values differ |
+| DELETE | `/working-copy` | gate-admin | | Reset to gate: unsent changes and conflicts are dropped; the working copy becomes what the gate holds |
+| POST | `/working-copy/conflicts` | gate-admin | `{ kind, key, choice: "mine" \| "gate" }` | decides a conflict: keep the working copy's value, or take the gate's (saved like an edit, in History); returns the status; 404 for no such conflict |
 | GET | `/files/{name}` | gate-admin | | download the working copy's `names.bin`, `phone.bin`, `cards.bin` or their `.map` (built from the database) |
 | GET | `/prefs` | gate | | the gate's preferences (see below) |
 | PUT | `/prefs` | gate-admin | any preference keys | saves; changing `gateConfig.areaCodes` converts the working copy (409 when it can't) |

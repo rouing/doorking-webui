@@ -37,7 +37,7 @@ type NavKey = Extract<(typeof NAV)[number], { key: string }>['key'] | (typeof PI
 const EDIT_PAGES: NavKey[] = ['display', 'relays', 'holdOpen', 'holidays', 'security', 'facility', 'elevator', 'relayElevator', 'apb', 'schedules'];
 
 const PULL_WARNING = {
-  residents: 'This refreshes the working copy with the gate\'s current data. If you have unsaved resident edits they are kept (use "Reset to gate" to discard them).',
+  residents: 'This reads the gate\'s current data. Changes you haven\'t sent stay on top of it; anything changed both at the gate and here is listed for you to decide.',
   transactions: '',
 };
 

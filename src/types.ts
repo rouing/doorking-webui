@@ -124,8 +124,12 @@ export interface PasskeyInfo { id: string; name: string; site: string; synced: b
 export interface GateLogin { dksUser: string; dksPasswordSet: boolean }
 
 // setup: no account exists yet, so the page offers to create the first one.
+// A single sign-on provider ("Sign in with <name>") and a sign-in linked to the account.
+export interface SsoProviderInfo { id: string; name: string }
+export interface SsoIdentityInfo { provider: string; providerName: string; subject: string; email: string; linkedAt: string; lastUsedAt: string | null }
+
 export type SessionReply =
-  | { loggedIn: false; setup?: boolean; emailEnabled: boolean }
+  | { loggedIn: false; setup?: boolean; emailEnabled: boolean; sso: SsoProviderInfo[] }
   | {
     loggedIn: true;
     user: string;
@@ -137,6 +141,9 @@ export type SessionReply =
     notifyAlerts: boolean; // gate alerts (as a gate admin)
     emailEnabled: boolean; // the server can send email
     mustChangePassword: boolean;
+    sso: SsoProviderInfo[];
+    hasPassword: boolean; // false: signs in with single sign-on (or a passkey) only
+    passwordAllowed: boolean; // false: linked to a provider that turns password sign-in off
     gate: GateInfo | null;
     defaults: GateConfig;
     holidayList: { name: string; month: number; day: number }[];

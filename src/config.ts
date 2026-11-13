@@ -13,6 +13,15 @@ export interface DatabaseConfig {
   poolSize: number;
   testName: string; // database the tests use (one throwaway schema per test), same login
 }
+// A single sign-on provider (OpenID Connect: Entra ID, Google Workspace, Okta, …). id: in its redirect address
+// (/api/sso/<id>/callback); name: on the "Sign in with …" button. allowedDomains: email domains whose accounts may be
+// matched by email, linked or created ([] = none matched by email: only invitations and linking from User Settings).
+// autoCreate: unknown people from allowedDomains get an account (no gate access). passwords: false = accounts linked
+// to this provider can't sign in with a password.
+export interface SsoProvider {
+  id: string; name: string; issuer: string; clientId: string; clientSecret: string;
+  allowedDomains: string[]; autoCreate: boolean; passwords: boolean;
+}
 export interface ServerConfig {
   file: string | null; // the config file read, or null when there was none
   server: { port: number; publicHost: string };
@@ -25,6 +34,7 @@ export interface ServerConfig {
   // SMTP for account emails and gate alerts; host '' = email off. security: 'starttls' (port 587), 'tls' (465) or
   // 'none'. appUrl: the address links in emails point to ('' = https://<server.publicHost>).
   email: { host: string; port: number; security: string; user: string; password: string; from: string; appUrl: string };
+  sso: { providers: SsoProvider[] };
   gateDefaults: typeof GATE_DEFAULTS;
 }
 
@@ -40,6 +50,7 @@ const DEFAULTS = {
   schedules: { checkSeconds: 30 },
   cameras: { ffmpeg: '', tidyMinutes: 60 },
   email: { host: '', port: 587, security: 'starttls', user: '', password: '', from: '', appUrl: '' },
+  sso: { providers: [] as SsoProvider[] },
   gateDefaults: { ...GATE_DEFAULTS },
 };
 type Section = keyof typeof DEFAULTS;
@@ -72,6 +83,57 @@ function section(name: Section, given: unknown, where: string): Record<string, u
   return out;
 }
 
+const PROVIDER_KEYS = ['id', 'name', 'issuer', 'clientId', 'clientSecret', 'allowedDomains', 'autoCreate', 'passwords'];
+const isObject = (v: unknown): v is Record<string, unknown> => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+
+// Checks the sso section: { providers: [SsoProvider, …] }.
+function ssoSection(given: unknown, where: string): { providers: SsoProvider[] } {
+  if (given === undefined) return { providers: [] };
+  if (!isObject(given)) fail(`${where}: "sso" must be an object`);
+  const g = given as Record<string, unknown>;
+  for (const k of Object.keys(g)) if (k !== 'providers') fail(`${where}: unknown setting "sso.${k}"`);
+  const list = g.providers ?? [];
+  if (!Array.isArray(list)) fail(`${where}: "sso.providers" must be a list`);
+  const ids = new Set<string>();
+  return { providers: (list as unknown[]).map((item, i): SsoProvider => {
+    const at = `sso.providers[${i}]`;
+    if (!isObject(item)) return fail(`${where}: "${at}" must be an object`);
+    const p = item;
+    for (const k of Object.keys(p)) if (!PROVIDER_KEYS.includes(k)) fail(`${where}: unknown setting "${at}.${k}"`);
+    const text = (k: string, required = true): string => {
+      const v = p[k];
+      if (v === undefined && !required) return '';
+      if (typeof v !== 'string' || (required && !v.trim())) fail(`${where}: "${at}.${k}" must be text${required ? ' (required)' : ''}`);
+      return (v as string).trim();
+    };
+    const flag = (k: string, def: boolean): boolean => {
+      if (p[k] === undefined) return def;
+      if (typeof p[k] !== 'boolean') fail(`${where}: "${at}.${k}" must be true or false`);
+      return p[k] as boolean;
+    };
+    const id = text('id').toLowerCase();
+    if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(id)) fail(`${where}: "${at}.id" must be 1-32 lower-case letters, digits or dashes`);
+    if (ids.has(id)) fail(`${where}: two providers have the id "${id}"`);
+    ids.add(id);
+    const issuer = text('issuer');
+    let u: URL | null = null;
+    try { u = new URL(issuer); } catch { fail(`${where}: "${at}.issuer" must be a URL`); }
+    const local = u!.hostname === 'localhost' || u!.hostname === '127.0.0.1';
+    if (u!.protocol !== 'https:' && !(u!.protocol === 'http:' && local)) fail(`${where}: "${at}.issuer" must be an https:// URL`);
+    if (u!.hostname === 'login.microsoftonline.com' && /^\/(common|organizations|consumers)(\/|$)/i.test(u!.pathname)) {
+      fail(`${where}: "${at}.issuer" must name your Entra tenant (https://login.microsoftonline.com/<tenant ID>/v2.0), not common, organizations or consumers`);
+    }
+    const domains = p.allowedDomains ?? [];
+    if (!Array.isArray(domains) || domains.some((d) => typeof d !== 'string' || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(d))) {
+      fail(`${where}: "${at}.allowedDomains" must be a list of domains such as ["example.com"]`);
+    }
+    const autoCreate = flag('autoCreate', false);
+    if (autoCreate && !(domains as string[]).length) fail(`${where}: "${at}.autoCreate" needs allowedDomains`);
+    return { id, name: text('name'), issuer, clientId: text('clientId'), clientSecret: text('clientSecret', false),
+      allowedDomains: (domains as string[]).map((d) => d.toLowerCase()), autoCreate, passwords: flag('passwords', true) };
+  }) };
+}
+
 // On Linux/macOS a file holding secrets must not be readable by other users.
 export function checkPrivate(file: string): void {
   if (process.platform === 'win32' || !fs.existsSync(file)) return;
@@ -96,7 +158,7 @@ export function loadConfig({ file, env = process.env, args = process.argv.slice(
     checkPrivate(f);
   } else if (chosen) fail(`Config file ${f} not found`);
   for (const k of Object.keys(raw)) if (!(k in DEFAULTS)) fail(`${f}: unknown section "${k}"`);
-  const s = Object.fromEntries((Object.keys(DEFAULTS) as Section[]).map((k) => [k, section(k, raw[k], f)])) as any;
+  const s = Object.fromEntries((Object.keys(DEFAULTS) as Section[]).map((k) => [k, k === 'sso' ? ssoSection(raw[k], f) : section(k, raw[k], f)])) as any;
   const dir = path.dirname(f);
   const number = (v: string, key: string) => { const n = Number(v); return Number.isInteger(n) ? n : fail(`${key} must be a whole number`); };
   if (env.PORT) s.server.port = number(env.PORT, 'PORT');
@@ -149,5 +211,6 @@ export function maskedConfig(c: ServerConfig): ServerConfig {
     ...c,
     database: { ...c.database, password: c.database.password ? '***' : '', url: c.database.url ? c.database.url.replace(/:[^:@/]*@/, ':***@') : '' },
     email: { ...c.email, password: c.email.password ? '***' : '' },
+    sso: { providers: c.sso.providers.map((p) => ({ ...p, clientSecret: p.clientSecret ? '***' : '' })) },
   };
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Badge, Button, Callout, Card, Checkbox, Container, Flex, Heading, Table, Text, TextField } from '@radix-ui/themes';
 import { browserSupportsWebAuthn, startRegistration } from '@simplewebauthn/browser';
-import type { PasskeyInfo, SessionReply } from '../../src/types.ts';
+import type { PasskeyInfo, SessionReply, SsoIdentityInfo, SsoProviderInfo } from '../../src/types.ts';
 import { api, errorText } from './api.ts';
 import { useConfirm } from './Confirm.tsx';
 import { fmtIntlPhone, fmtTime } from './format.ts';
@@ -20,9 +20,16 @@ export function passkeyError(e: unknown): string {
   return errorText(e);
 }
 
-// The user's passkeys: add (after confirming the password), rename, remove. Passkeys work on the site name they were
-// made on: the public HTTPS name, or localhost on the server.
-function Passkeys() {
+// Starts a single sign-on: asks the server for the provider's address (path: /api/sso/start, or /api/me/sso/start to
+// link), then opens it. The provider sends the browser back to the app.
+export async function startSso(path: string, body: Record<string, unknown>): Promise<void> {
+  const { url } = await api<{ url: string }>('POST', path, body);
+  window.location.assign(url);
+}
+
+// The user's passkeys: add (after confirming the password, when the account has one), rename, remove. Passkeys work on the
+// site name they were made on: the public HTTPS name, or localhost on the server.
+function Passkeys({ askPassword }: { askPassword: boolean }) {
   const [list, setList] = useState<PasskeyInfo[]>([]);
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
@@ -61,8 +68,8 @@ function Passkeys() {
       <Flex direction="column" gap="3">
         <Heading size="3">Passkeys</Heading>
         <Text size="2" color="gray">
-          Sign in with your fingerprint, face or device PIN instead of typing your password. Your password keeps working too. A passkey works
-          on the address it was added on ({window.location.host}).
+          Sign in with your fingerprint, face or device PIN instead of typing your password. Your other ways to sign in keep working too. A
+          passkey works on the address it was added on ({window.location.host}).
         </Text>
         {list.length > 0 && (
           <Table.Root size="1">
@@ -89,8 +96,8 @@ function Passkeys() {
           <form onSubmit={add} autoComplete="off">
             <Flex gap="3" align="end" wrap="wrap">
               <Labelled label="Name (e.g. iPhone, YubiKey)"><TextField.Root value={name} maxLength={40} onChange={(e) => setName(e.target.value)} /></Labelled>
-              <Labelled label="Your current password"><TextField.Root type="password" value={password} required autoComplete="current-password"
-                onChange={(e) => setPassword(e.target.value)} /></Labelled>
+              {askPassword && <Labelled label="Your current password"><TextField.Root type="password" value={password} required autoComplete="current-password"
+                onChange={(e) => setPassword(e.target.value)} /></Labelled>}
               <Button type="submit" loading={busy}>Add a passkey</Button>
             </Flex>
           </form>
@@ -106,8 +113,9 @@ const passwordProblem = (pw: string, again: string) => (pw.length < MIN ? `The p
   : pw !== again ? 'The two passwords differ.' : '');
 
 // The page an email link opens (#verify=, #reset=, #invite= in the address): confirms the email, or asks for a new
-// password (reset) or the first one (invitation, which also signs in). onDone clears the link and reloads the session.
-export function EmailLink({ kind, token, onDone }: { kind: 'verify' | 'reset' | 'invite'; token: string; onDone: () => void }) {
+// password (reset) or the first one (invitation, which also signs in; or accept it with a single sign-on provider, sso).
+// onDone clears the link and reloads the session.
+export function EmailLink({ kind, token, onDone, sso = [] }: { kind: 'verify' | 'reset' | 'invite'; token: string; onDone: () => void; sso?: SsoProviderInfo[] }) {
   const [password, setPassword] = useState('');
   const [again, setAgain] = useState('');
   const [username, setUsername] = useState('');
@@ -152,6 +160,17 @@ export function EmailLink({ kind, token, onDone }: { kind: 'verify' | 'reset' | 
                   <TextField.Root type="password" value={again} onChange={(e) => setAgain(e.target.value)} required autoComplete="new-password" />
                 </Labelled>
                 <Button type="submit" loading={busy}>{kind === 'invite' ? 'Save and sign in' : 'Save new password'}</Button>
+                {kind === 'invite' && sso.length > 0 && (
+                  <>
+                    <Text size="2" color="gray">Or skip the password and sign in with your work account:</Text>
+                    {sso.map((p) => (
+                      <Button key={p.id} type="button" variant="soft" disabled={busy}
+                        onClick={() => startSso('/api/sso/start', { provider: p.id, invite: token }).catch((err) => setState({ error: errorText(err) }))}>
+                        Accept with {p.name}
+                      </Button>
+                    ))}
+                  </>
+                )}
               </>
             )}
             {busy && kind !== 'reset' && !username && <Text color="gray">Checking the link…</Text>}
@@ -297,6 +316,64 @@ export function ForcedPasswordChange({ user, onDone }: { user: string; onDone: (
 // The signed-in user's own settings: dark mode, email and password. onSaved reloads the session (dark mode).
 type SignedIn = Extract<SessionReply, { loggedIn: true }>;
 
+// The account's single sign-on: linked provider accounts (unlink) and Link buttons (the current password first, when the
+// account has one; the provider then sends the browser back here).
+function SingleSignOn({ session }: { session: SignedIn }) {
+  const [list, setList] = useState<SsoIdentityInfo[]>([]);
+  const [password, setPassword] = useState('');
+  const [info, setInfo] = useState('');
+  const [dialog, confirm] = useConfirm();
+  useEffect(() => { api<{ identities: SsoIdentityInfo[] }>('GET', '/api/me/sso').then((r) => setList(r.identities), (e) => setInfo(errorText(e))); }, []);
+  if (!session.sso.length && !list.length) return null;
+  const linkTo = (provider: string) => {
+    setInfo('Opening the sign-in page…');
+    startSso('/api/me/sso/start', { provider, password }).catch((e) => setInfo(errorText(e)));
+  };
+  const unlink = async (i: SsoIdentityInfo) => {
+    if (!await confirm({ title: `Unlink ${i.providerName}${i.email ? ` (${i.email})` : ''}?`, action: 'Unlink', color: 'red',
+      body: 'It will no longer sign you in to this account.' })) return;
+    try {
+      setList((await api<{ identities: SsoIdentityInfo[] }>('DELETE', `/api/me/sso/${encodeURIComponent(i.provider)}/${encodeURIComponent(i.subject)}`)).identities);
+      setInfo(`Unlinked ${i.providerName}.`);
+    } catch (e) { setInfo(errorText(e)); }
+  };
+  return (
+    <Card>
+      {dialog}
+      <Flex direction="column" gap="3">
+        <Heading size="3">Single sign-on</Heading>
+        <Text size="2" color="gray">Sign in with your work account instead of a password. Link it here once; then use its button on the sign-in page.</Text>
+        {list.length > 0 && (
+          <Table.Root size="1">
+            <Table.Header>
+              <Table.Row>{['Account', 'Email', 'Linked', 'Last used', ''].map((h, i) => <Table.ColumnHeaderCell key={i}>{h}</Table.ColumnHeaderCell>)}</Table.Row>
+            </Table.Header>
+            <Table.Body>
+              {list.map((i) => (
+                <Table.Row key={`${i.provider}/${i.subject}`} align="center">
+                  <Table.Cell>{i.providerName}</Table.Cell>
+                  <Table.Cell>{i.email || '—'}</Table.Cell>
+                  <Table.Cell>{fmtTime(i.linkedAt)}</Table.Cell>
+                  <Table.Cell>{i.lastUsedAt ? fmtTime(i.lastUsedAt) : 'never'}</Table.Cell>
+                  <Table.Cell><Button size="1" variant="soft" color="red" onClick={() => unlink(i)}>Unlink</Button></Table.Cell>
+                </Table.Row>
+              ))}
+            </Table.Body>
+          </Table.Root>
+        )}
+        {session.sso.length > 0 && (
+          <Flex gap="3" align="end" wrap="wrap">
+            {session.hasPassword && <Labelled label="Your current password"><TextField.Root type="password" value={password} autoComplete="current-password"
+              onChange={(e) => setPassword(e.target.value)} /></Labelled>}
+            {session.sso.map((p) => <Button key={p.id} variant="soft" onClick={() => linkTo(p.id)}>Link {p.name}</Button>)}
+          </Flex>
+        )}
+        {info && <Text size="2" color="gray">{info}</Text>}
+      </Flex>
+    </Card>
+  );
+}
+
 export function UserSettings({ session, onSaved }: { session: SignedIn; onSaved: () => void }) {
   const [email, setEmail] = useState(session.pendingEmail || session.email);
   const [phone, setPhone] = useState(fmtIntlPhone(session.phone));
@@ -376,12 +453,24 @@ export function UserSettings({ session, onSaved }: { session: SignedIn; onSaved:
           </Flex></Text>
         </Flex>
       </Card>
-      <Passkeys />
+      <SingleSignOn session={session} />
+      <Passkeys askPassword={session.hasPassword} />
       <Card>
         <Flex direction="column" gap="3">
           <Heading size="3">Password</Heading>
-          <Text size="2" color="gray">Only you can change your password. Changing it signs you out on every other browser.</Text>
-          <PasswordForm submitLabel="Change password" onChanged={() => {}} />
+          {!session.passwordAllowed ? (
+            <Text size="2" color="gray">password sign-in is turned off for your account: you sign in with single sign-on (or a passkey).</Text>
+          ) : !session.hasPassword ? (
+            <Text size="2" color="gray">
+              Your account has no password: you sign in with single sign-on (or a passkey). To set one, use "Forgot your password?" on the
+              sign-in page; it needs a confirmed email.
+            </Text>
+          ) : (
+            <>
+              <Text size="2" color="gray">Only you can change your password. Changing it signs you out on every other browser.</Text>
+              <PasswordForm submitLabel="Change password" onChanged={() => {}} />
+            </>
+          )}
         </Flex>
       </Card>
     </Flex>

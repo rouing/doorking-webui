@@ -234,6 +234,39 @@ function relyingParty(req: IncomingMessage): dk.RelyingParty | null {
   if (host === `localhost:${PORT}`) return { rpID: 'localhost', origin: `http://localhost:${PORT}` };
   return null;
 }
+// Single sign-on providers (config.json sso.providers; src/sso.ts).
+const SSO = CONFIG.sso.providers;
+const SSO_LIST = SSO.map((p) => ({ id: p.id, name: p.name }));
+const providerOf = (id: unknown) => SSO.find((p) => p.id === id);
+// Where a provider sends the browser back: like passkeys, the public name over HTTPS, or localhost on the server.
+const ssoRedirect = (req: IncomingMessage, p: dk.SsoProvider): string | null => {
+  const rp = relyingParty(req);
+  return rp ? `${rp.origin}/api/sso/${p.id}/callback` : null;
+};
+const NO_SSO_SITE = `Single sign-on works only at ${PUBLIC_HOST ? `https://${PUBLIC_HOST}` : 'this site\'s public name'} or http://localhost:${PORT}`;
+// The cookie tying a sign-in at a provider to this browser. The provider's redirect back is a cross-site navigation,
+// so it is SameSite=Lax (the session cookie stays Strict).
+const ssoCookie = (req: IncomingMessage, value: string, maxAge: number) =>
+  `dk_sso=${value}; HttpOnly; SameSite=Lax; Path=/api/sso; Max-Age=${maxAge}${isPublic(req) ? '; Secure' : ''}`;
+const cookieValue = (req: IncomingMessage, name: string): string => (new RegExp(`(?:^|;\\s*)${name}=([^;]*)`).exec(req.headers.cookie || '') || [])[1] || '';
+// Confirms a sensitive change with the current password, checked like a sign-in (5 wrong tries pause it); accounts with
+// no password (single sign-on) aren't asked. Returns the refusal, or null.
+async function confirmOwnPassword(username: string, given: unknown): Promise<Reply | null> {
+  if (!(await dk.getUser(STORE, username))!.hasPassword) return null;
+  if (recentFailures(username).length >= MAX_FAILED_SIGN_INS) {
+    return [429, { error: `Too many wrong passwords. Try again in ${SIGN_IN_WINDOW_MS / 60000} minutes.` }];
+  }
+  if (!await dk.checkOwnPassword(STORE, username, given)) {
+    failedSignIns.set(username, [...recentFailures(username), Date.now()]);
+    return [403, { error: 'Your password is wrong' }];
+  }
+  return null;
+}
+// Why the account can't use a password (linked to a provider with passwords: false), or null.
+async function passwordOff(username: string): Promise<string | null> {
+  const by = await dk.passwordBlockers(STORE, username, SSO);
+  return by.length ? `Your account signs in with ${by.join(' or ')}; password sign-in is turned off for it` : null;
+}
 const NO_PASSKEY_SITE = `Passkeys work only at ${PUBLIC_HOST ? `https://${PUBLIC_HOST}` : 'this site\'s public name'} or http://localhost:${PORT}`;
 const ADMIN_ONLY = 'Only a gate admin can do this. Your access to this gate is read only.';
 
@@ -1040,12 +1073,13 @@ const ROUTES = [
   // Session: sign in with a local account; the sid cookie authenticates every later call. setup: no account exists
   // yet (POST /api/setup creates the first one).
   route('GET', '/api/session', 'public', async ({ s }) => {
-    if (!s) return [200, { loggedIn: false, emailEnabled: Boolean(MAILER), ...(await dk.userCount(STORE) === 0 && { setup: true }) }];
+    if (!s) return [200, { loggedIn: false, emailEnabled: Boolean(MAILER), sso: SSO_LIST, ...(await dk.userCount(STORE) === 0 && { setup: true }) }];
     const u = (await dk.getUser(STORE, s.user))!;
     const open = s.gate ? await dk.accessOf(STORE, s.gate, s.user) : null;
     const rec = open && s.gate ? await dk.getGate(STORE, s.gate) : null;
     return [200, { loggedIn: true, user: u.username, email: u.email, pendingEmail: u.pendingEmail, phone: u.phone, dark: u.dark,
       notifyAccess: u.notifyAccess, notifyAlerts: u.notifyAlerts, mustChangePassword: u.mustChangePassword, emailEnabled: Boolean(MAILER),
+      sso: SSO_LIST, hasPassword: u.hasPassword, passwordAllowed: !await passwordOff(u.username),
       gate: rec && open ? await gateInfo({ ...rec, role: open }) : null, defaults, holidayList: dk.FIXED_HOLIDAYS }];
   }),
 
@@ -1058,7 +1092,7 @@ const ROUTES = [
       DEBUG.write('session', `${user}: sign-in refused after ${MAX_FAILED_SIGN_INS} failed tries`);
       return [429, { error: `Too many failed sign-ins. Try again in ${SIGN_IN_WINDOW_MS / 60000} minutes.` }];
     }
-    const u = await dk.authenticate(STORE, user, pw);
+    const u = await dk.authenticate(STORE, user, pw, passwordOff);
     if (!u) {
       failedSignIns.set(key, [...recentFailures(key), Date.now()]);
       DEBUG.write('session', `${user}: sign-in refused (wrong username or password)`);
@@ -1139,7 +1173,8 @@ const ROUTES = [
     if (recent(id).length >= RESET_PER_ID || recent('*').length >= RESET_TOTAL) { DEBUG.write('session', `Password reset for "${id}" not sent: too many requests`); return reply; }
     resetRequests.set(id, [...recent(id), now]);
     resetRequests.set('*', [...recent('*'), now]);
-    const u = await dk.userForReset(STORE, id);
+    const found = await dk.userForReset(STORE, id);
+    const u = found && !await passwordOff(found.username) ? found : null;
     if (u) {
       await mailTo(u.email, dk.messages.reset(APP, u.username, await dk.createToken(STORE, 'reset', u.username)), 'reset');
       DEBUG.write('session', `Password reset link sent to ${u.username}`);
@@ -1150,6 +1185,8 @@ const ROUTES = [
     dk.checkPassword(body.password);
     const t = await dk.useToken(STORE, 'reset', body.token);
     if (!t) return [400, { error: 'This reset link is invalid, used or expired. Ask for a new one.' }];
+    const off = await passwordOff(t.username);
+    if (off) return [403, { error: off }];
     await dk.setPassword(STORE, t.username, body.password);
     failedSignIns.delete(t.username);
     await securityAlert(t.username, 'Your password was reset');
@@ -1173,6 +1210,8 @@ const ROUTES = [
   }),
   // Changes the user's own password ({ current, password }); their other sessions end.
   route('PUT', '/api/me/password', 'user', async ({ s, body }) => {
+    const off = await passwordOff(s.user);
+    if (off) return [403, { error: off }];
     await dk.changeOwnPassword(STORE, s.user, body.current, body.password, s.tokenHash);
     await securityAlert(s.user, 'Your password was changed');
     DEBUG.write('session', `${s.user} changed their password`);
@@ -1180,18 +1219,14 @@ const ROUTES = [
   }),
 
   // Passkeys of the signed-in user (another way to sign in). Adding one: POST options { password } (the current
-  // password, checked like a sign-in: 5 wrong tries pause it), then POST { name, response } with the browser's answer.
+  // password, checked like a sign-in: 5 wrong tries pause it; not asked when the account has none, as when it signs in
+  // with single sign-on), then POST { name, response } with the browser's answer.
   route('GET', '/api/me/passkeys', 'user', async ({ s }) => [200, { passkeys: await dk.listPasskeys(STORE, s.user) }]),
   route('POST', '/api/me/passkeys/options', 'user', async ({ s, req, body }) => {
     const rp = relyingParty(req);
     if (!rp) return [400, { error: NO_PASSKEY_SITE }];
-    if (recentFailures(s.user).length >= MAX_FAILED_SIGN_INS) {
-      return [429, { error: `Too many wrong passwords. Try again in ${SIGN_IN_WINDOW_MS / 60000} minutes.` }];
-    }
-    if (!await dk.checkOwnPassword(STORE, s.user, body.password)) {
-      failedSignIns.set(s.user, [...recentFailures(s.user), Date.now()]);
-      return [403, { error: 'Your password is wrong' }];
-    }
+    const refused = await confirmOwnPassword(s.user, body.password);
+    if (refused) return refused;
     return [200, await dk.registrationOptions(STORE, s.user, rp)];
   }),
   route('POST', '/api/me/passkeys', 'user', async ({ s, req, body }) => {
@@ -1232,6 +1267,62 @@ const ROUTES = [
     DEBUG.write('session', `${username} signed in with a passkey`);
     res.setHeader('Set-Cookie', `sid=${tok}${cookieAttrs(req)}`);
     return [200, { ok: true }];
+  }),
+
+  // Single sign-on (src/sso.ts). Start { provider, invite? } -> { url }: the provider's address to open; the response
+  // sets the cookie tying the attempt to this browser. With an invitation link's token, the invitation is accepted
+  // with the provider. Linking to the signed-in account: { provider, password } (the current password; not asked when the
+  // account has none). The provider sends the browser back to the callback, which signs in (or links) and goes to the
+  // page: / signed in, /#sso=linked, or /#sso-error=<message>.
+  route('POST', '/api/sso/start', 'public', async ({ req, res, body }) => {
+    const p = providerOf(body.provider);
+    if (!p) return [404, { error: 'Unknown sign-in provider' }];
+    const redirectUri = ssoRedirect(req, p);
+    if (!redirectUri) return [400, { error: NO_SSO_SITE }];
+    const invite = body.invite ? String(body.invite) : undefined;
+    const { url, binding } = await dk.startSso(p, { mode: invite ? 'invite' : 'signin', redirectUri, inviteToken: invite });
+    res.setHeader('Set-Cookie', ssoCookie(req, binding, 600));
+    return [200, { url }];
+  }),
+  route('POST', '/api/me/sso/start', 'user', async ({ s, req, res, body }) => {
+    const p = providerOf(body.provider);
+    if (!p) return [404, { error: 'Unknown sign-in provider' }];
+    const redirectUri = ssoRedirect(req, p);
+    if (!redirectUri) return [400, { error: NO_SSO_SITE }];
+    const refused = await confirmOwnPassword(s.user, body.password);
+    if (refused) return refused;
+    const { url, binding } = await dk.startSso(p, { mode: 'link', redirectUri, username: s.user });
+    res.setHeader('Set-Cookie', ssoCookie(req, binding, 600));
+    return [200, { url }];
+  }),
+  route('GET', '/api/sso/:provider/callback', 'public', async ({ req, res, params }) => {
+    const cookies = [ssoCookie(req, '', 0)];
+    const go = (location: string) => { res.writeHead(302, { Location: location, 'Set-Cookie': cookies, 'Cache-Control': 'no-store' }); res.end(); };
+    const p = providerOf(params.provider);
+    try {
+      if (!p) throw Object.assign(new Error('Unknown sign-in provider'), { status: 404 });
+      const r = await dk.finishSso(p, new URL(req.url!, 'http://local').searchParams, cookieValue(req, 'dk_sso'));
+      const done = await dk.completeSso(STORE, p, r);
+      DEBUG.write('session', `${done.username}: ${p.name} single sign-on (${done.outcome})`);
+      if (done.outcome === 'linked') await securityAlert(done.username, `Sign-in with ${p.name} was linked to your account`);
+      if (r.mode === 'link') return go('/#sso=linked');
+      cookies.push(`sid=${await dk.createSession(STORE, done.username)}${cookieAttrs(req)}`);
+      return go('/');
+    } catch (e) {
+      const err = e as Error & { status?: number };
+      DEBUG.write('session', `Single sign-on${p ? ` with ${p.name}` : ''} refused: ${err.message}`);
+      return go(`/#sso-error=${encodeURIComponent(err.status ? err.message : `The ${p ? p.name : ''} sign-in couldn't be checked. Try again.`)}`);
+    }
+  }),
+  // The signed-in account's linked sign-ins: { identities: [{ provider, providerName, subject, email, linkedAt,
+  // lastUsedAt }] }; DELETE unlinks one (refused when it is the only way left to sign in).
+  route('GET', '/api/me/sso', 'user', async ({ s }) => [200, { identities: await dk.listIdentities(STORE, s.user, SSO) }]),
+  route('DELETE', '/api/me/sso/:provider/:subject', 'user', async ({ s, params }) => {
+    await dk.unlinkIdentity(STORE, s.user, params.provider, params.subject, SSO);
+    const name = providerOf(params.provider)?.name || params.provider;
+    await securityAlert(s.user, `Sign-in with ${name} was unlinked from your account`);
+    DEBUG.write('session', `${s.user} unlinked a ${name} sign-in`);
+    return [200, { identities: await dk.listIdentities(STORE, s.user, SSO) }];
   }),
 
   // The gate the web UI has open (restored on page reload). API clients can ignore it.

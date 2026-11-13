@@ -13,23 +13,27 @@ const scrypt = promisify(crypto.scrypt) as (pw: string, salt: Buffer, len: numbe
 
 // email: the verified address ('' none); pendingEmail: an address waiting for its confirmation link. phone: E.164
 // ('' none; not verified). invited: the
-// account was created with an email invitation that hasn't been accepted yet (it has no password).
+// account was created with an email invitation that hasn't been accepted yet (it has no password). hasPassword: it has a
+// password (accounts created or accepted through single sign-on have none until they set one with a reset link).
 export interface User {
   username: string; email: string; pendingEmail: string; phone: string; dark: boolean; mustChangePassword: boolean; notifyAccess: boolean;
-  notifyAlerts: boolean; invited: boolean; createdAt: string; createdBy: string; lastSignIn: string | null; signIns: number;
+  notifyAlerts: boolean; invited: boolean; hasPassword: boolean; createdAt: string; createdBy: string; lastSignIn: string | null; signIns: number;
 }
 interface UserRow {
   username: string; password_hash: string; email: string | null; pending_email: string | null; phone: string | null; dark: boolean; must_change: boolean;
   notify_access: boolean; notify_alerts: boolean; created_at: string; created_by: string; last_sign_in: string | null; sign_ins: number;
 }
 // The password hash of an invited account that hasn't chosen a password yet: nothing can match it.
+// The password hash of an account that signs in with single sign-on and has no password: nothing can match it either.
+const SSO_ONLY = '!sso';
+const hasPasswordHash = (h: string): boolean => h !== NO_PASSWORD && h !== SSO_ONLY;
 const NO_PASSWORD = '!';
 
 const bad = (msg: string, status = 400) => Object.assign(new Error(msg), { status });
 export const userKey = (u: unknown): string => String(u || '').trim().toLowerCase();
 const fromRow = (r: UserRow): User => ({
   username: r.username, email: r.email || '', pendingEmail: r.pending_email || '', phone: r.phone || '', dark: r.dark, mustChangePassword: r.must_change,
-  notifyAccess: r.notify_access, notifyAlerts: r.notify_alerts, invited: r.password_hash === NO_PASSWORD, createdAt: r.created_at, createdBy: r.created_by, lastSignIn: r.last_sign_in, signIns: r.sign_ins,
+  notifyAccess: r.notify_access, notifyAlerts: r.notify_alerts, invited: r.password_hash === NO_PASSWORD, hasPassword: hasPasswordHash(r.password_hash), createdAt: r.created_at, createdBy: r.created_by, lastSignIn: r.last_sign_in, signIns: r.sign_ins,
 });
 
 // 3-32 letters, digits, '.', '_' or '-', starting with a letter or digit; returned lower case.
@@ -127,6 +131,35 @@ export async function acceptInvite(store: Store, username: string, password: unk
   return (await getUser(store, name))!;
 }
 
+// Accepts an invitation through single sign-on: the account gets no password (it signs in with SSO) and its email, which
+// the invitation went to, is confirmed. Returns the user; 409 when the invitation was already used.
+export async function acceptInviteWithSso(store: Store, username: string): Promise<User> {
+  const name = userKey(username);
+  const r = await one<UserRow>(store, 'SELECT * FROM users WHERE username = $1', [name]);
+  if (!r || r.password_hash !== NO_PASSWORD) throw bad('This invitation was already used. Sign in instead.', 409);
+  await run(store, 'UPDATE users SET password_hash = $2, must_change = false WHERE username = $1', [name, SSO_ONLY]);
+  if (r.pending_email) await confirmEmail(store, name, r.pending_email);
+  return (await getUser(store, name))!;
+}
+
+// Creates an account for someone signing in with single sign-on (no password; email confirmed by the provider). The
+// username comes from the email's part before @, made valid and unique (smith.j, smith.j-2, …). 409 when the email
+// belongs to another account.
+export async function createSsoUser(store: Store, { email, createdBy }: { email: unknown; createdBy: string }): Promise<User> {
+  const mail = checkEmail(email);
+  if (!mail) throw bad('An email address is needed');
+  if (await emailTaken(store, mail)) throw bad('That email address is already used by another account', 409);
+  let base = mail.split('@')[0].replace(/[^a-z0-9._-]+/g, '.').replace(/^[^a-z0-9]+/, '').slice(0, 28).replace(/[._-]+$/, '');
+  if (base.length < 3) base = `${base || 'user'}${'000'.slice(base.length)}`.slice(0, 28);
+  for (let i = 1; ; i++) {
+    const name = i === 1 ? base : `${base}-${i}`;
+    if (await getUser(store, name)) continue;
+    const added = await run(store, `INSERT INTO users (username, password_hash, email, dark, must_change, created_at, created_by, sign_ins)
+      VALUES ($1, $2, $3, false, false, $4, $5, 0) ON CONFLICT (username) DO NOTHING`, [name, SSO_ONLY, mail, new Date().toISOString(), userKey(createdBy)]);
+    if (added) return (await getUser(store, name))!;
+  }
+}
+
 // Makes `address` the user's confirmed email, if it is still their pending one and no other account has confirmed
 // it meanwhile. Returns the user, or throws (409 taken, 400 no longer pending).
 export async function confirmEmail(store: Store, username: string, address: string): Promise<User> {
@@ -163,12 +196,16 @@ export async function unconfirmOldEmails(store: Store): Promise<number | null> {
   return n;
 }
 
-// The user when the password is right (and records the sign-in), else null.
-export async function authenticate(store: Store, username: unknown, password: unknown): Promise<User | null> {
+// The user when the password is right (and records the sign-in), else null. refuse: asked once the password is right, before
+// the sign-in is recorded; a message it returns refuses the sign-in (403 with that message).
+export async function authenticate(store: Store, username: unknown, password: unknown,
+  refuse?: (username: string) => Promise<string | null>): Promise<User | null> {
   const r = await one<UserRow>(store, 'SELECT * FROM users WHERE username = $1', [userKey(username)]);
-  const usable = r && r.password_hash !== NO_PASSWORD;
+  const usable = r && hasPasswordHash(r.password_hash);
   const ok = await verifyPassword(String(password ?? ''), usable ? r.password_hash : await DUMMY_HASH) && usable;
   if (!r || !ok) return null;
+  const why = refuse ? await refuse(r.username) : null;
+  if (why) throw bad(why, 403);
   await recordSignIn(store, r.username);
   return getUser(store, r.username);
 }

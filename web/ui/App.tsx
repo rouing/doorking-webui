@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Callout, Flex, Spinner, Theme } from '@radix-ui/themes';
+import { Callout, Flex, IconButton, Spinner, Theme } from '@radix-ui/themes';
 import type { SessionReply } from '../../src/types.ts';
 import { api, errorText, lsGet, lsSet, onSignedOut } from './api.ts';
 import { EmailLink, FirstSetup, ForcedPasswordChange } from './Account.tsx';
@@ -19,8 +19,19 @@ function linkInAddress(): { kind: 'verify' | 'reset' | 'invite'; token: string }
   return m ? { kind: m[1] as 'verify' | 'reset' | 'invite', token: m[2] } : null;
 }
 
+// The result of a single sign-on redirect in the address (#sso=linked, #sso-error=<message>), read once and removed.
+function ssoInAddress(): { ok: boolean; text: string } | null {
+  const m = /^#sso(-error)?=(.*)$/.exec(window.location.hash);
+  if (!m) return null;
+  window.history.replaceState(null, '', window.location.pathname);
+  let text = m[2];
+  try { text = decodeURIComponent(m[2]); } catch { /* shown as it is */ }
+  return m[1] ? { ok: false, text } : { ok: true, text: 'The sign-in was linked to your account.' };
+}
+
 export function App() {
   const [link, setLink] = useState(linkInAddress);
+  const [ssoNotice, setSsoNotice] = useState(ssoInAddress);
   const [session, setSession] = useState<SessionReply | null>(null);
   const [error, setError] = useState('');
 
@@ -44,13 +55,13 @@ export function App() {
 
   let page;
   if (link) {
-    page = <EmailLink kind={link.kind} token={link.token} onDone={linkDone} />;
+    page = <EmailLink kind={link.kind} sso={session ? session.sso : []} token={link.token} onDone={linkDone} />;
   } else if (error && !session) {
     page = <Callout.Root color="red" m="6"><Callout.Text>Server not reachable: {error}</Callout.Text></Callout.Root>;
   } else if (!session) {
     page = <Flex justify="center" p="9"><Spinner size="3" /></Flex>;
   } else if (!session.loggedIn) {
-    page = session.setup ? <FirstSetup onDone={reload} /> : <Login onSignedIn={reload} emailEnabled={session.emailEnabled} />;
+    page = session.setup ? <FirstSetup onDone={reload} /> : <Login onSignedIn={reload} emailEnabled={session.emailEnabled} sso={session.sso} />;
   } else if (session.mustChangePassword) {
     page = <ForcedPasswordChange user={session.user} onDone={reload} />;
   } else if (!session.gate) {
@@ -58,5 +69,18 @@ export function App() {
   } else {
     page = <GateApp key={session.gate.phoneNumber} session={session} gate={session.gate} onChange={reload} />;
   }
-  return <Theme appearance={dark ? 'dark' : 'light'} accentColor="blue" radius="medium">{page}<UpdateNotice /></Theme>;
+  return (
+    <Theme appearance={dark ? 'dark' : 'light'} accentColor="blue" radius="medium">
+      {ssoNotice && (
+        <Callout.Root color={ssoNotice.ok ? 'green' : 'red'} role="alert" m="3">
+          <Flex align="center" gap="3">
+            <Callout.Text>{ssoNotice.text}</Callout.Text>
+            <IconButton size="1" variant="ghost" color="gray" title="Dismiss" onClick={() => setSsoNotice(null)}>✕</IconButton>
+          </Flex>
+        </Callout.Root>
+      )}
+      {page}
+      <UpdateNotice />
+    </Theme>
+  );
 }

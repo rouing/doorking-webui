@@ -45,7 +45,7 @@ defaults), public HTTPS access and updating are in [`INSTALL.md`](docs/INSTALL.m
 
 ## Signing in and gate access
 ```
-Sign in (local account) ──> Your gates (admin / read only) ──> Open a gate ──> every DKS call uses the gate's DKS login
+Sign in (local account, passkey or SSO) ──> Your gates (admin / read only) ──> Open a gate ──> every DKS call uses the gate's DKS login
    users + sessions tables      gate_access                                   managed_gates (encrypted)
 ```
 1. **Accounts** (`src/users.ts`). People sign in with a local username and password; usernames and emails are
@@ -58,7 +58,20 @@ Sign in (local account) ──> Your gates (admin / read only) ──> Open a ga
    required. Each is tied to the site name it was made on: `server.publicHost` (over HTTPS) or `localhost` on the
    server; 127.0.0.1 can't use passkeys. Challenges are kept in memory for 5 minutes and used once; the signature
    counter must rise. Only public keys are stored.
-3. **Email** (`src/email.ts`, nodemailer over SMTP; `config.json` → `email`; off without a host). Outbox table
+3. **Single sign-on** (`src/sso.ts`, table `user_identities`, `openid-client`; `config.json` → `sso.providers`, see
+   INSTALL.md section 6b): "Sign in with Microsoft/Google/…" for any OpenID Connect provider. The browser goes to the
+   provider (authorization code flow with state, nonce and PKCE; the attempt lives 10 minutes in memory and is tied to
+   the browser by the `dk_sso` cookie, SameSite=Lax) and comes back to `/api/sso/<id>/callback`, where `openid-client`
+   checks the ID token. The provider identity (its permanent subject) is linked to a local account; roles stay in the
+   app. Matching: an existing link; else, only for providers with `allowedDomains`, a trusted email (not marked
+   unverified, from an allowed domain; Google also needs the Workspace `hd` claim) accepts the invitation waiting on it
+   or links the account with that confirmed email, else creates an account when `autoCreate` is on; anyone else is
+   told to ask for an invitation. Invitations can be accepted with a provider; User Settings links and unlinks (the
+   current P_W first; an account always keeps one way to sign in). Accounts created or accepted through SSO have no
+   P_W (hash `!sso`); `passwords: false` turns P_W sign-in and resets off for accounts linked to that provider.
+   Entra must use a tenant issuer (`common`/`organizations`/`consumers` are refused). Linking or unlinking sends a
+   security alert.
+4. **Email** (`src/email.ts`, nodemailer over SMTP; `config.json` → `email`; off without a host). Outbox table
    `emails` (bodies encrypted, removed once sent; retries 1/5/15/60/240 min) sent every 30 s. One-use links
    (`email_tokens`, SHA-256 only, in the URL fragment `#verify=`/`#reset=`/`#invite=` so they never reach the server's
    logs): confirm an address (24 h; only confirmed addresses count and must be unique), reset a password (1 h; the
@@ -66,24 +79,24 @@ Sign in (local account) ──> Your gates (admin / read only) ──> Open a ga
    (72 h; a gate admin can invite by email instead of setting a temporary password). Notifications: gate access
    granted/changed/removed (opt-out), security alerts (password changed or reset, passkey added/removed, email change to
    the old address; always), gate alerts to the gate's admins (Send to gate or scheduled transfer failed; opt-out).
-4. **Sessions.** A random token in the `sid` cookie (HttpOnly, SameSite=Strict, Secure over HTTPS); the database keeps
+5. **Sessions.** A random token in the `sid` cookie (HttpOnly, SameSite=Strict, Secure over HTTPS); the database keeps
    only its SHA-256 hash (table `sessions`), so sessions survive a restart. They end after **30 minutes idle**, on
    **Sign out**, or when the user changes their password (other sessions). The open gate is kept in the session.
-5. **First start.** While no account exists, the page offers to create the first one, which needs the one-time
+6. **First start.** While no account exists, the page offers to create the first one, which needs the one-time
    **setup code** the server prints in its console (journalctl) at start, or `node cli.ts create-admin <username>`.
    The first account becomes admin of every gate without an admin (gates moved over from DKS sign-in on 2026-11-13).
-6. **Gates** (`src/gate-list.ts`, table `managed_gates`). A gate is added once: phone, master code, its **DKS login**
+7. **Gates** (`src/gate-list.ts`, table `managed_gates`). A gate is added once: phone, master code, its **DKS login**
    and gate configuration. The server checks the DKS login (`CheckLogin`), then pulls residents with these values;
    only when that succeeds is the gate saved, with the adder as its admin (so nobody can claim a gate by typing its
    phone number). Adding a gate already managed here is refused: "ask one of its gate admins to add you". The DKS
    login and master code are encrypted and never sent back; every pull, send, relay call and scheduled transfer of
    the gate uses them. Admins change them under System Settings → Gate login (a new login is checked with DKS
    Cloud; a new master code by a residents pull, saved only when it succeeds).
-7. **Roles** (table `gate_access`). Per gate: **admin** (everything, including the gate's users and login) or
+8. **Roles** (table `gate_access`). Per gate: **admin** (everything, including the gate's users and login) or
    **read only** (view, pull, camera pictures and live view). Routes are scoped `gate` (any role) or `gate-admin`.
    Admins create accounts for their gate, share it with existing accounts, change roles and remove users; a gate
    always keeps at least one admin. **Leave** removes your own access.
-8. **API keys** (`src/api-keys.ts`, table `api_keys`). Scripts don't sign in: a gate admin creates a key under System
+9. **API keys** (`src/api-keys.ts`, table `api_keys`). Scripts don't sign in: a gate admin creates a key under System
    Settings → API keys (name, role, optional expiry of 30/90/365 days); it is shown once and stored as a SHA-256
    hash. A key belongs to its gate (it keeps working if its creator leaves) and is sent as
    `Authorization: Bearer <key>`. It reaches only that gate's routes, with its role; web-only routes (gate login,
@@ -414,7 +427,11 @@ against changes observed on the gate. The database tests use the `doorking_test`
   so anyone with the key and the database (or a dump of it) can decrypt them. They are never sent to the browser or
   logged. Pull/send logs mask credentials. The debug log (all gates) is open only to users who are admin of a gate.
 - Passkeys: WebAuthn with user verification required, origin and site name checked, one-use challenges, rising
-  signature counter; adding one needs the current password (5 wrong tries pause it, like sign-in).
+  signature counter; adding one needs the current password (5 wrong tries pause it, like sign-in), unless the account has none.
+- Single sign-on: authorization code flow with PKCE, state and nonce, one-use attempts tied to the browser (10 minutes);
+  the ID token's issuer, audience, expiry and nonce are checked by `openid-client`; identities are matched by the
+  provider's subject, by email only for allowed domains (Google: Workspace accounts only); multi-tenant Entra issuers
+  are refused; client secrets stay in `config.json` (mode 0600) and are masked by `--check-config`.
 - API keys: 256-bit random secrets, stored only as SHA-256 hashes, limited to one gate and its role, never accepted
   on web-only routes; requests with an `Authorization` header never use a cookie session, so a browser page on
   another site can't use them (no CORS).
@@ -461,6 +478,7 @@ against changes observed on the gate. The database tests use the `doorking_test`
     gate-list.ts         managed gates (DKS login, master code, encrypted), access roles, the move from DKS sign-in
     api-keys.ts          per-gate API keys (hashed), role and expiry
     passkeys.ts          passkey (WebAuthn) registration and sign-in
+    sso.ts               single sign-on (OpenID Connect): sign-in flow, linked identities, account matching
     email.ts             SMTP outbox, one-use email links, the email texts
     prefs.ts             gate-scoped preferences, Device Association
     notes.ts             resident/vendor notes (database only, not on the gate)

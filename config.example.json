@@ -1,20 +1,56 @@
 {
-  "server": { "port": 8080, "publicHost": "" },
-  "paths": { "media": "media", "logs": "logs", "keyFile": "doorking.key" },
-  "database": {
-    "host": "127.0.0.1", "port": 5432, "name": "doorking", "user": "doorking", "password": "",
-    "poolSize": 5, "testName": "doorking_test"
+  "server": {
+    "port": 8080,
+    "publicHost": ""
   },
-  "dks": { "url": "https://dksdb.dksoftware.com/DkWebService.asmx" },
-  "security": { "sessionIdleMinutes": 30, "maxFailedSignIns": 5, "signInWindowMinutes": 15 },
-  "schedules": { "checkSeconds": 30 },
-  "cameras": { "ffmpeg": "", "tidyMinutes": 60 },
+  "paths": {
+    "media": "media",
+    "logs": "logs",
+    "keyFile": "doorking.key"
+  },
+  "database": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "name": "doorking",
+    "user": "doorking",
+    "password": "",
+    "poolSize": 5,
+    "testName": "doorking_test"
+  },
+  "dks": {
+    "url": "https://dksdb.dksoftware.com/DkWebService.asmx"
+  },
+  "security": {
+    "sessionIdleMinutes": 30,
+    "maxFailedSignIns": 5,
+    "signInWindowMinutes": 15
+  },
+  "schedules": {
+    "checkSeconds": 30
+  },
+  "cameras": {
+    "ffmpeg": "",
+    "tidyMinutes": 60
+  },
   "email": {
-    "host": "", "port": 587, "security": "starttls", "user": "", "password": "",
-    "from": "DoorKing Gate Manager <gate@example.com>", "appUrl": ""
+    "host": "",
+    "port": 587,
+    "security": "starttls",
+    "user": "",
+    "password": "",
+    "from": "DoorKing Gate Manager <gate@example.com>",
+    "appUrl": ""
+  },
+  "sso": {
+    "providers": []
   },
   "gateDefaults": {
-    "siteName": "Site", "memorySize": "3000", "areaCodes": "255 Area Codes", "modelNumber": "1833/1835/1837/1838",
-    "antiPassBack": "N", "interface1816": "N", "dialDelay": "3"
+    "siteName": "Site",
+    "memorySize": "3000",
+    "areaCodes": "255 Area Codes",
+    "modelNumber": "1833/1835/1837/1838",
+    "antiPassBack": "N",
+    "interface1816": "N",
+    "dialDelay": "3"
   }
 }

@@ -36,6 +36,8 @@ command line):
   reset-password <username>         Set a temporary password (the user must choose a new one at sign-in)
   grant <username> <gate phone> <admin|readonly>   Give an account access to a gate (or change its role)
   test-email <address>              Send a test email now with config.json's email settings (shows the SMTP error, if any)
+  sso-check                         Contact each single sign-on provider in config.json (sso.providers) and show the
+                                    redirect address to register there
   emails                            The last 20 emails in the outbox (to, subject, status, error)
 
 Web UI and REST API: node web/server.ts [--config config.json] [--check-config] [--port 8080] [--public-host <name>]
@@ -177,6 +179,23 @@ const COMMANDS: Record<string, (positional: string[], args: string[]) => void | 
     await mailer.sendMail({ from: cfg.email.from, to, subject: 'DoorKing Gate Manager test email',
       text: `This is a test from DoorKing Gate Manager (${cfg.email.appUrl}). Email is working.` });
     console.error(`Sent to ${to} through ${cfg.email.host}:${cfg.email.port} (${cfg.email.security})`);
+  },
+
+  'sso-check': async () => {
+    const cfg = serverConfig();
+    if (!cfg.sso.providers.length) throw new Error('No single sign-on providers in config.json (sso.providers)');
+    const origin = cfg.server.publicHost ? `https://${cfg.server.publicHost}` : `http://localhost:${cfg.server.port}`;
+    let failed = 0;
+    for (const p of cfg.sso.providers) {
+      console.log(`${p.name} (${p.id})`);
+      console.log(`  redirect address to register: ${origin}/api/sso/${p.id}/callback`);
+      try {
+        const m = await dk.discoverProvider(p);
+        console.log(`  issuer ${m.issuer}\n  sign-in page ${m.authorization}\n  token endpoint ${m.token}`);
+      } catch (e) { failed++; console.log(`  NOT reachable: ${(e as Error).message}`); }
+      console.log(`  allowed domains: ${p.allowedDomains.join(', ') || 'none (invitations and linking only)'}; new accounts: ${p.autoCreate ? 'yes' : 'no'}; passwords: ${p.passwords ? 'allowed' : 'off'}`);
+    }
+    if (failed) process.exitCode = 1;
   },
 
   emails: () => withDatabase(async (store) => {

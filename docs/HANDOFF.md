@@ -790,6 +790,10 @@ byte, not only the one expected.
 ---
 
 ## 8. Known limitations / pending work
+- **Single sign-on (OpenID Connect, 2026-11-13):** built and tested (unit tests, a mock provider token exchange, and an
+  end-to-end run of a second server copy on port 8099 against the test database); no real provider configured yet.
+  Not done: mapping Entra groups / app roles or Google groups to gate roles, an SSO badge in the Gate users list,
+  signing out at the provider, SAML and LDAP / Active Directory (user's choice: OIDC only; no sign-in at the reverse proxy).
 - **Read-only settings from the decompile (`dialType`, `multipleSystems`):** confirm with one-change diffs
   (§7) before making them editable. `0x13`–`0x14`, `0x37`, `0x43` and `0xC5` are still unknown (§7.1).
 - **Gate values as the working copy (phases 1-3 of the 2026-11-12 plan): done** (§4.2). Not yet done: a real send

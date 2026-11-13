@@ -69,8 +69,8 @@ A user whose password was set by someone else (a new account, or the CLI's `rese
 | Method | Path | Level | Body | Result |
 |---|---|---|---|---|
 | GET | `/help` | public | | the user guide (`MANUAL.md`) as an HTML page (not under `/api`) |
-| GET | `/api/session` | public | | `{ loggedIn: false, setup?, emailEnabled }` (`setup`: no account exists yet), or `{ loggedIn: true, user, email, pendingEmail, phone, dark, notifyAccess, notifyAlerts, mustChangePassword, emailEnabled, gate, defaults, holidayList }`; `gate`: `{ phoneNumber, siteName, addedAt, role }` |
-| POST | `/api/session` | public | `{ user, password }` | local account; 200 `{ ok: true }` and the `sid` cookie; 401 wrong username or password; 429 too many failures |
+| GET | `/api/session` | public | | `{ loggedIn: false, setup?, emailEnabled, sso }` (`setup`: no account exists yet; `sso`: the single sign-on providers `[{ id, name }]`), or `{ loggedIn: true, user, email, pendingEmail, phone, dark, notifyAccess, notifyAlerts, mustChangePassword, emailEnabled, sso, hasPassword, passwordAllowed, gate, defaults, holidayList }` (`hasPassword`: false for an account that signs in with single sign-on only; `passwordAllowed`: false when linked to a provider with `passwords: false`); `gate`: `{ phoneNumber, siteName, addedAt, role }` |
+| POST | `/api/session` | public | `{ user, password }` | local account; 200 `{ ok: true }` and the `sid` cookie; 401 wrong username or password; 403 password sign-in is off for the account (it must use its single sign-on provider); 429 too many failures |
 | DELETE | `/api/session` | public | | sign out: `{ ok: true }` |
 | POST | `/api/setup` | public | `{ setupCode, username, password, email? }` | only while no account exists: creates the first account (admin of every gate without an admin) and signs it in: 201 `{ ok, gates }`; 403 wrong setup code (printed in the server's console at start); 409 once an account exists |
 | GET | `/api/me` | user | | `{ username, email, pendingEmail, phone, dark, notifyAccess, notifyAlerts }` (`phone`: E.164 such as `+12145550100`, or `""`) (`email`: confirmed; `pendingEmail`: waiting for its link) |
@@ -81,14 +81,19 @@ A user whose password was set by someone else (a new account, or the CLI's `rese
 | POST | `/api/password-reset` | public | `{ token, password }` | sets the new password, ends all the account's sessions, sends a security alert: `{ username }` |
 | POST | `/api/invite/check` | public | `{ token }` | `{ username }` of an invitation link (`#invite=`), without using it up |
 | POST | `/api/invite` | public | `{ token, password }` | accepts the invitation: sets the password, confirms the email, signs in (`sid` cookie) |
-| PUT | `/api/me/password` | user | `{ current, password }` | change your own password (12+ characters); ends your other sessions; 403 wrong current password |
+| PUT | `/api/me/password` | user | `{ current, password }` | change your own password (12+ characters); ends your other sessions; 403 wrong current password, or password sign-in is off for the account (linked to a provider with `passwords: false`) |
 | GET | `/api/me/passkeys` | user | | `{ passkeys: [{ id, name, site, synced, createdAt, lastUsedAt }] }` |
-| POST | `/api/me/passkeys/options` | user | `{ password }` (your current one) | WebAuthn creation options for `startRegistration()`; 403 wrong password (5 tries per 15 minutes, then 429); 400 when the page isn't on the public name or `localhost` |
+| POST | `/api/me/passkeys/options` | user | `{ password }` (your current one; not asked when the account has none) | WebAuthn creation options for `startRegistration()`; 403 wrong password (5 tries per 15 minutes, then 429); 400 when the page isn't on the public name or `localhost` |
 | POST | `/api/me/passkeys` | user | `{ name?, response }` (the browser's registration answer) | 201 `{ passkeys }`; 400 when the check fails; 409 already registered |
 | PUT | `/api/me/passkeys/{id}` | user | `{ name }` | rename: `{ passkeys }` |
 | DELETE | `/api/me/passkeys/{id}` | user | | remove: `{ passkeys }` |
 | POST | `/api/passkey/options` | public | | WebAuthn request options for `startAuthentication()` (no username: any passkey for this site) |
 | POST | `/api/passkey/session` | public | `{ response }` (the browser's answer) | signs in like `POST /api/session`: 200 and the `sid` cookie; 401 unknown passkey, bad signature, used or expired challenge, or a counter that went back |
+| POST | `/api/sso/start` | public | `{ provider, invite? }` (`invite`: an invitation link's token, to accept it with the provider) | single sign-on: `{ url }` to open (the provider's sign-in page) and the `dk_sso` cookie tying the attempt to this browser (10 minutes); 404 unknown provider; 400 when the page isn't on the public name or `localhost` |
+| POST | `/api/me/sso/start` | user | `{ provider, password? }` (your current password; not asked when the account has none) | like `/api/sso/start`, to link the provider account to yours; 403 wrong password (5 tries per 15 minutes, then 429) |
+| GET | `/api/sso/{provider}/callback` | public | (the provider's redirect) | finishes the sign-in and redirects: to `/` with the `sid` cookie, to `/#sso=linked` after linking, or to `/#sso-error=<message>` (no account for that work account, a domain that isn't allowed, an expired or reused attempt, …) |
+| GET | `/api/me/sso` | user | | `{ identities: [{ provider, providerName, subject, email, linkedAt, lastUsedAt }] }`: your linked single sign-on accounts |
+| DELETE | `/api/me/sso/{provider}/{subject}` | user | | unlinks one: `{ identities }`; 409 when it's your only way left to sign in (no other link, passkey or usable password) |
 | PUT | `/api/session/gate` | user | `{ phoneNumber }` | the gate the page shows (kept across reloads): `{ gate }` |
 | DELETE | `/api/session/gate` | user | | back to the gate list |
 | GET | `/api/gates` | user | | `{ gates: [{ phoneNumber, siteName, addedAt, role }] }`: the gates you have access to; never master codes or DKS logins |

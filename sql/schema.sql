@@ -75,6 +75,11 @@ CREATE TABLE IF NOT EXISTS passkeys (id TEXT PRIMARY KEY, username TEXT NOT NULL
   rp_id TEXT NOT NULL, public_key BYTEA NOT NULL, counter BIGINT NOT NULL, transports JSONB, name TEXT NOT NULL,
   device_type TEXT NOT NULL, backed_up BOOLEAN NOT NULL, created_at TIMESTAMPTZ NOT NULL, last_used_at TIMESTAMPTZ);
 CREATE INDEX IF NOT EXISTS passkeys_username ON passkeys (username);
+-- Single sign-on: a provider identity (config.json sso.providers id + the provider's permanent subject) linked to an account.
+CREATE TABLE IF NOT EXISTS user_identities (provider TEXT NOT NULL, subject TEXT NOT NULL,
+  username TEXT NOT NULL REFERENCES users ON DELETE CASCADE, email TEXT NOT NULL, linked_at TIMESTAMPTZ NOT NULL,
+  last_used_at TIMESTAMPTZ, PRIMARY KEY (provider, subject));
+CREATE INDEX IF NOT EXISTS user_identities_username ON user_identities (username);
 CREATE TABLE IF NOT EXISTS email_tokens (token_hash TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('verify', 'reset', 'invite')),
   username TEXT NOT NULL REFERENCES users ON DELETE CASCADE, data TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL);

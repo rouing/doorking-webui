@@ -75,14 +75,28 @@ removed 2026-11-13), `localAccountsMigrated` (time the move from DKS sign-in to 
 | `email` | TEXT, unique, null | lower case; optional |
 | `dark` | BOOLEAN | dark mode |
 | `must_change` | BOOLEAN | the password was set by someone else (a gate admin or the CLI): the user must choose their own |
-| `created_at`, `created_by` | TIMESTAMPTZ, TEXT | when and by whom (`setup`, `cli` or a username) |
-| `last_sign_in`, `sign_ins` | TIMESTAMPTZ null, INTEGER | last sign-in (password or passkey) and the count |
+| `created_at`, `created_by` | TIMESTAMPTZ, TEXT | when and by whom (`setup`, `cli`, a username, or `sso:<provider id>` for an account single sign-on created) |
+| `last_sign_in`, `sign_ins` | TIMESTAMPTZ null, INTEGER | last sign-in (password, passkey or single sign-on) and the count |
 | `webauthn_id` | TEXT, null | random WebAuthn user handle (base64url) given to passkeys, so they don't hold the username |
 | `phone` | TEXT, null | the user's phone number in E.164 (`+12145550100`); optional, not unique, not verified; shown to admins of their gates |
 | `pending_email` | TEXT, null | an address waiting for its confirmation link (not unique; `email` holds only confirmed addresses since 2026-11-13) |
 | `notify_access`, `notify_alerts` | BOOLEAN | the user's email notifications: gate access changes; gate alerts as an admin |
 
-`password_hash` is `!` for an invited account that hasn't accepted its invitation (nothing matches it).
+`password_hash` is `!` for an invited account that hasn't accepted its invitation, and `!sso` for an account created or
+accepted through single sign-on that has no password (it can set one with a reset link, if allowed). Nothing matches
+either.
+
+### `user_identities`: single sign-on accounts linked to users (`src/sso.ts`)
+
+| Column | Type | Meaning |
+|---|---|---|
+| `provider` | TEXT | the provider's `id` in `config.json` (`sso.providers`) |
+| `subject` | TEXT | the provider's permanent ID for the person (the ID token's `sub`) |
+| `username` | TEXT | the account (deleted with it) |
+| `email` | TEXT | the address the provider gave at the last sign-in (for display; matching uses the link) |
+| `linked_at`, `last_used_at` | TIMESTAMPTZ (null) | when it was linked and last signed in |
+
+Primary key (`provider`, `subject`): an identity belongs to one account; an account may have several.
 
 ### `sessions`: sign-in sessions (`src/users.ts`)
 

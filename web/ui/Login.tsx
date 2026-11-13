@@ -1,11 +1,13 @@
 import { useState, type FormEvent } from 'react';
 import { Button, Callout, Card, Checkbox, Container, Flex, Heading, Link, Text, TextField } from '@radix-ui/themes';
 import { browserSupportsWebAuthn, startAuthentication } from '@simplewebauthn/browser';
+import type { SsoProviderInfo } from '../../src/types.ts';
 import { api, errorText, lsGet, lsSet } from './api.ts';
-import { ForgotPassword, passkeyError } from './Account.tsx';
+import { ForgotPassword, passkeyError, startSso } from './Account.tsx';
 
-// Sign in with a local account (gate admins create them). "Remember user" keeps only the username in this browser.
-export function Login({ onSignedIn, emailEnabled }: { onSignedIn: () => void; emailEnabled: boolean }) {
+// Sign in with a local account (gate admins create them), a passkey, or a single sign-on provider. "Remember user"
+// keeps only the username in this browser.
+export function Login({ onSignedIn, emailEnabled, sso }: { onSignedIn: () => void; emailEnabled: boolean; sso: SsoProviderInfo[] }) {
   const [forgot, setForgot] = useState(false);
   const [remember, setRemember] = useState(() => lsGet('dk-remember-user', false));
   const [user, setUser] = useState(() => (remember ? lsGet('dk-user', '') : ''));
@@ -67,6 +69,12 @@ export function Login({ onSignedIn, emailEnabled }: { onSignedIn: () => void; em
             </label>
             <Button type="submit" loading={busy}>Sign in</Button>
             {browserSupportsWebAuthn() && <Button type="button" variant="soft" disabled={busy} onClick={withPasskey}>Sign in with a passkey</Button>}
+            {sso.map((p) => (
+              <Button key={p.id} type="button" variant="soft" disabled={busy}
+                onClick={() => { setError(''); startSso('/api/sso/start', { provider: p.id }).catch((e) => setError(errorText(e))); }}>
+                Sign in with {p.name}
+              </Button>
+            ))}
             {emailEnabled && <Link href="#" size="2" onClick={(e) => { e.preventDefault(); setForgot(true); }}>Forgot your password?</Link>}
             {error && <Callout.Root color="red"><Callout.Text>{error}</Callout.Text></Callout.Root>}
           </Flex>

@@ -138,6 +138,7 @@ Relative paths are relative to the folder `config.json` is in. Unknown names and
 | `email.user`, `.password` | `""` | SMTP login (for Amazon SES: the SMTP credentials, not your AWS keys) |
 | `email.from` | | sender, e.g. `DoorKing Gate Manager <gate@yourdomain.com>`; required when `email.host` is set |
 | `email.appUrl` | `https://<server.publicHost>` | the address links in emails open |
+| `sso.providers` | `[]` | single sign-on providers (Entra ID, Google Workspace, …): `id`, `name`, `issuer`, `clientId`, `clientSecret`, `allowedDomains`, `autoCreate`, `passwords`; see section 6b |
 | `gateDefaults.*` | `GATE_DEFAULTS` in `src/gate-pull.ts` | gate-match defaults (`siteName`, `memorySize`, `areaCodes`, `modelNumber`, `antiPassBack`, `interface1816`, `dialDelay`), used when a gate's Gate configuration leaves a value empty |
 
 **Overrides**, highest first: command-line flags (`--port`, `--public-host`, `--media`, `--logs`, `--site-name`,
@@ -269,6 +270,66 @@ With **Caddy** (Ubuntu: `sudo apt install caddy`), which gets and renews Let's E
    retries by itself (`journalctl -u caddy`); HTTP already redirects to HTTPS.
 
 Sessions stay in memory, so restarting either service signs everyone out.
+
+## 6b. Single sign-on (Entra ID, Google Workspace, other OpenID Connect providers)
+
+Optional: people can then sign in with their work account ("Sign in with Microsoft"). The app still decides what each
+account may do (admin or read only per gate); the provider only proves who someone is. It needs the public HTTPS name
+(section 6a): the provider sends the browser back to `https://<server.publicHost>/api/sso/<id>/callback`.
+
+Add each provider to `config.json` and restart:
+```json
+"sso": {
+  "providers": [
+    {
+      "id": "entra",
+      "name": "Microsoft",
+      "issuer": "https://login.microsoftonline.com/<tenant ID>/v2.0",
+      "clientId": "<application (client) ID>",
+      "clientSecret": "<client secret value>",
+      "allowedDomains": ["example.com"],
+      "autoCreate": false,
+      "passwords": true
+    }
+  ]
+}
+```
+- `id`: short name in the redirect address (lower-case letters, digits, dashes); `name`: on the sign-in button.
+- `issuer`: the provider's issuer, exactly as its discovery document gives it (the app reads
+  `<issuer>/.well-known/openid-configuration`). Must be `https://`.
+- `allowedDomains`: email domains the provider vouches for. Only with these set can someone be matched to an account
+  by email: an invitation waiting on their address is accepted, or the account with that confirmed email is linked.
+  Without them, a provider account works only once linked (an invitation accepted with the provider, or **Link** in
+  User Settings).
+- `autoCreate`: `true` gives people from `allowedDomains` without an account a new one (named after their address, no
+  password and **no gate access** until a gate admin grants it). Off by default: then they must be invited.
+- `passwords`: `false` stops accounts linked to this provider from signing in with a password (and from password
+  resets). Keep at least one admin account that can sign in without the provider, in case it is down.
+
+Check with `node cli.ts sso-check`: it contacts each provider and prints the redirect address to register there.
+
+**Microsoft Entra ID** (Entra admin center → App registrations → New registration):
+1. Name it (e.g. "Gate Manager"), **Accounts in this organizational directory only (single tenant)**, redirect URI type
+   **Web**: `https://<server.publicHost>/api/sso/entra/callback`.
+2. From **Overview** copy the **Application (client) ID** (`clientId`) and the **Directory (tenant) ID** (in `issuer`).
+   The app refuses the `common`, `organizations` and `consumers` issuers, which would let any Microsoft account in.
+3. **Certificates & secrets** → **New client secret**: copy its **Value** (`clientSecret`). Secrets expire (at most 2
+   years): put a new one in `config.json` before then.
+4. Optional: **Token configuration** → **Add optional claim** → ID token → `email`. Without it the sign-in name
+   (`preferred_username`) is used as the address.
+
+**Google Workspace** (Google Cloud console, in a project of your Workspace organization → Google Auth Platform):
+1. **Audience**: user type **Internal** (only your Workspace's users).
+2. **Clients** → **Create client** → **Web application**, authorized redirect URI
+   `https://<server.publicHost>/api/sso/google/callback`; copy the client ID and secret.
+3. Use `"issuer": "https://accounts.google.com"`, `"id": "google"`, and your Workspace domain(s) in `allowedDomains`:
+   then only Workspace accounts of those domains are matched (Google's `hd` claim), not personal Google accounts made
+   with a work address.
+
+**Other providers** (Okta, Auth0, Keycloak, Authentik, JumpCloud, …): register a web application with the redirect
+address above (authorization code flow; the app uses PKCE and sends the secret in the request body,
+`client_secret_post`), and use its issuer: for example `https://<org>.okta.com`, `https://<tenant>.auth0.com/` (with
+the slash), `https://<host>/realms/<realm>` (Keycloak), `https://<host>/application/o/<slug>/` (Authentik).
 
 ## 7. Update
 

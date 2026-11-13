@@ -1634,3 +1634,186 @@ test('debug log: written only while turned on, one line per entry, moved aside w
   assert.strictEqual(log.info().enabled, false);
   assert.doesNotMatch(log.read(), /off/);
 }));
+
+// --- Single sign-on (OpenID Connect) ---
+
+// A minimal OpenID provider on localhost: discovery, signing key, and a token endpoint that checks PKCE and the client
+// secret and signs the ID token (RS256) with the flow's nonce. authorize(url, claims) answers an authorization request
+// like a signed-in user would; the result is the callback's query.
+async function mockProvider(issuerPath = '/oidc') {
+  const http = await import('node:http');
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const jwk = { ...publicKey.export({ format: 'jwk' }), kid: 'k1', alg: 'RS256', use: 'sig' };
+  const codes = new Map();
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const sign = (claims) => {
+    const head = `${b64({ alg: 'RS256', kid: 'k1', typ: 'JWT' })}.${b64(claims)}`;
+    return `${head}.${crypto.sign('sha256', Buffer.from(head), privateKey).toString('base64url')}`;
+  };
+  let issuer = '';
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://x');
+    const json = (o, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
+    if (url.pathname.endsWith('/.well-known/openid-configuration')) {
+      return json({ issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/jwks`,
+        response_types_supported: ['code'], subject_types_supported: ['public'], id_token_signing_alg_values_supported: ['RS256'],
+        token_endpoint_auth_methods_supported: ['client_secret_post'], code_challenge_methods_supported: ['S256'] });
+    }
+    if (url.pathname.endsWith('/jwks')) return json({ keys: [jwk] });
+    if (url.pathname.endsWith('/token')) {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        const f = new URLSearchParams(body);
+        const c = codes.get(f.get('code'));
+        codes.delete(f.get('code'));
+        if (!c || f.get('client_secret') !== 'shh' || f.get('redirect_uri') !== c.redirectUri
+          || crypto.createHash('sha256').update(f.get('code_verifier') || '').digest('base64url') !== c.challenge) return json({ error: 'invalid_grant' }, 400);
+        const now = Math.floor(Date.now() / 1000);
+        json({ access_token: 'at', token_type: 'Bearer', expires_in: 300,
+          id_token: sign({ iss: issuer, aud: 'app-id', iat: now, exp: now + 300, nonce: c.nonce, ...c.claims }) });
+      });
+      return undefined;
+    }
+    return json({ error: 'not found' }, 404);
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  issuer = `http://127.0.0.1:${server.address().port}${issuerPath}`;
+  const authorize = (url, claims, { nonce } = {}) => {
+    const q = new URL(url).searchParams;
+    const code = crypto.randomBytes(8).toString('hex');
+    codes.set(code, { claims, nonce: nonce ?? q.get('nonce'), challenge: q.get('code_challenge'), redirectUri: q.get('redirect_uri') });
+    return new URLSearchParams({ code, state: q.get('state') });
+  };
+  return { issuer, authorize, close: () => server.close() };
+}
+const provider = (over = {}) => ({ id: 'work', name: 'Work', issuer: 'https://login.example.com/tenant/v2.0', clientId: 'app-id',
+  clientSecret: 'shh', allowedDomains: ['example.com'], autoCreate: false, passwords: true, ...over });
+const ssoResult = (claims, over = {}) => ({ mode: 'signin', identity: dk.claimsOf({ email_verified: true, ...claims }), ...over });
+
+test('config: sso providers are checked; the client secret is masked', withDir(async (dir) => {
+  const file = path.join(dir, 'config.json');
+  const write = (o) => fs.writeFileSync(file, JSON.stringify(o), { mode: 0o600 });
+  const one = { id: 'Entra', name: 'Microsoft', issuer: 'https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0',
+    clientId: 'app', clientSecret: 'shh', allowedDomains: ['Example.com'] };
+  write({ sso: { providers: [one] } });
+  const c = dk.loadConfig({ file, env: {}, args: [] });
+  assert.deepStrictEqual(c.sso.providers, [{ ...one, id: 'entra', allowedDomains: ['example.com'], autoCreate: false, passwords: true }]);
+  assert.strictEqual(dk.maskedConfig(c).sso.providers[0].clientSecret, '***');
+  write({});
+  assert.deepStrictEqual(dk.loadConfig({ file, env: {}, args: [] }).sso, { providers: [] });
+  const bad = (providers, re) => { write({ sso: { providers } }); assert.throws(() => dk.loadConfig({ file, env: {}, args: [] }), re); };
+  bad([{ ...one, issuer: 'https://login.microsoftonline.com/common/v2.0' }], /name your Entra tenant/);
+  bad([{ ...one, issuer: 'http://idp.example.com' }], /https:\/\//);
+  bad([{ ...one, autoCreate: true, allowedDomains: [] }], /autoCreate" needs allowedDomains/);
+  bad([one, { ...one }], /two providers have the id "entra"/);
+  bad([{ ...one, id: 'no spaces' }], /lower-case letters/);
+  bad([{ ...one, passwords: 'no' }], /passwords" must be true or false/);
+  bad([{ ...one, allowedDomains: 'example.com' }], /list of domains/);
+  bad([{ ...one, tenant: 'x' }], /unknown setting "sso.providers\[0\].tenant"/);
+  bad([{ ...one, clientId: '' }], /clientId" must be text \(required\)/);
+  write({ sso: { list: [] } });
+  assert.throws(() => dk.loadConfig({ file, env: {}, args: [] }), /unknown setting "sso.list"/);
+}));
+
+test('single sign-on flow: state, browser binding, PKCE and nonce are checked against a real token exchange', async () => {
+  const idp = await mockProvider();
+  try {
+    const p = provider({ issuer: idp.issuer });
+    const redirectUri = 'https://gate.example.com/api/sso/work/callback';
+    const start = await dk.startSso(p, { mode: 'signin', redirectUri });
+    const q = new URL(start.url).searchParams;
+    assert.strictEqual(new URL(start.url).origin + new URL(start.url).pathname, `${idp.issuer}/authorize`);
+    assert.deepStrictEqual(['client_id', 'redirect_uri', 'scope', 'response_type', 'code_challenge_method', 'prompt'].map((k) => q.get(k)),
+      ['app-id', redirectUri, 'openid email profile', 'code', 'S256', 'select_account']);
+    assert.ok(q.get('state') && q.get('nonce') && q.get('code_challenge'));
+    const answer = idp.authorize(start.url, { sub: 'u-1', email: 'Jane@Example.com', email_verified: true, name: 'Jane' });
+    await assert.rejects(dk.finishSso(p, answer, 'another-browser'), (e) => e.status === 400 && /another browser/.test(e.message));
+    await assert.rejects(dk.finishSso(p, answer, start.binding), /expired or was already used/); // the attempt is used up either way
+
+    const s2 = await dk.startSso(p, { mode: 'invite', redirectUri, inviteToken: 'tok' });
+    const r = await dk.finishSso(p, idp.authorize(s2.url, { sub: 'u-1', email: 'Jane@Example.com', email_verified: true, name: 'Jane' }), s2.binding);
+    assert.deepStrictEqual(r, { mode: 'invite', username: undefined, inviteToken: 'tok',
+      identity: { subject: 'u-1', email: 'jane@example.com', emailVerified: true, name: 'Jane', hd: '' } });
+
+    const s3 = await dk.startSso(p, { mode: 'signin', redirectUri });
+    await assert.rejects(dk.finishSso(p, idp.authorize(s3.url, { sub: 'u-1' }, { nonce: 'forged' }), s3.binding), (e) => /nonce/.test(e.cause.message));
+    const s4 = await dk.startSso(p, { mode: 'signin', redirectUri });
+    const denied = new URLSearchParams({ error: 'access_denied', error_description: 'User cancelled', state: new URL(s4.url).searchParams.get('state') });
+    await assert.rejects(dk.finishSso(p, denied, s4.binding), /Work didn't sign you in: User cancelled/);
+    // An issuer without a path (as Google's) is discovered too.
+    const bare = await mockProvider('');
+    try {
+      const s5 = await dk.startSso(provider({ id: 'bare', issuer: bare.issuer }), { mode: 'signin', redirectUri });
+      assert.strictEqual((await dk.finishSso(provider({ id: 'bare', issuer: bare.issuer }), bare.authorize(s5.url, { sub: 'b-1' }), s5.binding)).identity.subject, 'b-1');
+    } finally { bare.close(); }
+  } finally { idp.close(); }
+});
+
+test('single sign-on accounts: linked, matched by a trusted email, invitations, new accounts, and refusals', withStore(async (store) => {
+  const p = provider();
+  await assert.rejects(dk.completeSso(store, p, ssoResult({ sub: 'j', email: 'jane@example.com' })), (e) => e.status === 403 && /no account for jane@example.com/.test(e.message));
+  await dk.createUser(store, { username: 'jane', ['pass' + 'word']: PW, email: 'jane@example.com', createdBy: 't', mustChangePassword: false });
+  await dk.confirmEmail(store, 'jane', 'jane@example.com');
+  assert.deepStrictEqual(await dk.completeSso(store, p, ssoResult({ sub: 'j', email: 'jane@example.com' })), { username: 'jane', outcome: 'linked' });
+  assert.deepStrictEqual(await dk.completeSso(store, p, ssoResult({ sub: 'j', email: 'renamed@other.com' })), { username: 'jane', outcome: 'signed-in' });
+  const ids = await dk.listIdentities(store, 'jane', [p]);
+  assert.deepStrictEqual(ids.map((i) => [i.provider, i.providerName, i.subject, i.email, Boolean(i.lastUsedAt)]), [['work', 'Work', 'j', 'renamed@other.com', true]]);
+  assert.strictEqual((await dk.getUser(store, 'jane')).signIns, 2);
+  // Untrusted emails: another domain, marked unverified, or (Google) not from the Workspace.
+  await assert.rejects(dk.completeSso(store, p, ssoResult({ sub: 'x', email: 'x@other.com' })), /only accounts from example.com/);
+  await assert.rejects(dk.completeSso(store, p, ssoResult({ sub: 'x', email: 'jane@example.com', email_verified: false })), /isn't verified/);
+  await assert.rejects(dk.completeSso(store, p, ssoResult({ sub: 'x' })), /didn't give an email address/);
+  const google = provider({ id: 'google', name: 'Google', issuer: 'https://accounts.google.com' });
+  await assert.rejects(dk.completeSso(store, google, ssoResult({ sub: 'g', email: 'jane@example.com' })), /isn't a example.com Google Workspace account/);
+  assert.strictEqual((await dk.completeSso(store, google, ssoResult({ sub: 'g', email: 'jane@example.com', hd: 'example.com' }))).username, 'jane');
+  // Without allowedDomains nobody is matched by email.
+  await assert.rejects(dk.completeSso(store, provider({ id: 'any', allowedDomains: [] }), ssoResult({ sub: 'a', email: 'jane@example.com' })), /no account linked/);
+  // An invitation waiting on the email is accepted: no password, email confirmed.
+  await dk.createUser(store, { username: 'bob', email: 'bob@example.com', createdBy: 'jane', invite: true });
+  assert.deepStrictEqual(await dk.completeSso(store, p, ssoResult({ sub: 'b', email: 'bob@example.com' })), { username: 'bob', outcome: 'invite-accepted' });
+  const bob = await dk.getUser(store, 'bob');
+  assert.deepStrictEqual([bob.invited, bob.hasPassword, bob.email], [false, false, 'bob@example.com']);
+  assert.strictEqual(await dk.authenticate(store, 'bob', '!sso'), null);
+  // New accounts only with autoCreate: username from the address, no password.
+  const auto = provider({ id: 'auto', autoCreate: true });
+  assert.deepStrictEqual(await dk.completeSso(store, auto, ssoResult({ sub: 'c1', email: 'Carol.Smith+gate@example.com' })), { username: 'carol.smith.gate', outcome: 'created' });
+  await store.db.query("UPDATE users SET email = NULL WHERE username = 'carol.smith.gate'");
+  assert.strictEqual((await dk.completeSso(store, auto, ssoResult({ sub: 'c2', email: 'carol.smith+gate@example.com' }))).username, 'carol.smith.gate-2');
+  assert.strictEqual((await dk.completeSso(store, auto, ssoResult({ sub: 'c3', email: 'q@example.com' }))).username, 'q00');
+  const carol = await dk.getUser(store, 'carol.smith.gate-2');
+  assert.deepStrictEqual([carol.hasPassword, carol.invited, carol.createdBy, carol.email], [false, false, 'sso:auto', 'carol.smith+gate@example.com']);
+  // Linking from User Settings: any email for providers without domains; never another account's identity.
+  assert.deepStrictEqual(await dk.completeSso(store, provider({ id: 'any', allowedDomains: [] }), ssoResult({ sub: 'a', email: 'me@gmail.com' }, { mode: 'link', username: 'bob' })),
+    { username: 'bob', outcome: 'linked' });
+  await assert.rejects(dk.completeSso(store, p, ssoResult({ sub: 'j', email: 'jane@example.com' }, { mode: 'link', username: 'bob' })), (e) => e.status === 409);
+  await assert.rejects(dk.completeSso(store, p, ssoResult({ sub: 'z', email: 'z@other.com' }, { mode: 'link', username: 'bob' })), /only accounts from example.com can/);
+}));
+
+test('single sign-on invitations by link, password rules and unlinking', withStore(async (store) => {
+  const p = provider({ passwords: false });
+  await dk.createUser(store, { username: 'dee', email: 'dee@example.com', createdBy: 't', invite: true });
+  const token = await dk.createToken(store, 'invite', 'dee');
+  // A refused attempt doesn't use up the invitation.
+  await assert.rejects(dk.completeSso(store, p, ssoResult({ sub: 'd', email: 'dee@other.com' }, { mode: 'invite', inviteToken: token })), /only accounts from example.com can/);
+  assert.deepStrictEqual(await dk.completeSso(store, p, ssoResult({ sub: 'd', email: 'dee@example.com' }, { mode: 'invite', inviteToken: token })),
+    { username: 'dee', outcome: 'invite-accepted' });
+  await assert.rejects(dk.completeSso(store, p, ssoResult({ sub: 'd2', email: 'dee@example.com' }, { mode: 'invite', inviteToken: token })), /invalid, used or expired/);
+  // A provider with passwords: false keeps its accounts from password sign-in.
+  await dk.createUser(store, { username: 'eve', ['pass' + 'word']: PW, createdBy: 't', mustChangePassword: false });
+  assert.strictEqual(await dk.passwordAllowed(store, 'eve', [p]), true);
+  await dk.completeSso(store, p, ssoResult({ sub: 'e', email: 'eve@example.com' }, { mode: 'link', username: 'eve' }));
+  assert.deepStrictEqual([await dk.passwordAllowed(store, 'eve', [p]), await dk.passwordBlockers(store, 'eve', [p])], [false, ['Work']]);
+  const refuse = async (u) => ((await dk.passwordBlockers(store, u, [p])).length ? 'use Work' : null);
+  await assert.rejects(dk.authenticate(store, 'eve', PW, refuse), (e) => e.status === 403 && e.message === 'use Work');
+  assert.strictEqual((await dk.getUser(store, 'eve')).signIns, 0);
+  // Unlinking keeps a way to sign in: dee (no password) can't drop her only sign-in; eve's password works again once unlinked.
+  await assert.rejects(dk.unlinkIdentity(store, 'dee', 'work', 'd', [p]), (e) => e.status === 409 && /only way to sign in/.test(e.message));
+  await dk.unlinkIdentity(store, 'eve', 'work', 'e', [p]);
+  assert.strictEqual(await dk.passwordAllowed(store, 'eve', [p]), true);
+  await assert.rejects(dk.unlinkIdentity(store, 'eve', 'work', 'e', [p]), (e) => e.status === 404);
+  const other = provider({ id: 'other', name: 'Other', allowedDomains: [] });
+  await dk.completeSso(store, other, ssoResult({ sub: 'd3', email: 'dee@home.net' }, { mode: 'link', username: 'dee' }));
+  await dk.unlinkIdentity(store, 'dee', 'work', 'd', [p, other]);
+  assert.deepStrictEqual((await dk.listIdentities(store, 'dee', [p, other])).map((i) => i.providerName), ['Other']);
+}));

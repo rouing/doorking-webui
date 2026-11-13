@@ -45,6 +45,11 @@ Open the app in your browser at the address you were given (for example **https:
   12 characters). Nobody else can see or change it.
 - **Sign in with a passkey:** once you've added a passkey (see [User Settings](#user-settings)), click it and use your
   fingerprint, face or device PIN. No username or password needed. Your password keeps working too.
+- **Sign in with your work account** (for example **Sign in with Microsoft** or **Sign in with Google**), if the server
+  is set up for it: click the button and sign in at Microsoft or Google; you come straight back, signed in. It works
+  once your work account is linked to your account here: through an invitation, by your work email if your
+  organization is set up for that, or with **Link** in [User Settings](#user-settings). If it says there's no account
+  for you, ask a gate admin to invite you.
 - **Remember user** keeps only your username in this browser, never your password.
 - You are signed out after **30 minutes** without activity, or when you click **Sign out**.
 - After 5 wrong passwords in a row, sign-in for that username is paused for 15 minutes.
@@ -52,7 +57,8 @@ Open the app in your browser at the address you were given (for example **https:
   account has a confirmed email, you get a link (valid 1 hour, usable once) to choose a new one; you are then signed
   out everywhere. Without a confirmed email, ask the person who runs the server for a temporary password.
 - **Invitation email:** if a gate admin invited you by email, open the link in it (valid 72 hours) and choose your
-  password; you're signed in straight away.
+  password; you're signed in straight away. Or click **Accept with Microsoft** (or Google, …) instead, to sign in with
+  your work account from then on, without a password.
 - **Brand-new installation:** the very first visit asks to create the first account. It needs a **setup code** that
   the server prints in its log when it starts, so only the person running the server can do it. That first account
   becomes the admin of every gate already on the server.
@@ -95,7 +101,8 @@ Gate admins manage people under **System Settings → Gate users**:
 
 **User settings** (on the gate list, or under your name at the bottom of the left-hand menu) holds your own settings,
 which follow you to any browser: **Dark mode**, your **email**, your **phone** number, **email notifications**,
-**Passkeys** and **changing your password** (asks for your current one, and signs you out everywhere else).
+**Single sign-on**, **Passkeys** and **changing your password** (asks for your current one, and signs you out everywhere
+else).
 
 **Email:** after you type a new address, the app sends it a **confirmation link** (valid 24 hours); it shows "check
 your inbox" until you open it, and **Send the link again** if needed. Only a confirmed email is used. Each email can
@@ -108,7 +115,16 @@ number, or `+` and the country code for other countries; it's saved in internati
 **Email notifications** (to your confirmed email):
 - when you're given access to a gate, removed from one, or your role changes (you can turn this off);
 - **gate alerts** for gates you're admin of: a Send to gate or a scheduled transfer failed (you can turn this off);
-- security emails, always: your password was changed or reset, or a passkey was added or removed.
+- security emails, always: your password was changed or reset, a passkey was added or removed, or a work account was
+  linked or unlinked.
+
+**Single sign-on** (when the server offers it) links your work account, so its button on the sign-in page signs you in:
+- **Link Microsoft** (or Google, …): type your current password first (if your account has one), then sign in at the
+  provider; you come back here with it linked. Your organization may only allow its own work accounts.
+- **Unlink** removes it. You can't unlink your only way to sign in: add a passkey or link another account first.
+- If your account was made through single sign-on, it has no password. To get one, use **Forgot your password?** on the
+  sign-in page (it needs a confirmed email). Some organizations turn passwords off for work accounts: the Password card
+  then says so.
 
 **Passkeys** let you sign in with your fingerprint, face or device PIN instead of your password:
 - **Add a passkey:** give it a name (such as "iPhone"), type your current password, click **Add a passkey** and follow
@@ -394,6 +410,10 @@ same ones as in the DMSS or SmartPSS app), and the camera channels to use. Click
 | "The passkey request was cancelled or timed out" | Try again and complete the fingerprint, face or PIN prompt. |
 | "Passkey sign-in failed: this passkey is not registered here" | It was removed, or added on a different address. Sign in with your password. |
 | "Passkeys work only at …" | Open the app at the address shown (passkeys need the site's proper name). |
+| "There is no account for … here" after signing in with Microsoft/Google | Your work account isn't linked yet. Ask a gate admin to invite you, then use **Accept with …** in the invitation email. |
+| "… can't sign in here: only accounts from … can" | Use your work account from the domain shown (not a personal one). |
+| "This sign-in has expired or was already used" / "was started in another browser" | Click the sign-in button again and finish within 10 minutes in the same browser. |
+| "… password sign-in is turned off for it" | Use the work account button (for example **Sign in with Microsoft**) instead of your password. |
 | "Only a gate admin can do this" | Your access to this gate is read only. Ask a gate admin. |
 | "This gate is already managed here" | Ask one of the gate's admins to add you to it. |
 | "DKS Cloud refused that DKS user and password" | The gate's DKS login is wrong. Check it (gate admins: **System Settings → Gate login**). |

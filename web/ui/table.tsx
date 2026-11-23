@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Button, Flex, Table, Text } from '@radix-ui/themes';
+import { Button, Stack, TableCell, TableHead, TableRow, TableSortLabel, Typography } from '@mui/material';
 import { usePhone } from './phone.ts';
 import { cmpCells } from './format.ts';
 
@@ -10,10 +10,10 @@ export interface Sort { col: string; dir: 1 | -1; then?: { col: string; dir: 1 |
  * Next sort for a header click. With dateTime (Transactions): Time clicked while sorted by Date sorts the times
  * within each date (Date stays first); clicking Date again flips the dates and keeps that.
  *
- * @param cur - Current value or state.
- * @param key - Lookup key, API key, or setting key.
+ * @param cur - Current sort state.
+ * @param key - Column key.
  * @param [dateTime] - Enable secondary time-within-date sorting.
- * @returns `Sort` result.
+ * @returns Next `Sort` state.
  */
 export function nextSort(cur: Sort | null, key: string, dateTime = false): Sort {
   if (dateTime && cur && cur.col === 'date') {
@@ -26,10 +26,10 @@ export function nextSort(cur: Sort | null, key: string, dateTime = false): Sort 
 /**
  * Rows sorted by `sort`; value(col) gives the value a column sorts on.
  *
- * @param rows - List of data rows.
- * @param sort - Active table sort specification.
- * @param value - Input value.
- * @returns `R[]` result.
+ * @param rows - Input rows.
+ * @param sort - Active sort specification.
+ * @param value - Value extractor by column key.
+ * @returns Sorted copy of rows.
  */
 export function sortRows<R>(rows: R[], sort: Sort | null, value: (col: string) => (row: R) => unknown): R[] {
   if (!sort) return rows;
@@ -48,63 +48,63 @@ interface SortHeadProps {
 }
 
 /**
- * Header row whose cells sort the table on click (▲/▼, with 1/2 for a two-level sort).
+ * Header row whose cells sort the table via keyboard-accessible MUI `TableSortLabel`.
  *
  * @param props - Component props.
- * @param props.cols - Table column definitions.
- * @param props.sort - Active table sort specification.
- * @param props.onSort - Callback invoked when a sortable column header is clicked.
- * @param [props.title] - Optional tooltip callback.
- * @param [props.leading] - Optional leading header cell (e.g., select-all checkbox).
- * @returns Rendered React element.
+ * @returns Rendered table head.
  */
 export function SortHead({ cols, sort, onSort, title, leading }: SortHeadProps) {
-  const arrow = (dir: number) => (dir > 0 ? ' ▲' : ' ▼');
   return (
-    <Table.Header className="sort-head">
-      <Table.Row>
+    <TableHead className="sort-head">
+      <TableRow>
         {leading}
-        {cols.map(([label, key]) => (
-          <Table.ColumnHeaderCell key={key} onClick={() => onSort(key)} style={{ cursor: 'pointer', whiteSpace: 'nowrap' }}
-            title={title ? title(key) : 'Click to sort'}>
-            {label}
-            {!sort ? '' : sort.col === key ? arrow(sort.dir) + (sort.then ? ' 1' : '')
-              : sort.then && sort.then.col === key ? `${arrow(sort.then.dir)} 2` : ''}
-          </Table.ColumnHeaderCell>
-        ))}
-      </Table.Row>
-    </Table.Header>
+        {cols.map(([label, key]) => {
+          const isPrimary = Boolean(sort && sort.col === key);
+          const isSecondary = Boolean(sort?.then && sort.then.col === key);
+          const active = isPrimary || isSecondary;
+          const dir = isPrimary ? (sort!.dir > 0 ? 'asc' : 'desc') : isSecondary ? (sort!.then!.dir > 0 ? 'asc' : 'desc') : 'asc';
+          return (
+            <TableCell key={key} sortDirection={active ? dir : false} sx={{ whiteSpace: 'nowrap' }} title={title ? title(key) : 'Click to sort'}>
+              <TableSortLabel active={active} direction={dir} onClick={() => onSort(key)}>
+                {label}
+                {isPrimary && sort?.then ? ' (1)' : isSecondary ? ' (2)' : ''}
+              </TableSortLabel>
+            </TableCell>
+          );
+        })}
+      </TableRow>
+    </TableHead>
   );
 }
 
-const PAGE_ROWS = 2000; // rows drawn at a time (and per Show more)
-const PHONE_ROWS = 100; // the same on phones
+const PAGE_ROWS = 2000;
+const PHONE_ROWS = 100;
 
 interface ShownRows {
-  limit: number; // rows to draw
-  more: ReactNode; // the Show more row, or null when everything shows
-  showMore: () => void; // draws one step more (after loading more rows), as Show more does
+  limit: number;
+  more: ReactNode;
+  showMore: () => void;
 }
 
 /**
- * How many rows a long table draws: PAGE_ROWS (phones: PHONE_ROWS), and that many more each time Show more is
- * clicked, so every row can be reached (rows added later, such as older transactions, too). Back to one page when
- * `reset` changes, such as the filter.
+ * Progressive paging helper for long tables.
  *
- * @param total - Total number of rows.
- * @param reset - Dependency key that resets paging when changed.
- * @returns `ShownRows` result.
+ * @param total - Total row count.
+ * @param reset - Reset key.
+ * @returns Paging state and Show More controls.
  */
-export function useShownRows(total: number, reset: unknown): ShownRows {
-  const step = usePhone() ? PHONE_ROWS : PAGE_ROWS;
+export function useShownRows(total: number, reset: unknown, stepOverride?: number): ShownRows {
+  const step = stepOverride ?? (usePhone() ? PHONE_ROWS : PAGE_ROWS);
   const [pages, setPages] = useState(1);
   useEffect(() => { setPages(1); }, [reset]);
   const limit = step * pages;
   const more = total > limit ? (
-    <Flex align="center" gap="3" wrap="wrap">
-      <Text size="2" color="gray">Showing {limit} of {total}</Text>
-      <Button variant="soft" onClick={() => setPages(pages + 1)}>Show {Math.min(step, total - limit)} more</Button>
-    </Flex>
+    <Stack direction="row" spacing={2} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+      <Typography variant="body2" color="text.secondary">Showing {limit} of {total}</Typography>
+      <Button variant="outlined" size="small" onClick={() => setPages(pages + 1)}>
+        Load more ({Math.min(step, total - limit)})
+      </Button>
+    </Stack>
   ) : null;
   return { limit, more, showMore: () => setPages((shown) => shown + 1) };
 }

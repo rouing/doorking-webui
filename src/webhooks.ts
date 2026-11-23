@@ -5,13 +5,14 @@
  * `src/email.ts`). Blocks loopback and cloud metadata URLs by default to prevent SSRF.
  */
 import crypto from 'node:crypto';
+import dns from 'node:dns/promises';
+import net from 'node:net';
 import { all, decrypt, encrypt, one, phoneDigits, run, type Store } from './db.ts';
 import { httpError } from './errors.ts';
 import type { WebhookDelivery, WebhookEvent, WebhookInfo } from './types.ts';
 
 export const WEBHOOK_EVENTS: readonly WebhookEvent[] = [
-  'pull.completed', 'send.completed', 'send.failed', 'relay.changed', 'snapshot.saved',
-  'transaction.admit', 'transaction.deny', 'gate.hold',
+  'pull.completed', 'send.completed', 'send.failed', 'relay.changed', 'suspicious.reported',
 ];
 
 const RETRY_MINUTES = [1, 5, 15, 60];
@@ -54,15 +55,40 @@ const fromDeliveryRow = (row: DeliveryRow): WebhookDelivery => ({
   lastStatus: row.last_status, lastError: row.last_error, createdAt: row.created_at, sentAt: row.sent_at,
 });
 
-const BLOCKED_HOSTS_RE = /^(localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|169\.254\.\d+\.\d+|\[?::1\]?|\[?fe80:.*\]?)$/i;
+/**
+ * Returns true if `ip` is a loopback, link-local, RFC 1918 private LAN, CGNAT, ULA, multicast, or unspecified address
+ * (including IPv4-mapped IPv6 addresses like `::ffff:127.0.0.1` or `::ffff:7f00:1`).
+ */
+export function isBlockedIp(raw: string): boolean {
+  const ip = raw.trim().replace(/^\[|\]$/g, '').toLowerCase();
+  const mappedHex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(ip);
+  if (mappedHex) {
+    const hi = parseInt(mappedHex[1], 16);
+    const lo = parseInt(mappedHex[2], 16);
+    return isBlockedIp(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+  }
+  const mappedV4 = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(ip);
+  if (mappedV4) return isBlockedIp(mappedV4[1]);
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split('.').map(Number);
+    return a === 0 || a === 10 || a === 127
+      || (a === 100 && b >= 64 && b <= 127)
+      || (a === 169 && b === 254)
+      || (a === 172 && b >= 16 && b <= 31)
+      || (a === 192 && b === 168)
+      || a >= 224;
+  }
+  if (net.isIPv6(ip)) {
+    return ip === '::' || ip === '::1' || /^(fc|fd|fe[89ab]|ff)/.test(ip);
+  }
+  return false;
+}
+
+const BLOCKED_HOSTNAME_RE = /^(localhost|.*\.localhost|.*\.local|.*\.internal)$/i;
 
 /**
- * Validates a webhook destination URL, rejecting non-HTTP(S) schemes and loopback/link-local metadata hosts.
- *
- * @param given - Raw destination URL string.
- * @param [allowLocal] - Only for tests hitting a local mock receiver.
- * @returns Normalized URL string.
- * @throws HTTP 400 error on invalid or blocked URLs.
+ * Validates an external HTTPS destination URL, blocking non-HTTPS schemes, loopback/private/link-local literal IPs,
+ * and `.local`/`.localhost` hostnames.
  */
 export function checkWebhookUrl(given: unknown, allowLocal = false): string {
   const raw = String(given ?? '').trim();
@@ -71,10 +97,32 @@ export function checkWebhookUrl(given: unknown, allowLocal = false): string {
   if (parsed.protocol !== 'https:' && !(allowLocal && parsed.protocol === 'http:')) {
     throw httpError('Webhook URL must use https://');
   }
-  if (!allowLocal && BLOCKED_HOSTS_RE.test(parsed.hostname)) {
-    throw httpError('Webhook URL cannot target loopback or link-local metadata addresses');
+  if (!allowLocal) {
+    const host = parsed.hostname.replace(/^\[|\]$/g, '');
+    if (BLOCKED_HOSTNAME_RE.test(host) || isBlockedIp(host)) {
+      throw httpError('Webhook URL cannot target loopback, private network, or link-local addresses');
+    }
   }
   return parsed.toString();
+}
+
+/**
+ * Resolves `hostname` via DNS and rejects any destination that resolves to a private, loopback, or link-local IP
+ * (prevents DNS-rebinding / split-horizon SSRF).
+ */
+export async function assertPublicHostname(url: string, allowLocal = false): Promise<void> {
+  if (allowLocal) return;
+  const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
+  if (BLOCKED_HOSTNAME_RE.test(host) || isBlockedIp(host)) {
+    throw httpError('Destination host cannot target loopback, private network, or link-local addresses');
+  }
+  if (net.isIP(host)) return;
+  const records = await dns.lookup(host, { all: true }).catch(() => {
+    throw httpError('Destination host could not be resolved');
+  });
+  if (!records.length || records.some((rec) => isBlockedIp(rec.address))) {
+    throw httpError('Destination host resolves to a private or loopback address');
+  }
 }
 
 /**
@@ -227,8 +275,11 @@ async function postSigned(url: string, secret: string, event: string, deliveryId
   const timestamp = String(Math.floor(Date.now() / 1000));
   const signature = signWebhookPayload(secret, timestamp, body);
   try {
+    // Skip DNS SSRF check only when a custom test fetch is injected (e.g. unit tests hitting mock endpoints).
+    if (fetchFn === fetch) await assertPublicHostname(url, url.startsWith('http://'));
     const res = await fetchFn(url, {
       method: 'POST',
+      redirect: 'error',
       headers: {
         'Content-Type': 'application/json',
         'X-DoorKing-Event': event,

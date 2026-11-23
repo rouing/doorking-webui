@@ -445,6 +445,52 @@
         }
       }
     },
+    "/api/gates/{phone}/residents/instructions.pdf": {
+      "post": {
+        "tags": [
+          "Residents"
+        ],
+        "summary": "Generate a filled ResidentInstructions.pdf handout",
+        "x-role": "readonly",
+        "description": "Fills DoorKing's official 1-page Resident Instructions form with the resident's name, directory code, 4-digit entry code, Touch-Tone grant access digit, and building manager phone number.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "residentName": { "type": "string" },
+                  "directoryCode": { "type": "string" },
+                  "entryCode": { "type": "string" },
+                  "adminPhone": { "type": "string" },
+                  "grantAccessDigit": { "type": "string" },
+                  "saveAdminPhone": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Filled PDF document.",
+            "content": {
+              "application/pdf": {
+                "schema": { "type": "string", "format": "binary" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
     "/api/gates/{phone}/residents/{code}": {
       "get": {
         "tags": [

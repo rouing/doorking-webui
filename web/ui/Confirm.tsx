@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, type ReactNode } from 'react';
-import { AlertDialog, Box, Button, Flex, Text } from '@radix-ui/themes';
+import { Button, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle } from '@mui/material';
 import { useBackLayer } from './back.ts';
 
 interface Ask { title: string; body?: ReactNode; action: string; color?: 'red' | 'blue'; maxWidth?: string }
@@ -13,22 +13,25 @@ interface Ask { title: string; body?: ReactNode; action: string; color?: 'red' |
 export function useConfirm(): [ReactNode, (ask: Ask) => Promise<boolean>] {
   const [ask, setAsk] = useState<Ask | null>(null);
   const resolve = useRef<(ok: boolean) => void>(() => {});
-  const confirm = useCallback((ask: Ask) => new Promise<boolean>((res) => { resolve.current = res; setAsk(ask); }), []);
+  const confirm = useCallback((next: Ask) => new Promise<boolean>((res) => { resolve.current = res; setAsk(next); }), []);
   const close = (ok: boolean) => { setAsk(null); resolve.current(ok); };
   useBackLayer(ask !== null, () => close(false));
   const dialog = (
-    <AlertDialog.Root open={ask !== null} onOpenChange={(open) => { if (!open) close(false); }}>
-      <AlertDialog.Content maxWidth={ask?.maxWidth || '520px'} aria-describedby={undefined}>
-        <AlertDialog.Title>{ask?.title}</AlertDialog.Title>
-        {ask?.body && <Box><Text as="div" size="2">{ask.body}</Text></Box>}
-        <Flex gap="3" mt="4" justify="end">
-          <AlertDialog.Cancel><Button variant="soft" color="gray">Cancel</Button></AlertDialog.Cancel>
-          <AlertDialog.Action>
-            <Button color={ask?.color || 'blue'} onClick={() => close(true)}>{ask?.action}</Button>
-          </AlertDialog.Action>
-        </Flex>
-      </AlertDialog.Content>
-    </AlertDialog.Root>
+    <Dialog open={ask !== null} onClose={() => close(false)} maxWidth="sm" fullWidth
+      slotProps={ask?.maxWidth ? { paper: { sx: { maxWidth: ask.maxWidth } } } : undefined}>
+      <DialogTitle>{ask?.title}</DialogTitle>
+      {ask?.body && (
+        <DialogContent>
+          <DialogContentText component="div" sx={{ color: 'text.primary' }}>{ask.body}</DialogContentText>
+        </DialogContent>
+      )}
+      <DialogActions sx={{ px: 3, pb: 2 }}>
+        <Button color="inherit" onClick={() => close(false)}>Cancel</Button>
+        <Button variant="contained" color={ask?.color === 'red' ? 'error' : 'primary'} onClick={() => close(true)}>
+          {ask?.action}
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
   return [dialog, confirm];
 }

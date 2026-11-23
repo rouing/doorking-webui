@@ -15,19 +15,93 @@ import { logger } from '../../src/logging.ts';
  * @returns Registered route definitions for this area.
  */
 export function accountRoutes(modules: Modules): Route[] {
-  const { mailer, NO_EMAIL, store } = modules.context;
+  const { asGate, logged, mailer, NO_EMAIL, prefsOf, store } = modules.context;
   const {
     approvals, confirmOwnPassword, meReply, NO_PASSKEY_SITE, passwordOff, providerOf, reauthNeed, reauthRefusal,
     relyingParty, SSO
   } = modules.auth;
-  const { mailTo, securityAlert, sendVerification } = modules.mail;
+  const { editOpts, editResidentInCache, editorResidents, withHistory } = modules.editing;
+  const { gateAlert, mailTo, securityAlert, sendVerification } = modules.mail;
   const passkeysReply = async (user: string) => ({ passkeys: await dk.listPasskeys(store, user), userHandle: await dk.passkeyUserHandle(store, user) });
+
+  /** Resolves enabled resident portal units for `username` along with their current directory call-box phone. */
+  async function linkedResidentUnits(username: string) {
+    const owned = await dk.ownedPortalUnitsAllGates(store, username);
+    if (!owned.length) return [];
+    const byGate = new Map<string, string[]>();
+    for (const row of owned) byGate.set(row.phone, [...(byGate.get(row.phone) || []), row.code]);
+    const out: Array<{ gatePhone: string; directoryCode: string; phone: string }> = [];
+    for (const [gatePhone, codes] of byGate) {
+      const rec = await dk.getGate(store, gatePhone);
+      if (!rec) continue;
+      const portal = dk.normalizeResidentPortalPrefs((await prefsOf(gatePhone)).residentPortal);
+      if (!portal.enabled) continue;
+      const [, list] = await editorResidents(asGate(rec, 'resident', username));
+      for (const codeKey of codes) {
+        const unit = (list.rows || []).find((r) => dk.noteKey(r.directoryCode) === codeKey);
+        if (!unit) continue;
+        const digits = `${unit.areaCode || ''}${unit.phone || ''}`.replace(/\D/g, '');
+        out.push({ gatePhone, directoryCode: unit.directoryCode, phone: digits });
+      }
+    }
+    return out;
+  }
+
+  /** Syncs a resident's updated US/Canada phone directly into their linked gate directory unit(s). */
+  async function syncLinkedUnitPhones(
+    session: Parameters<typeof withHistory>[0],
+    e164Phone: string,
+  ): Promise<{ updatedUnits: string[]; nextScheduledSend: string | null } | undefined> {
+    const nanp = dk.parseNanpPhone(e164Phone);
+    const linked = nanp ? await linkedResidentUnits(session.user) : [];
+    if (!nanp || !linked.length) return undefined;
+    const updatedUnits: string[] = [];
+    const nextSends: string[] = [];
+    const byGate = new Map<string, typeof linked>();
+    for (const item of linked) byGate.set(item.gatePhone, [...(byGate.get(item.gatePhone) || []), item]);
+    const targetDigits = `${nanp.areaCode}${nanp.phone}`;
+    for (const [gatePhone, units] of byGate) {
+      const rec = await dk.getGate(store, gatePhone);
+      if (!rec) continue;
+      const gate = asGate(rec, 'resident', session.user);
+      const opts = await editOpts(gate);
+      for (const unit of units) {
+        if (unit.phone === targetDigits) continue;
+        const editReply = await withHistory(
+          session,
+          gate,
+          { summary: `Resident ${session.user} (unit ${unit.directoryCode}) updated call-box phone number` },
+          (ctx) => editResidentInCache(gate.phoneNumber, unit.directoryCode, nanp, opts, ctx),
+        );
+        if (editReply[0] >= 300) continue;
+        updatedUnits.push(unit.directoryCode);
+        const nextSend = await dk.nextScheduledSend(store, gate.phoneNumber);
+        if (nextSend) nextSends.push(nextSend);
+        await gateAlert(
+          gate.phoneNumber,
+          `Resident updated call-box phone (Unit ${unit.directoryCode})`,
+          `${session.user} (directory code ${unit.directoryCode}) updated their call-box phone number to ${dk.fmtPhone(targetDigits)} in the working copy.${nextSend ? ` Next scheduled send: ${new Date(nextSend).toLocaleString('en-US')}.` : ' Please review and click Send to gate.'}`,
+        ).catch(logged('gate', `Gate ${gate.phoneNumber}: phone-update admin alert failed`));
+      }
+    }
+    return updatedUnits.length ? { updatedUnits, nextScheduledSend: nextSends.sort()[0] || null } : undefined;
+  }
+
   return [
     // The signed-in user's own settings: GET { username, email, pendingEmail, phone, dark, notifyAccess, notifyAlerts };
     // PUT changes any of email (needs the current password), phone, dark, notifyAccess, notifyAlerts.
-    route('GET', '/api/me', 'user', async ({ session }) => [200, meReply((await dk.getUser(store, session.user))!)]),
+    route('GET', '/api/me', 'user', async ({ session }) => {
+      const base = meReply((await dk.getUser(store, session.user))!);
+      const linkedUnits = await linkedResidentUnits(session.user);
+      const fallbackPhone = !base.phone && linkedUnits.length
+        ? linkedUnits.map((u) => u.phone).find(Boolean) || ''
+        : '';
+      const displayPhone = base.phone || (fallbackPhone.length === 10 ? `+1${fallbackPhone}` : fallbackPhone);
+      return [200, { ...base, phone: displayPhone, ...(linkedUnits.length && { linkedUnits }) }];
+    }),
     // { email?, phone?, dark?, notifyAccess?, notifyAlerts? }. A new email waits for its confirmation link (sent to it); the
-    // old confirmed address is told about the change.
+    // old confirmed address is told about the change. For residents with portal units, updating phone also updates their
+    // unit's call-box phone in the gate working copy so they can self-serve update it.
     route('PUT', '/api/me', 'user', async ({ session, body }) => {
       const was = (await dk.getUser(store, session.user))!;
       if (body.email !== undefined && ![was.email, was.pendingEmail].includes(String(body.email).trim().toLowerCase())) {
@@ -42,7 +116,12 @@ export function accountRoutes(modules: Modules): Route[] {
         if (user.email) await mailTo(user.email, dk.messages.emailChanged(user.username, user.pendingEmail), 'security');
         logger('session')[!mailer || warning ? 'warn' : 'info']`${user.username} asked to change their email (confirmation ${!mailer ? 'not sent: email is off' : warning ? 'not queued' : 'sent'})`;
       }
-      return [200, { ...meReply(user), ...(warning && { warning }) }];
+
+      const gatePhoneSync = body.phone !== undefined && user.phone
+        ? await syncLinkedUnitPhones(session, user.phone)
+        : undefined;
+
+      return [200, { ...meReply(user), ...(warning && { warning }), ...(gatePhoneSync && { gatePhoneSync }) }];
     }),
     // Sends the confirmation link for the pending email again.
     route('POST', '/api/me/email/resend', 'user', async ({ session }) => {
@@ -133,5 +212,20 @@ export function accountRoutes(modules: Modules): Route[] {
       logger('session').info`${session.user} unlinked a ${name} sign-in`;
       return [200, { identities: await dk.listIdentities(store, session.user, SSO) }];
     }),
+
+    // Web Push subscriptions for the signed-in user (installed PWA / browser alerts).
+    route('GET', '/api/me/push', 'user', async ({ session }) => [200, {
+      publicKey: await modules.push.publicKey(),
+      subscriptions: await dk.listPushSubscriptions(store, session.user),
+    }]),
+    route('POST', '/api/me/push', 'user', async ({ session, body }) => {
+      await dk.savePushSubscription(store, session.user, body);
+      return [200, { subscriptions: await dk.listPushSubscriptions(store, session.user) }];
+    }),
+    route('DELETE', '/api/me/push/:id', 'user', async ({ session, params }) => {
+      await dk.deletePushSubscription(store, session.user, params.id);
+      return [200, { subscriptions: await dk.listPushSubscriptions(store, session.user) }];
+    }),
+    route('POST', '/api/me/push/test', 'user', async ({ session }) => [200, await modules.push.sendTestPush(session.user)]),
   ];
 }

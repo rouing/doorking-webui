@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Button, Callout, Flex } from '@radix-ui/themes';
+import { Alert, IconButton } from '@mui/material';
+import CloseIcon from '@mui/icons-material/Close';
 import type { GateInfo, ResidentRow, TransactionRow } from '../../src/types.ts';
-import { api, errorText, gateApi, GateRoleContext, ReadOnlyContext, WorkingCopySavedContext } from './api.ts';
-import { useGateData, useGateJob, useSidebarDensity } from './gateData.ts';
+import { api, DraftActionsContext, errorText, gateApi, GateRoleContext, ReadOnlyContext, WorkingCopySavedContext, type DraftActions } from './api.ts';
+import { useGateData, useGateJob } from './gateData.ts';
 import { useBackLayer } from './back.ts';
 import { usePhone } from './phone.ts';
 import { UserSettings } from './account/UserSettings.tsx';
@@ -43,6 +44,7 @@ interface GateAppProps {
   session: SignedIn;
   gate: GateInfo;
   onChange: () => void;
+  onOpenPortal?: () => void;
 }
 
 /**
@@ -57,7 +59,7 @@ interface GateAppProps {
  * @param props.onChange - Callback invoked when the value changes.
  * @returns Rendered React element.
  */
-export function GateApp({ session, gate, onChange }: GateAppProps) {
+export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps) {
   const gapi = useMemo(() => gateApi(gate.phoneNumber), [gate.phoneNumber]);
   const readOnly = gate.role === 'readonly';
   const isAdmin = gate.role === 'admin';
@@ -73,6 +75,7 @@ export function GateApp({ session, gate, onChange }: GateAppProps) {
   const [gateSheet, setGateSheet] = useState(false); // the Gate tab's sheet (phones)
   const [quickJump, setQuickJump] = useState(false); // global Cmd/Ctrl+K search dialog
   const [actionInfo, setActionInfo] = useState(''); // the outcome of Reset to gate / Send to gate (sidebar or Gate sheet)
+  const [draft, setDraft] = useState<DraftActions | null>(null);
   const [pageKey, setPageKey] = useState(0); // bumped to reload the open page (its settings) after Reset to gate
   const [error, setError] = useState('');
   const [dialog, confirm] = useConfirm();
@@ -82,9 +85,8 @@ export function GateApp({ session, gate, onChange }: GateAppProps) {
     onFinished: (finished) => { setNav(finished.what === 'transactions' ? 'transactions' : 'residents'); window.scrollTo(0, 0); loadData(); },
   });
 
-  useEffect(() => { document.title = `${gateLabel(gate)} · DoorKing Gate Data`; }, [gate]);
+  useEffect(() => { document.title = `${gateLabel(gate)} · Doorking Gate`; }, [gate]);
   const phone = usePhone();
-  const sidebar = useSidebarDensity(phone);
 
   useEffect(() => {
     loadData();
@@ -101,7 +103,7 @@ export function GateApp({ session, gate, onChange }: GateAppProps) {
     try { await gapi('POST', '/pull', { what }); jobStarted(); } catch (err) { setError(errorText(err)); }
   }
 
-  const allGates = async () => { await api('DELETE', '/api/session/gate').catch(() => {}); document.title = 'DoorKing Gate Data'; onChange(); };
+  const allGates = async () => { await api('DELETE', '/api/session/gate').catch(() => {}); document.title = 'Doorking Gate'; onChange(); };
   /**
    * Opens another of the user's gates (the server session keeps the open gate; App then shows it).
    *
@@ -129,7 +131,7 @@ export function GateApp({ session, gate, onChange }: GateAppProps) {
   const relays = trackerRelays(trackerOf(prefs));
 
   const directory = (kind: 'residents' | 'vendors') => (
-    <Directory key={kind} kind={kind} account={gate.siteName} list={residents} tx={data?.transactions?.rows ?? null} highlight={highlight}
+    <Directory key={kind} kind={kind} gatePhone={gate.phoneNumber} adminPhone={prefs.adminPhone || ''} account={gate.siteName} list={residents} tx={data?.transactions?.rows ?? null} highlight={highlight}
       devices={prefs.deviceAssociation || DEFAULT_DEVICE_ASSOCIATION} features={features} snaps={snaps} onOpenSnap={setViewing}
       gapi={gapi} onReload={loadData} />
   );
@@ -164,12 +166,17 @@ export function GateApp({ session, gate, onChange }: GateAppProps) {
   const afterReset = async () => { await loadData(); setPageKey((key) => key + 1); };
   const openGateSheet = () => { setMenu(false); setGateSheet(true); };
 
+  const hasPortalUnit = Boolean(
+    prefs.residentPortal?.enabled
+    && residents?.rows?.some((r) => r.portalEnabled && r.portalUsername === session.user),
+  ) || Boolean(session.hasPortalUnit);
+
   const sidebarItems = (
     <SidebarItems gate={gate} user={session.user} page={nav} phone={phone} elevators={features.elevators} job={job}
-      progressShown={dock !== 'closed'} gapi={gapi} readOnly={readOnly} isAdmin={isAdmin} workingCopy={workingCopy} hasWorkingCopy={Boolean(residents)} onGo={go}
+      progressShown={dock !== 'closed'} gapi={gapi} readOnly={readOnly} isAdmin={isAdmin} workingCopy={workingCopy} hasWorkingCopy={Boolean(residents)} draft={draft} onGo={go}
       onOpenSearch={() => { setMenu(false); setQuickJump(true); }}
       onSwitchGate={switchGate} onAllGates={allGates} onPull={pull} onShowProgress={() => setDock('open')} onReset={afterReset}
-      onJobStarted={jobStarted} onNotify={setActionInfo} onSignOut={signOut} />
+      onJobStarted={jobStarted} onNotify={setActionInfo} onOpenPortal={hasPortalUnit ? onOpenPortal : undefined} onSignOut={signOut} />
   );
 
   return (
@@ -179,40 +186,49 @@ export function GateApp({ session, gate, onChange }: GateAppProps) {
         <PhoneTopBar gateName={gateLabel(gate)} workingCopy={workingCopy} job={job} hasCamera={Boolean(cameras)} onOpenGate={openGateSheet}
           onShowProgress={() => setDock('open')} />
       )}
-      {phone ? <PhoneMenu open={menu} onOpenChange={setMenu}>{sidebarItems}</PhoneMenu> : <aside className="sidebar" ref={sidebar}>{sidebarItems}</aside>}
+      {phone ? <PhoneMenu open={menu} onOpenChange={setMenu}>{sidebarItems}</PhoneMenu> : <aside className="sidebar">{sidebarItems}</aside>}
       <main className="content">
         {readOnly && nav !== 'user' && (
-          <Callout.Root color="gray" mb="4">
-            <Callout.Text>Read only: you can look at everything, pull from the gate and use the cameras. Ask a gate admin to make changes.</Callout.Text>
-          </Callout.Root>
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Read only: you can look at everything, pull from the gate and use the cameras. Ask a gate admin to make changes.
+          </Alert>
         )}
         {gate.role === 'editor' && nav !== 'user' && (
-          <Callout.Root color="blue" mb="4">
-            <Callout.Text>Editor access: your edits save to the working copy. Ask a gate admin to review and click <strong>Send to gate</strong>.</Callout.Text>
-          </Callout.Root>
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Editor access: your edits save to the working copy. Ask a gate admin to review and click <strong>Send to gate</strong>.
+          </Alert>
         )}
-        {[error, loadError].filter(Boolean).map((text) => <Callout.Root key={text} color="red" mb="4"><Callout.Text>{text}</Callout.Text></Callout.Root>)}
+        {[error, loadError].filter(Boolean).map((text) => <Alert key={text} severity="error" sx={{ mb: 2 }}>{text}</Alert>)}
         {actionInfo && (
-          <Callout.Root color="blue" mb="4">
-            <Flex align="center" gap="3"><Callout.Text>{actionInfo}</Callout.Text><Flex flexGrow="1" />
-              <Button size="1" variant="ghost" color="gray" aria-label="Dismiss" onClick={() => setActionInfo('')}>✕</Button></Flex>
-          </Callout.Root>
+          <Alert
+            severity="info"
+            sx={{ mb: 2 }}
+            action={
+              <IconButton size="small" color="inherit" aria-label="Dismiss" onClick={() => setActionInfo('')}>
+                <CloseIcon fontSize="small" />
+              </IconButton>
+            }
+          >
+            {actionInfo}
+          </Alert>
         )}
         <GateRoleContext.Provider value={gate.role}>
           <ReadOnlyContext.Provider value={readOnly}>
             <WorkingCopySavedContext.Provider value={loadData}>
-              {((readOnly && EDIT_PAGES.includes(nav)) || (!isAdmin && ADMIN_ONLY_PAGES.includes(nav)))
-                ? <fieldset disabled className="readonly-page">{page}</fieldset> : page}
+              <DraftActionsContext.Provider value={setDraft}>
+                {((readOnly && EDIT_PAGES.includes(nav)) || (!isAdmin && ADMIN_ONLY_PAGES.includes(nav)))
+                  ? <fieldset disabled className="readonly-page">{page}</fieldset> : page}
+              </DraftActionsContext.Provider>
             </WorkingCopySavedContext.Provider>
           </ReadOnlyContext.Provider>
         </GateRoleContext.Provider>
       </main>
       {phone && (
         <>
-          <PhoneTabBar page={nav} menuOpen={menu} gateOpen={gateSheet} running={running} onGo={go} onOpenGate={openGateSheet}
+          <PhoneTabBar page={nav} menuOpen={menu} gateOpen={gateSheet} running={running} unsavedCount={draft?.unsaved ?? 0} onGo={go} onOpenGate={openGateSheet}
             onOpenMore={() => { setGateSheet(false); setMenu(true); }} />
           <GateSheet open={gateSheet} onOpenChange={setGateSheet} gapi={gapi} job={job} readOnly={readOnly} isAdmin={isAdmin} workingCopy={workingCopy}
-            hasWorkingCopy={Boolean(residents)} onPull={pull} onShowProgress={() => setDock('open')} onLiveRelays={() => go('relays')}
+            hasWorkingCopy={Boolean(residents)} draft={draft} onPull={pull} onShowProgress={() => setDock('open')} onLiveRelays={() => go('relays')}
             onReset={afterReset} onJobStarted={jobStarted} onNotify={setActionInfo} />
         </>
       )}

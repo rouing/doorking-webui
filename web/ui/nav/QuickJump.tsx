@@ -4,8 +4,11 @@
  * Global Cmd/Ctrl+K quick-jump search dialog for the open gate: instant search across residents, vendors, cards,
  * entry codes, phone numbers, notes, recent transactions, and pages.
  */
-import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
-import { Badge, Box, Dialog, Flex, Text, TextField } from '@radix-ui/themes';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  Box, Chip, Dialog, DialogContent, DialogTitle, IconButton, List, ListItemButton, ListItemText, TextField, Typography,
+} from '@mui/material';
+import CloseIcon from '@mui/icons-material/Close';
 import type { ResidentRow, TransactionRow } from '../../../src/types.ts';
 import { useBackLayer } from '../back.ts';
 import type { NavKey } from './pages.ts';
@@ -22,10 +25,10 @@ interface QuickJumpProps {
   onOpenTransaction: (transaction: TransactionRow) => void;
 }
 
-const KIND_BADGE: Record<QuickJumpHit['kind'], { label: string; color: 'blue' | 'amber' | 'gray' }> = {
-  resident: { label: 'Directory', color: 'blue' },
-  transaction: { label: 'Activity', color: 'amber' },
-  page: { label: 'Page', color: 'gray' },
+const KIND_BADGE: Record<QuickJumpHit['kind'], { label: string; color: 'primary' | 'warning' | 'default' }> = {
+  resident: { label: 'Directory', color: 'primary' },
+  transaction: { label: 'Activity', color: 'warning' },
+  page: { label: 'Page', color: 'default' },
 };
 
 /**
@@ -47,6 +50,8 @@ export function QuickJump({
 }: QuickJumpProps) {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(0);
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const scrollOnSelect = useRef(false);
 
   useBackLayer(open, () => onOpenChange(false));
 
@@ -72,6 +77,12 @@ export function QuickJump({
 
   useEffect(() => { setSelected(0); }, [query]);
 
+  useEffect(() => {
+    if (!scrollOnSelect.current) return;
+    scrollOnSelect.current = false;
+    itemRefs.current[selected]?.scrollIntoView({ block: 'nearest' });
+  }, [selected]);
+
   const choose = (hit: QuickJumpHit) => {
     onOpenChange(false);
     if (hit.kind === 'page') onGoPage(hit.page);
@@ -81,46 +92,72 @@ export function QuickJump({
 
   const handleKeyDown = (event: KeyboardEvent) => {
     if (!hits.length) return;
-    if (event.key === 'ArrowDown') { event.preventDefault(); setSelected((current) => (current + 1) % hits.length); }
-    else if (event.key === 'ArrowUp') { event.preventDefault(); setSelected((current) => (current - 1 + hits.length) % hits.length); }
-    else if (event.key === 'Enter') { event.preventDefault(); choose(hits[Math.min(selected, hits.length - 1)]); }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      scrollOnSelect.current = true;
+      setSelected((current) => (current + 1) % hits.length);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      scrollOnSelect.current = true;
+      setSelected((current) => (current - 1 + hits.length) % hits.length);
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      choose(hits[Math.min(selected, hits.length - 1)]);
+    }
   };
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Content maxWidth="560px" aria-describedby={undefined} onKeyDown={handleKeyDown}>
-        <Dialog.Title size="3" mb="2">Quick jump</Dialog.Title>
-        <TextField.Root autoFocus size="2" placeholder="Search residents, cards, entry codes, phones, notes, or pages…"
-          value={query} onChange={(event) => setQuery(event.target.value)} />
-        <Box mt="3" style={{ maxHeight: 360, overflowY: 'auto' }}>
+    <Dialog open={open} onClose={() => onOpenChange(false)} maxWidth="sm" fullWidth onKeyDown={handleKeyDown}>
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', pb: 1 }}>
+        Quick jump
+        <IconButton size="small" aria-label="Close" onClick={() => onOpenChange(false)}>
+          <CloseIcon fontSize="small" />
+        </IconButton>
+      </DialogTitle>
+      <DialogContent sx={{ pt: '4px !important' }}>
+        <TextField
+          autoFocus
+          fullWidth
+          placeholder="Search residents, cards, entry codes, phones, notes, or pages…"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          slotProps={{ htmlInput: { 'aria-label': 'Search residents, cards, entry codes, phones, notes, or pages' } }}
+        />
+        <Box sx={{ mt: 1.5, maxHeight: 360, overflowY: 'auto' }}>
           {hits.length === 0 ? (
-            <Text size="2" color="gray">No matches.</Text>
+            <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>No matches.</Typography>
           ) : (
-            <Flex direction="column" gap="1">
+            <List dense role="listbox" aria-label="Search results" disablePadding>
               {hits.map((hit, index) => {
                 const active = index === selected;
                 const badge = KIND_BADGE[hit.kind];
                 return (
-                  <Flex key={hit.id} align="center" justify="between" gap="2" px="2" py="2"
+                  <ListItemButton
+                    key={hit.id}
+                    ref={(el) => { itemRefs.current[index] = el; }}
+                    role="option"
+                    aria-selected={active}
+                    selected={active}
                     onMouseEnter={() => setSelected(index)}
                     onClick={() => choose(hit)}
-                    style={{
-                      cursor: 'pointer',
-                      borderRadius: 'var(--radius-2)',
-                      background: active ? 'var(--accent-a4)' : undefined,
-                    }}>
-                    <Flex direction="column" style={{ minWidth: 0 }}>
-                      <Text size="2" weight="medium" truncate>{hit.title}</Text>
-                      <Text size="1" color="gray" truncate>{hit.subtitle}</Text>
-                    </Flex>
-                    <Badge size="1" color={badge.color}>{badge.label}</Badge>
-                  </Flex>
+                    sx={{ borderRadius: 1.5, gap: 1.5 }}
+                  >
+                    <ListItemText
+                      primary={hit.title}
+                      secondary={hit.subtitle}
+                      slotProps={{
+                        primary: { variant: 'body2', noWrap: true, sx: { fontWeight: 500 } },
+                        secondary: { variant: 'caption', noWrap: true },
+                      }}
+                    />
+                    <Chip size="small" label={badge.label} color={badge.color} variant="outlined" sx={{ flexShrink: 0 }} />
+                  </ListItemButton>
                 );
               })}
-            </Flex>
+            </List>
           )}
         </Box>
-      </Dialog.Content>
-    </Dialog.Root>
+      </DialogContent>
+    </Dialog>
   );
 }

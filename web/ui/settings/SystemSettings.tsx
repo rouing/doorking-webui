@@ -1,5 +1,18 @@
-import { useState } from 'react';
-import { Button, Card, Flex, Heading, Link, Text } from '@radix-ui/themes';
+import { useState, type ReactNode } from 'react';
+import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
+  Alert,
+  Button,
+  Card,
+  CardContent,
+  Link,
+  Stack,
+  Switch,
+  Typography,
+} from '@mui/material';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import type { CameraSettings, GateConfig as Config, GatePrefs, ResidentsReply } from '../../../src/types.ts';
 import { errorText, gateUrl, useIsAdmin, useReadOnly, type GateApi } from '../api.ts';
 import { useConfirm } from '../Confirm.tsx';
@@ -9,7 +22,8 @@ import { GateConfig } from './GateConfig.tsx';
 import { GateSettingsEditor } from './GateSettingsEditor.tsx';
 import { DeviceAssociation } from './LocalPrefs.tsx';
 import { useGateSettings } from './useGateSettings.ts';
-import { GateLoginCard, GateUsersCard, ApiKeysCard } from './GateAccess.tsx';
+import { AddGateUserCard, ApiKeysCard, GateLoginCard, GateUsersCard } from './GateAccess.tsx';
+import { LoginAuditCard, ResidentPortalSettingsCard } from './PortalAdminCards.tsx';
 import { WebhooksCard } from './Webhooks.tsx';
 
 interface DeleteGateDataProps {
@@ -31,31 +45,47 @@ interface DeleteGateDataProps {
 function DeleteGateData({ phone, gapi, onDeleted }: DeleteGateDataProps) {
   const [dialog, confirm] = useConfirm();
   const [info, setInfo] = useState('');
+  const [error, setError] = useState('');
   const remove = async () => {
     if (!await confirm({ title: `Delete everything stored about gate ${phone}?`, action: 'Delete all gate data', color: 'red',
       body: 'This permanently deletes, for every account on this computer: the gate and everyone\'s access to it (with its DKS login and master code), '
         + 'gate configuration, relay names, Device association, notes, the transaction history, History, scheduled transfers, '
         + 'camera settings, the pulled files, the working copy with any unsent changes, and every camera picture and video. '
         + 'It can\'t be undone (only from a backup). Nothing on the gate itself changes.' })) return;
+    setError('');
     setInfo('Deleting…');
     try {
       const reply = await gapi<{ filesError?: string }>('POST', '/delete-data', { confirm: true });
-      if (reply.filesError) { setInfo(`Database data deleted, but some files could not be deleted: ${reply.filesError}`); return; }
+      if (reply.filesError) {
+        setInfo('');
+        setError(`Database data deleted, but some files could not be deleted: ${reply.filesError}`);
+        return;
+      }
       onDeleted();
-    } catch (err) { setInfo(`Not deleted: ${errorText(err)}`); }
+    } catch (err) {
+      setInfo('');
+      setError(`Not deleted: ${errorText(err)}`);
+    }
   };
   return (
     <Card>
       {dialog}
-      <Flex direction="column" gap="3">
-        <Heading size="3" color="red">Delete stored gate data<HelpTip of="deleteGateData" /></Heading>
-        <Text size="2" color="gray">
-          Removes everything this app has stored about this gate, for <strong>every account</strong> on this computer, and takes it off
-          every gate list. Use it when the gate is no longer managed here. Nothing on the gate changes; to manage it again, add it and pull.
-        </Text>
-        <Flex gap="3" align="center" wrap="wrap"><Button color="red" onClick={remove}>Delete all data for this gate…</Button>
-          <Text size="2" color="gray">{info}</Text></Flex>
-      </Flex>
+      <CardContent>
+        <Stack spacing={2}>
+          <Typography variant="h6" component="h2" color="error" sx={{ display: 'flex', alignItems: 'center' }}>
+            Delete stored gate data<HelpTip of="deleteGateData" />
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Removes everything this app has stored about this gate, for <strong>every account</strong> on this computer, and takes it off
+            every gate list. Use it when the gate is no longer managed here. Nothing on the gate changes; to manage it again, add it and pull.
+          </Typography>
+          <Stack direction="row" spacing={2} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+            <Button variant="contained" color="error" onClick={remove}>Delete all data for this gate…</Button>
+            {info && <Typography variant="body2" color="text.secondary">{info}</Typography>}
+          </Stack>
+          {error && <Alert severity="error">{error}</Alert>}
+        </Stack>
+      </CardContent>
     </Card>
   );
 }
@@ -76,20 +106,92 @@ interface WorkingCopyFilesProps {
 function WorkingCopyFiles({ phone, available }: WorkingCopyFilesProps) {
   return (
     <Card>
-      <Flex direction="column" gap="3">
-        <Heading size="3">Working copy files</Heading>
-        <Text size="2" color="gray">
-          {available ? 'Download the working copy\'s files, with every change saved to it.' : 'No working copy yet. Pull residents from the gate.'}
-        </Text>
-        {available && (
-          <Flex gap="3" wrap="wrap">
-            {['names.bin', 'names.map', 'phone.bin', 'cards.bin'].map((file) => (
-              <Link key={file} size="2" href={gateUrl(phone, `/files/${file}`)} download={file}>{file}</Link>
-            ))}
-          </Flex>
-        )}
-      </Flex>
+      <CardContent>
+        <Stack spacing={2}>
+          <Typography variant="h6" component="h2">Working copy files</Typography>
+          <Typography variant="body2" color="text.secondary">
+            {available ? 'Download the working copy\'s files, with every change saved to it.' : 'No working copy yet. Pull residents from the gate.'}
+          </Typography>
+          {available && (
+            <Stack direction="row" spacing={2} useFlexGap sx={{ flexWrap: 'wrap' }}>
+              {['names.bin', 'names.map', 'phone.bin', 'cards.bin'].map((file) => (
+                <Link key={file} variant="body2" underline="hover" href={gateUrl(phone, `/files/${file}`)} download={file}>{file}</Link>
+              ))}
+            </Stack>
+          )}
+        </Stack>
+      </CardContent>
     </Card>
+  );
+}
+
+interface StrongAdminPolicyCardProps {
+  prefs: GatePrefs;
+  gapi: GateApi;
+  onSaved: () => Promise<void>;
+}
+
+function StrongAdminPolicyCard({ prefs, gapi, onSaved }: StrongAdminPolicyCardProps) {
+  const [busy, setBusy] = useState(false);
+  const [info, setInfo] = useState('');
+  const [error, setError] = useState('');
+  const enabled = Boolean(prefs.requireStrongAdmin);
+  const toggle = async (next: boolean) => {
+    setBusy(true);
+    setInfo('');
+    setError('');
+    try {
+      await gapi('PUT', '/prefs', { requireStrongAdmin: next });
+      await onSaved();
+      setInfo(next ? 'Strong confirmation is now required for all admin actions on this gate.' : 'Standard step-up rules restored.');
+    } catch (err) {
+      setError(`Not saved: ${errorText(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card>
+      <CardContent>
+        <Stack spacing={1.5}>
+          <Typography variant="h6" component="h2">Admin security</Typography>
+          <Stack direction="row" spacing={2} useFlexGap sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+            <Stack spacing={0.5} sx={{ flex: '1 1 20rem' }}>
+              <Typography variant="body2" sx={{ fontWeight: 500 }}>Require strong sign-in for all admin actions</Typography>
+              <Typography variant="body2" color="text.secondary">
+                When enabled, every admin change on this gate requires a recent passkey confirmation or MFA single sign-in
+                (within the server&apos;s step-up window). API keys are unaffected.
+              </Typography>
+            </Stack>
+            <Switch
+              checked={enabled}
+              disabled={busy}
+              onChange={(_, checked) => toggle(checked)}
+              slotProps={{ input: { 'aria-label': 'Require strong sign-in for all admin actions' } }}
+            />
+          </Stack>
+          {info && <Typography variant="body2" color="text.secondary">{info}</Typography>}
+          {error && <Alert severity="error">{error}</Alert>}
+        </Stack>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SettingsSection({
+  title, help, defaultExpanded = false, children,
+}: { title: string; help?: string; defaultExpanded?: boolean; children: ReactNode }) {
+  return (
+    <Accordion variant="outlined" defaultExpanded={defaultExpanded} disableGutters>
+      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+        <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 600, display: 'flex', alignItems: 'center' }}>
+          {title}{help && <HelpTip of={help} />}
+        </Typography>
+      </AccordionSummary>
+      <AccordionDetails sx={{ pt: 0 }}>
+        <Stack spacing={2}>{children}</Stack>
+      </AccordionDetails>
+    </Accordion>
   );
 }
 
@@ -130,6 +232,7 @@ export function SystemSettings({ phone, gapi, prefs, defaults, list, cameras, us
   const settings = useGateSettings(gapi);
   const readOnly = useReadOnly();
   const isAdmin = useIsAdmin();
+  const [usersRefresh, setUsersRefresh] = useState(0);
   const reloadAll = async () => { await onReload(); await settings.load(); };
   const shared = (
     <>
@@ -137,45 +240,68 @@ export function SystemSettings({ phone, gapi, prefs, defaults, list, cameras, us
         gate={{ memory: settings.field('systemMemory')?.gate, chips: settings.field('memoryChips')?.gate }}
         onSaved={async () => { onSessionChange(); await reloadAll(); }} />
       <Card>
-        <Flex direction="column" gap="3">
-          <Heading size="3">Gate settings</Heading>
-          <GateSettingsEditor settings={settings} view="prefs" gapi={gapi} onReload={onReload} />
-        </Flex>
+        <CardContent>
+          <Stack spacing={2}>
+            <Typography variant="h6" component="h2">Gate settings</Typography>
+            <GateSettingsEditor settings={settings} view="prefs" gapi={gapi} onReload={onReload} />
+          </Stack>
+        </CardContent>
       </Card>
     </>
   );
   if (readOnly) {
     return (
-      <Flex direction="column" gap="4">
-        <Heading>System Settings</Heading>
-        <fieldset disabled className="readonly-page"><Flex direction="column" gap="4">
-          {shared}
-          <DeviceAssociation key={JSON.stringify(prefs.deviceAssociation)} prefs={prefs} gapi={gapi} onSaved={onReload} />
-        </Flex></fieldset>
-      </Flex>
+      <Stack spacing={3}>
+        <Typography variant="h5" component="h1">System Settings</Typography>
+        <fieldset disabled className="readonly-page">
+          <Stack spacing={3}>
+            {shared}
+            <DeviceAssociation key={JSON.stringify(prefs.deviceAssociation)} prefs={prefs} gapi={gapi} onSaved={onReload} />
+          </Stack>
+        </fieldset>
+      </Stack>
     );
   }
   if (!isAdmin) {
     return (
-      <Flex direction="column" gap="4">
-        <Heading>System Settings</Heading>
+      <Stack spacing={3}>
+        <Typography variant="h5" component="h1">System Settings</Typography>
         {shared}
         <DeviceAssociation key={JSON.stringify(prefs.deviceAssociation)} prefs={prefs} gapi={gapi} onSaved={onReload} />
-      </Flex>
+      </Stack>
     );
   }
   return (
-    <Flex direction="column" gap="4">
-      <Heading>System Settings</Heading>
-      <GateLoginCard gapi={gapi} onJobStarted={onJobStarted} />
-      <GateUsersCard gapi={gapi} me={user} emailEnabled={emailEnabled} onSessionChange={onSessionChange} />
-      <ApiKeysCard phone={phone} gapi={gapi} />
-      <WebhooksCard gapi={gapi} />
-      {shared}
-      <WorkingCopyFiles phone={phone} available={Boolean(settings.reply)} />
-      <DeviceAssociation key={JSON.stringify(prefs.deviceAssociation)} prefs={prefs} gapi={gapi} onSaved={onReload} />
-      <CameraForm key={JSON.stringify(cameras)} settings={cameras} phone={phone} gapi={gapi} onSaved={onReload} />
-      <DeleteGateData phone={phone} gapi={gapi} onDeleted={onSessionChange} />
-    </Flex>
+    <Stack spacing={2}>
+      <Typography variant="h5" component="h1" sx={{ mb: 1.5 }}>System Settings</Typography>
+      <SettingsSection title="Gate login" help="dksLogin" defaultExpanded>
+        <GateLoginCard gapi={gapi} onJobStarted={onJobStarted} />
+      </SettingsSection>
+      <GateUsersCard gapi={gapi} me={user} emailEnabled={emailEnabled} refreshKey={usersRefresh} onSessionChange={onSessionChange} />
+      <SettingsSection title="Create or share a gate account">
+        <AddGateUserCard gapi={gapi} emailEnabled={emailEnabled} onChanged={() => setUsersRefresh((n) => n + 1)} />
+      </SettingsSection>
+      <SettingsSection title="Security & Resident Portal">
+        <StrongAdminPolicyCard prefs={prefs} gapi={gapi} onSaved={onReload} />
+        <ResidentPortalSettingsCard key={JSON.stringify(prefs.residentPortal)} prefs={prefs} gapi={gapi}
+          onSaved={async () => { await onReload(); onSessionChange(); }} />
+      </SettingsSection>
+      <LoginAuditCard gapi={gapi} />
+      <SettingsSection title="Integrations (API keys & Webhooks)">
+        <ApiKeysCard phone={phone} gapi={gapi} />
+        <WebhooksCard gapi={gapi} />
+      </SettingsSection>
+      <SettingsSection title="Gate configuration & board settings">
+        {shared}
+        <WorkingCopyFiles phone={phone} available={Boolean(settings.reply)} />
+        <DeviceAssociation key={JSON.stringify(prefs.deviceAssociation)} prefs={prefs} gapi={gapi} onSaved={onReload} />
+      </SettingsSection>
+      <SettingsSection title="Cameras">
+        <CameraForm key={JSON.stringify(cameras)} settings={cameras} phone={phone} gapi={gapi} onSaved={onReload} />
+      </SettingsSection>
+      <SettingsSection title="Danger zone">
+        <DeleteGateData phone={phone} gapi={gapi} onDeleted={onSessionChange} />
+      </SettingsSection>
+    </Stack>
   );
 }

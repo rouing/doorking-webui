@@ -17,9 +17,9 @@ Open work, unverified hardware tests, planned 10x features, and backlog items.
 - [ ] **#2 Multi-gate property fleet sync:** group gates into a Property, propagate resident/card/code changes across all panels, show fleet drift, and queue sends across gates.
 - [ ] **#3 Property roster sync & Move-In / Move-Out turnover wizard:** diff external HOA/property CSVs against `gate_residents`/`gate_cards` and guide unit turnover (revoke outgoing tenant cards/codes, provision incoming).
 - [ ] **#4 Local vision / ALPR sidecar on saved camera snapshots:** opt-in container indexing license plates, tailgating, and multi-plate card sharing linked to `tx_history`.
-- [ ] **#5 Resident self-service portal & "Buzz Me In" PWA:** `resident` role scoped to one directory code for momentary opens, own-unit history/snapshots, and change requests.
+- [x] **#5 Resident self-service portal & "Buzz Me In" PWA:** `resident` role with email-only login (password or passkey, no SSO), multi-gate & existing-email binding, per-resident email + enable checkbox with full zero-residue turnover wipe (clears password, passkeys, push subs, sessions), fail-safe momentary "Buzz Me In" backed by `relay_timers` + live `%` busy status, synthetic `Portal Open` events in `portal_events` (keeping `tx_history` pure), daily-capped entry-code reroll with scheduled-send ETA & lock-screen-safe Push/Email notifications, own-unit activity/snapshots + **Report as suspicious** admin alerts, self-service change requests queue, and admin **Login audit log**.
 - [ ] **#7 Gate health & security anomaly alerts:** alert via email/push/webhook on stuck hold-open, repeated denied attempts (with snapshot), consecutive pull failures / daytime silence, buffer wrap gaps, and out-of-band gate edits.
-- [ ] **#13 One-click safe entry code generator & copy welcome message:** generate non-colliding random 4-digit codes in `ResidentForm` and copy formatted resident keypad instructions.
+- [x] **#13 One-click safe entry code generator, welcome message & pre-filled `ResidentInstructions.pdf`:** generate non-colliding random 4-digit codes in `ResidentForm` (`generateSafeEntryCode`), copy formatted resident keypad instructions (`buildWelcomeMessage`), and download an auto-filled copy of `docs/ResidentInstructions.pdf` (`POST /residents/instructions.pdf` via `pdf-lib` with admin phone, Relay 0 grant-access digit, resident name, directory code, and 4-digit entry code).
 - [ ] **#16 Backup health indicator & one-click encrypted backup export:** `node cli.ts backup` + UI status warning when backups are overdue (extends automated PostgreSQL backups below).
 
 ## Security & tests
@@ -43,12 +43,12 @@ Open work, unverified hardware tests, planned 10x features, and backlog items.
 - [ ] **Dahua video mode edge cases:** test the gap-skip / resume path and browser H.265 playback across a full app snapshot run.
 
 ## Other platform roadmap items
-- [ ] **Web Push notifications** to installed apps (PWA) for failed sends and scheduled transfers (VAPID keys in `config.json`, subscription table, `push` handler in service worker via `injectManifest`, toggle in User Settings).
-- [ ] **Single sign-on enhancements:**
-  - Count strong SSO logins toward step-up (requires provider `amr`/`acr` or Entra `acrs` + `auth_time`)
-  - Optional per-gate "strong sign-in required for admins"
-  - Optional Entra / Google group-to-gate-role mapping and an SSO badge in Gate users
-  - Configure and test against a real Entra ID or Google Workspace tenant
+- [x] **Web Push notifications** to installed apps (PWA) for failed sends, scheduled transfers, and timed relay releases (`push` VAPID config or auto-generated encrypted keys in `meta`, `push_subscriptions` table, `sw.ts` via `injectManifest`, Push notifications card in User Settings, `node cli.ts vapid-keys`).
+- [x] **Single sign-on enhancements (code complete):**
+  - [x] Count strong SSO logins toward step-up (`amr` MFA/hardware methods or configured `strongAcrs` + recent `auth_time`, persisted in `user_identities.last_claims`)
+  - [x] Optional per-gate "strong sign-in required for admins" (`requireStrongAdmin` gate pref + Admin security toggle in System Settings)
+  - [x] Optional Entra / Google group-to-gate-role mapping (`roleMap` on SSO providers) and an **SSO** badge in Gate users
+  - [ ] Configure and test against a real Entra ID or Google Workspace tenant
 - [ ] **Incremental transaction pulls:** send the last-read 12-byte marker instead of `ZERO_MARKER` so pulls fetch only new events rather than the full 10,000-event buffer.
 - [ ] **Multi-channel live camera view:** handle queued streams on `dahua-p2p` (one stream at a time) so simultaneous viewers don't hit ffmpeg's 45 s open timeout.
 - [ ] **Non-Cellular DKS communication types:** add `comType` option in `gateConfig` (currently hardcoded to `'DKS Cellular'`).

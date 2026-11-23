@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Badge, Button, Callout, Card, Container, Flex, Grid, Heading, Link, Separator, Text, TextField } from '@radix-ui/themes';
+import { Alert, Box, Button, Chip, Container, Divider, Link, Paper, Stack, TextField, Typography } from '@mui/material';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import type { GateInfo, Job } from '../../src/types.ts';
 import { api, errorText } from './api.ts';
 import { useConfirm } from './Confirm.tsx';
@@ -22,7 +23,7 @@ export const gateLabel = (gate: GateInfo) => gate.siteName || `Gate ${gate.phone
  * @param role - Gate access role (`admin` or `readonly`).
  * @returns Rendered React element.
  */
-export const roleLabel = (role: GateInfo['role']) => (role === 'admin' ? 'Admin' : role === 'editor' ? 'Editor' : 'Read only');
+export const roleLabel = (role: GateInfo['role']) => (role === 'admin' ? 'Admin' : role === 'editor' ? 'Editor' : role === 'resident' ? 'Resident' : 'Read only');
 
 interface AddGateProps {
   session: SignedIn;
@@ -90,48 +91,78 @@ function AddGate({ session, onAdded }: AddGateProps) {
   const running = job && job.state === 'running';
   return (
     <form onSubmit={add} autoComplete="off">
-      <Flex direction="column" gap="3">
-        <Heading size="3">Add a gate</Heading>
-        <Text size="2" color="gray">
+      <Stack spacing={2}>
+        <Typography variant="h6" component="h2">Add a gate</Typography>
+        <Typography variant="body2" color="text.secondary">
           Enter the gate's details. The app signs in to DKS Cloud with the gate's DKS login and pulls the residents; only when that works is the
           gate added, with you as its admin. If the gate is already managed here, ask one of its gate admins to add you instead.
-        </Text>
-        <Grid columns={{ initial: '1', sm: '2' }} gap="3">
+        </Typography>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2 }}>
           <Field label="System phone" help="systemPhone">
-            <TextField.Root value={form.phoneNumber} onChange={(event) => set('phoneNumber', event.target.value)} required inputMode="tel" disabled={busy} />
+            <TextField
+              value={form.phoneNumber}
+              onChange={(event) => set('phoneNumber', event.target.value)}
+              required
+              fullWidth
+              slotProps={{ htmlInput: { inputMode: 'tel' } }}
+              disabled={busy}
+            />
           </Field>
           <Field label="Master code" help="gateMasterCode">
-            <TextField.Root type="password" value={form.masterCode} onChange={(event) => set('masterCode', event.target.value)} required inputMode="numeric"
-              maxLength={4} autoComplete="off" disabled={busy} />
+            <TextField
+              type="password"
+              value={form.masterCode}
+              onChange={(event) => set('masterCode', event.target.value)}
+              required
+              fullWidth
+              slotProps={{ htmlInput: { inputMode: 'numeric', maxLength: 4 } }}
+              autoComplete="off"
+              disabled={busy}
+            />
           </Field>
           <Field label="DKS user" help="dksLogin">
-            <TextField.Root value={form.dksUser} onChange={(event) => set('dksUser', event.target.value)} required autoComplete="off" disabled={busy} />
+            <TextField
+              value={form.dksUser}
+              onChange={(event) => set('dksUser', event.target.value)}
+              required
+              fullWidth
+              autoComplete="off"
+              disabled={busy}
+            />
           </Field>
           <Field label="DKS password" help="dksLogin">
-            <TextField.Root type="password" value={form.dksPassword} onChange={(event) => set('dksPassword', event.target.value)} required
-              autoComplete="new-password" disabled={busy} />
+            <TextField
+              type="password"
+              value={form.dksPassword}
+              onChange={(event) => set('dksPassword', event.target.value)}
+              required
+              fullWidth
+              autoComplete="new-password"
+              disabled={busy}
+            />
           </Field>
-        </Grid>
-        <Text size="2" weight="medium">Gate configuration (must match the gate)</Text>
+        </Box>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>Gate configuration (must match the gate)</Typography>
         <ConfigFields config={cfg} onChange={setCfg} disabled={busy} />
-        <Flex gap="3" align="center" wrap="wrap"><Button type="submit" loading={busy}>Add gate</Button></Flex>
-        {error && <Callout.Root color="red"><Callout.Text>{error}</Callout.Text></Callout.Root>}
+        <Stack direction="row" spacing={2} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+          <Button type="submit" variant="contained" loading={busy}>Add gate</Button>
+        </Stack>
+        {error && <Alert severity="error">{error}</Alert>}
         {job && (
-          <Callout.Root color={running ? 'blue' : job.state === 'done' ? 'green' : 'red'}>
-            <Callout.Text>
-              {running ? `Checking gate ${job.phoneNumber}: ${job.log.length ? job.log[job.log.length - 1].replace(/^\S+\s+\S+\s+/, '') : 'starting…'}`
-                : job.state === 'done' ? `Gate ${job.phoneNumber} added. You are its admin.`
-                  : `Gate ${job.phoneNumber} was not added: ${job.error || 'the check failed'}`}
-            </Callout.Text>
-          </Callout.Root>
+          <Alert severity={running ? 'info' : job.state === 'done' ? 'success' : 'error'}>
+            {running ? `Checking gate ${job.phoneNumber}: ${job.log.length ? job.log[job.log.length - 1].replace(/^\S+\s+\S+\s+/, '') : 'starting…'}`
+              : job.state === 'done' ? `Gate ${job.phoneNumber} added. You are its admin.`
+                : `Gate ${job.phoneNumber} was not added: ${job.error || 'the check failed'}`}
+          </Alert>
         )}
-      </Flex>
+      </Stack>
     </form>
   );
 }
 
 interface GatesProps {
   session: SignedIn;
+  autoOpen?: boolean;
   onChange: () => void;
 }
 
@@ -140,17 +171,25 @@ interface GatesProps {
  *
  * @param props - Component props.
  * @param props.session - Authenticated user or API-key session.
+ * @param [props.autoOpen] - Automatically open the single gate for resident-only users right after sign-in.
  * @param props.onChange - Callback invoked when the value changes.
  * @returns Rendered React element.
  */
-export function Gates({ session, onChange }: GatesProps) {
+export function Gates({ session, autoOpen = false, onChange }: GatesProps) {
   const [gates, setGates] = useState<GateInfo[] | null>(null);
   const [error, setError] = useState('');
   const [settings, setSettings] = useState(false);
+  const autoOpened = useRef(false);
   const [dialog, confirm] = useConfirm();
 
   const load = () => api<{ gates: GateInfo[] }>('GET', '/api/gates').then((reply) => setGates(reply.gates), (err) => setError(errorText(err)));
   useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    if (!autoOpen || autoOpened.current || !session.isResidentOnly || !gates || gates.length !== 1) return;
+    autoOpened.current = true;
+    api('PUT', '/api/session/gate', { phoneNumber: gates[0].phoneNumber }).then(onChange, (err) => setError(errorText(err)));
+  }, [autoOpen, session.isResidentOnly, gates, onChange]);
 
   const run = async (fn: () => Promise<unknown>) => {
     setError('');
@@ -169,39 +208,68 @@ export function Gates({ session, onChange }: GatesProps) {
   const signOut = () => run(async () => { await api('DELETE', '/api/session'); onChange(); });
 
   return (
-    <Container size="3" p={{ initial: '3', sm: '6' }} pt={{ initial: '5', sm: '6' }}>
+    <Container maxWidth="md" sx={{ px: { xs: 2, sm: 3 }, pt: { xs: 3, sm: 5 }, pb: 4 }}>
       {dialog}
-      <Card size={{ initial: '2', sm: '3' }}>
-        <Flex align="center" gap="3" mb="4" wrap="wrap">
-          <Heading>{settings ? 'User Settings' : 'Your gates'}</Heading>
-          <Text color="gray">{session.user}</Text>
-          <Flex flexGrow="1" />
-          <Link href="/help" target="_blank" rel="noopener" size="2">Help</Link>
-          <Button variant="soft" color="gray" onClick={() => setSettings(!settings)}>{settings ? 'Back to gates' : 'User settings'}</Button>
-          <Button variant="soft" color="gray" onClick={signOut}>Sign out</Button>
-        </Flex>
+      <Paper variant="outlined" sx={{
+        p: { xs: 0, sm: 3 },
+        border: { xs: 0, sm: 1 },
+        borderColor: 'divider',
+        bgcolor: { xs: 'transparent', sm: 'background.paper' },
+      }}>
+        <Stack direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap', mb: 3 }}>
+          <Typography variant="h5" component="h1">{settings ? 'User Settings' : 'Your gates'}</Typography>
+          <Typography variant="body2" color="text.secondary">{session.user}</Typography>
+          <Box sx={{ flexGrow: 1 }} />
+          <Link href="/help" target="_blank" rel="noopener" variant="body2">Help</Link>
+          <Button variant="outlined" color="inherit" size="small" onClick={() => setSettings(!settings)}>
+            {settings ? 'Back to gates' : 'User settings'}
+          </Button>
+          <Button variant="outlined" color="inherit" size="small" onClick={signOut}>Sign out</Button>
+        </Stack>
         {settings ? <UserSettings session={session} onSaved={onChange} /> : (
           <>
-            {gates && !gates.length && <Text color="gray">No gates yet. Add one below, or ask a gate admin to add you to theirs.</Text>}
-            <Flex direction="column" gap="2">
+            {gates && !gates.length && (
+              <Typography color="text.secondary">No gates yet. Add one below, or ask a gate admin to add you to theirs.</Typography>
+            )}
+            <Stack spacing={1.5}>
               {(gates || []).map((gate) => (
-                <Flex key={gate.phoneNumber} align="center" gap="3" wrap="wrap">
-                  <Flex direction="column" flexGrow="1" minWidth="10rem">
-                    <Text weight="medium">{gateLabel(gate)}</Text>
-                    <Text size="1" color="gray">{gate.phoneNumber}</Text>
-                  </Flex>
-                  <Badge color={gate.role === 'admin' ? 'blue' : gate.role === 'editor' ? 'amber' : 'gray'}>{roleLabel(gate.role)}</Badge>
-                  <Button onClick={() => open(gate)}>Open</Button>
-                  <Button variant="soft" color="gray" onClick={() => leave(gate)}>Leave</Button>
-                </Flex>
+                <Stack key={gate.phoneNumber} direction={{ xs: 'column', sm: 'row' }} spacing={0.75} sx={{ alignItems: { xs: 'stretch', sm: 'stretch' } }}>
+                  <button type="button" className="gate-tile" style={{ flex: 1, minWidth: 0 }} onClick={() => open(gate)}>
+                    <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography variant="subtitle1" sx={{ fontWeight: 700, overflowWrap: 'anywhere' }}>{gateLabel(gate)}</Typography>
+                        <Typography variant="body2" color="text.secondary">{gate.phoneNumber}</Typography>
+                      </Box>
+                      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexShrink: 0 }}>
+                        <Chip
+                          size="small"
+                          label={roleLabel(gate.role)}
+                          color={gate.role === 'admin' ? 'primary' : gate.role === 'editor' ? 'warning' : gate.role === 'resident' ? 'success' : 'default'}
+                          variant="outlined"
+                        />
+                        <ChevronRightIcon color="action" aria-hidden="true" />
+                      </Stack>
+                    </Stack>
+                  </button>
+                  {gate.role !== 'resident' && (
+                    <Button variant="text" color="error" size="small"
+                      sx={{ alignSelf: { xs: 'flex-end', sm: 'center' }, flexShrink: 0 }} onClick={() => leave(gate)}>
+                      Leave
+                    </Button>
+                  )}
+                </Stack>
               ))}
-            </Flex>
-            {error && <Callout.Root color="red" mt="3"><Callout.Text>{error}</Callout.Text></Callout.Root>}
-            <Separator size="4" my="4" />
-            <AddGate session={session} onAdded={load} />
+            </Stack>
+            {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
+            {!session.isResidentOnly && (
+              <>
+                <Divider sx={{ my: 3 }} />
+                <AddGate session={session} onAdded={load} />
+              </>
+            )}
           </>
         )}
-      </Card>
+      </Paper>
     </Container>
   );
 }

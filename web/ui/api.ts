@@ -3,7 +3,7 @@
  *
  * Calls to the server's REST API (see web/server.ts). Errors carry the server's { error } message.
  */
-import { createContext, useContext } from 'react';
+import { createContext, useContext, useEffect, useRef } from 'react';
 import type { GateRole } from '../../src/types.ts';
 
 export class ApiError extends Error {
@@ -65,11 +65,11 @@ async function call<T>(method: string, url: string, body: unknown, retried: bool
 export type GateApi = <T = unknown>(method: string, sub: string, body?: unknown) => Promise<T>;
 
 /**
- * Requests for one gate: /api/gates/<phone><sub>.
+ * Builds a gate-scoped API URL: `/api/gates/<phone><sub>`.
  *
  * @param phone - Gate system phone number (digits or formatted).
- * @param sub - When `true`, use the recorder sub-stream (lower resolution).
- * @returns Computed result.
+ * @param sub - Path suffix starting with `/` (for example `/residents` or `/snapshots/run`).
+ * @returns Gate-scoped API path.
  */
 export const gateUrl = (phone: string, sub: string) => `/api/gates/${encodeURIComponent(phone)}${sub}`;
 /**
@@ -112,6 +112,44 @@ export const useReadOnly = () => useContext(ReadOnlyContext);
  * gate follow it (GateApp reloads its data).
  */
 export const WorkingCopySavedContext = createContext<() => Promise<void> | void>(() => {});
+
+/** Unsaved working-copy draft controls registered by the active settings page and surfaced in the Gate menu. */
+export interface DraftActions {
+  unsaved: number;
+  blocked?: string;
+  save: () => Promise<void>;
+  discard: () => void;
+}
+
+export const DraftActionsContext = createContext<(actions: DraftActions | null) => void>(() => {});
+
+/**
+ * Registers the current settings page's Save/Discard working-copy actions with the Gate menu (mobile bottom bar
+ * Gate sheet and desktop sidebar Gate connection), clearing them on unmount.
+ */
+export function useDraftActions(actions: DraftActions | null) {
+  const register = useContext(DraftActionsContext);
+  const saveRef = useRef(actions?.save);
+  const discardRef = useRef(actions?.discard);
+  saveRef.current = actions?.save;
+  discardRef.current = actions?.discard;
+  const active = actions !== null;
+  const unsaved = actions?.unsaved ?? 0;
+  const blocked = actions?.blocked;
+  useEffect(() => {
+    if (!active) {
+      register(null);
+      return;
+    }
+    register({
+      unsaved,
+      blocked,
+      save: () => (saveRef.current ? saveRef.current() : Promise.resolve()),
+      discard: () => { discardRef.current?.(); },
+    });
+  }, [register, active, unsaved, blocked]);
+  useEffect(() => () => register(null), [register]);
+}
 
 /**
  * Per-browser settings in localStorage. Never holds a password or master code.

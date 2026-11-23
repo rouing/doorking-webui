@@ -1,5 +1,7 @@
 import { useState, type FormEvent } from 'react';
-import { Button, Callout, Card, Checkbox, Container, Flex, Heading, Link, Text, TextField } from '@radix-ui/themes';
+import {
+  Alert, Button, Checkbox, Container, Divider, FormControlLabel, Link, Paper, Stack, TextField, Typography,
+} from '@mui/material';
 import { browserSupportsWebAuthn, sendSignal, startAuthentication, type AuthenticationResponseJSON } from '@simplewebauthn/browser';
 import type { SsoProviderInfo } from '../../src/types.ts';
 import { api, ApiError, errorText, lsGet, lsSet } from './api.ts';
@@ -94,41 +96,79 @@ export function Login({ onSignedIn, emailEnabled, sso }: LoginProps) {
   }
 
   return (
-    <Container size="1" p={{ initial: '3', sm: '6' }} pt={{ initial: '5', sm: '6' }}>
-      <Card size={{ initial: '2', sm: '3' }}>
-        {forgot ? <><Heading mb="3">Reset your password</Heading><ForgotPassword onBack={() => setForgot(false)} /></> : (
-        <form onSubmit={submit} autoComplete="off">
-          <Flex direction="column" gap="3">
-            <Heading>DoorKing Gate Data</Heading>
-            <Text color="gray">Sign in with the account a gate admin created for you. New here? Read the <Link href="/help" target="_blank" rel="noopener">user guide</Link>.</Text>
-            <label>
-              <Text size="2" weight="medium">Username</Text>
-              <TextField.Root value={user} onChange={(event) => setUser(event.target.value)} required autoComplete="username webauthn" />
-            </label>
-            <Text as="label" size="2">
-              <Flex gap="2" align="center">
-                <Checkbox checked={remember} onCheckedChange={(checked) => setRemember(checked === true)} /> Remember user
-              </Flex>
-            </Text>
-            <label>
-              <Text size="2" weight="medium">Password</Text>
-              <TextField.Root type="password" value={password} onChange={(event) => setPassword(event.target.value)} required
-                autoComplete="current-password" />
-            </label>
-            <Button type="submit" loading={busy}>Sign in</Button>
-            {browserSupportsWebAuthn() && <Button type="button" variant="soft" disabled={busy} onClick={withPasskey}>Sign in with a passkey</Button>}
-            {sso.map((provider) => (
-              <Button key={provider.id} type="button" variant="soft" disabled={busy}
-                onClick={() => { setError(''); startSso('/api/sso/start', { provider: provider.id }).catch((err) => setError(errorText(err))); }}>
-                Sign in with {provider.name}
-              </Button>
-            ))}
-            {emailEnabled && <Link href="#" size="2" onClick={(event) => { event.preventDefault(); setForgot(true); }}>Forgot your password?</Link>}
-            {error && <Callout.Root color="red"><Callout.Text>{error}</Callout.Text></Callout.Root>}
-          </Flex>
-        </form>
+    <Container maxWidth="xs" sx={{ px: { xs: 2, sm: 3 }, pt: { xs: 4, sm: 6 }, pb: 4 }}>
+      <Paper variant="outlined" sx={{ p: { xs: 2.5, sm: 3.5 } }}>
+        {forgot ? (
+          <>
+            <Typography variant="h5" component="h1" sx={{ mb: 2 }}>Reset your password</Typography>
+            <ForgotPassword onBack={() => setForgot(false)} />
+          </>
+        ) : (
+          <form onSubmit={submit} autoComplete="off">
+            <Stack spacing={2}>
+              <Typography variant="h5" component="h1">DoorKing Gate Portal</Typography>
+              <Typography variant="body2" color="text.secondary">
+                <strong>Residents:</strong> sign in with your email and password (or passkey).{' '}
+                <strong>Administrators &amp; staff:</strong> sign in with your account{sso.length > 0 ? ' or work sign-in below' : ''}.{' '}
+                <Link href="/help" target="_blank" rel="noopener">User guide</Link>
+              </Typography>
+              <TextField
+                label="Email or username"
+                value={user}
+                placeholder="you@example.com"
+                onChange={(event) => setUser(event.target.value)}
+                required
+                fullWidth
+                autoComplete="username webauthn"
+              />
+              <TextField
+                label="Password"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                required
+                fullWidth
+                autoComplete="current-password"
+              />
+              <FormControlLabel
+                control={<Checkbox size="small" checked={remember} onChange={(event) => setRemember(event.target.checked)} />}
+                label={<Typography variant="body2">Remember email / username</Typography>}
+                sx={{ mt: '-8px !important' }}
+              />
+              <Button type="submit" variant="contained" fullWidth loading={busy}>Sign in</Button>
+              {browserSupportsWebAuthn() && (
+                <Button type="button" variant="outlined" fullWidth disabled={busy} onClick={withPasskey}>
+                  Sign in with a passkey
+                </Button>
+              )}
+              {sso.length > 0 && (
+                <>
+                  <Divider sx={{ my: 0.5 }} />
+                  <Typography variant="caption" color="text.secondary">Staff &amp; administrators only</Typography>
+                  {sso.map((provider) => (
+                    <Button
+                      key={provider.id}
+                      type="button"
+                      variant="outlined"
+                      fullWidth
+                      disabled={busy}
+                      onClick={() => { setError(''); startSso('/api/sso/start', { provider: provider.id }).catch((err) => setError(errorText(err))); }}
+                    >
+                      Sign in with {provider.name}
+                    </Button>
+                  ))}
+                </>
+              )}
+              {emailEnabled && (
+                <Link href="#" variant="body2" onClick={(event) => { event.preventDefault(); setForgot(true); }}>
+                  Forgot your password?
+                </Link>
+              )}
+              {error && <Alert severity="error">{error}</Alert>}
+            </Stack>
+          </form>
         )}
-      </Card>
+      </Paper>
     </Container>
   );
 }

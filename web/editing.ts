@@ -6,12 +6,12 @@
 import type { FastifyReply } from 'fastify';
 import * as dk from '../index.ts';
 import { cameraRows, loadData, residents, residentRows, type GateFiles } from './data.ts';
-import type { BoardBuffers } from '../src/residents-edit.ts';
+import type { BoardBuffers, ResidentEdit } from '../src/residents-edit.ts';
 import type { Patch, RecordChange } from '../src/audit.ts';
 import type { ValuesPatch } from '../src/gate-state.ts';
 import type { CacheStatus } from '../src/gate-cache.ts';
 import type { GateSetting } from '../src/gate-settings.ts';
-import type { DeviceRange, GateFeatures, GatePrefs, GateTracker, ResidentRow } from '../src/types.ts';
+import type { DeviceRange, GateFeatures, GatePrefs, GateTracker, ResidentPortalPrefs, ResidentRow } from '../src/types.ts';
 import type { Body, Gate, PrefsChange, Reply, Session } from './context.ts';
 import type { ContextModule } from './context.ts';
 import { logger } from '../src/logging.ts';
@@ -92,10 +92,18 @@ function createWorkingCopy(deps: ContextModule, relays: RelayRules) {
    * @returns Promise resolving to the operation result.
    */
   const gateData = async (phone: string, page: { before?: number; limit: number }) => {
-    const [prefs, tx, pulledAt, working] = await Promise.all([prefsOf(phone), dk.readTransactionPage(store, phone, page),
-      dk.txPulledAt(store, phone), dk.loadWorkingState(store, phone)]);
+    const [prefs, tx, pulledAt, working, portalEvents] = await Promise.all([
+      prefsOf(phone), dk.readTransactionPage(store, phone, page),
+      dk.txPulledAt(store, phone), dk.loadWorkingState(store, phone),
+      page.before ? Promise.resolve([]) : dk.listPortalEvents(store, phone, { limit: 200 }),
+    ]);
     const data = loadData(pulledAt, working && working.state, prefs.deviceAssociation, tx.records);
-    return { transactions: data.transactions && { ...data.transactions, next: tx.next } };
+    const nameByCode = new Map((working?.state.residents || []).map((r) => [dk.noteKey(r.directoryCode), r.name]));
+    const synthetic = portalEvents.map((ev) => dk.portalEventToTxRow(ev, nameByCode, prefs.relayLabels));
+    if (!data.transactions && !synthetic.length) return { transactions: null };
+    const rows = [...(data.transactions?.rows || []), ...synthetic].sort((a, b) => b.ts - a.ts);
+    const updated = data.transactions?.updated || (synthetic[0] ? new Date(synthetic[0].ts).toISOString() : new Date().toISOString());
+    return { transactions: { updated, rows, next: tx.next } };
   };
   /**
    * Every saved transaction, as the camera code needs it (time, event type, access).
@@ -161,18 +169,31 @@ function createWorkingCopy(deps: ContextModule, relays: RelayRules) {
    * @returns Promise resolving to the operation result.
    */
   async function editorResidents(gate: Gate) {
-    const notes = await dk.getNotes(store, gate.phoneNumber);
+    const [notes, portals] = await Promise.all([dk.getNotes(store, gate.phoneNumber), dk.getResidentPortals(store, gate.phoneNumber)]);
     const { files: work, status: cache } = await dk.readCache(store, gate.phoneNumber);
     const updated = new Date(Math.max(...Object.values(work).map((file) => file.savedTime.getTime())));
     const files = Object.fromEntries(Object.entries(work).map(([name, file]) => [name, { data: file.data, mtime: updated }])) as GateFiles;
     const res = residents(files);
-    const rows = res?.rows?.map((resident) => ({ ...resident, note: notes[dk.noteKey(resident.directoryCode)] || '' }));
+    const rows = res?.rows?.map((resident) => {
+      const key = dk.noteKey(resident.directoryCode);
+      const portal = portals[key];
+      return {
+        ...resident,
+        note: notes[key] || '',
+        email: portal?.email || '',
+        portalEnabled: Boolean(portal?.enabled),
+        portalInvited: Boolean(portal?.invited),
+        portalUsername: portal?.username || '',
+      };
+    });
     const names = work['names.bin'];
     const areaCodes = dk.areaCodeUsage(names.data, work['phone.bin'].data);
     const emptyCodes = dk.emptySlots(names.data);
     const dirDigits = dk.namesDirDigits(names.data);
     const duplicates = dk.findDuplicates({ names: names.data, phone: work['phone.bin'].data, cards: work['cards.bin'].data });
-    return [200, { ...res, rows, areaCodes, emptyCodes, dirDigits, duplicates, cache, pulled: names.baseTime, saved: names.savedTime }] as const;
+    const toneField = dk.decodeGateSettings(names.data).find((field) => field.key === 'relay0ToneMomentary');
+    const grantAccessDigit = toneField && toneField.value ? toneField.value : '9';
+    return [200, { ...res, rows, areaCodes, emptyCodes, dirDigits, duplicates, grantAccessDigit, cache, pulled: names.baseTime, saved: names.savedTime }] as const;
   }
   const WORK_FILES: (keyof BoardBuffers)[] = ['names', 'phone', 'cards'];
   /**
@@ -263,7 +284,8 @@ function createHistoryLog(deps: ContextModule, working: WorkingCopy) {
     securityLevel: 'Security', floor: 'Floor', elevatorRef: 'Elevator', cards: 'Cards',
   };
   const PREF_LABELS: Record<string, string> = { relayLabels: 'Relay names', deviceAssociation: 'Device Association', gateConfig: 'Gate configuration',
-    features: 'Floors and elevators shown', tracker: 'Tracker' };
+    features: 'Floors and elevators shown', tracker: 'Tracker', adminPhone: 'Building manager phone', requireStrongAdmin: 'Require strong admin sign-in',
+    residentPortal: 'Resident portal' };
   const MAX_DETAILS = 200;
   /**
    * What changed between two working copies, for the history page: residents/vendors by directory code and
@@ -324,7 +346,8 @@ function createHistoryLog(deps: ContextModule, working: WorkingCopy) {
   function prefsDetails({ before, after }: PrefsChange): RecordChange[] {
     const flat = (value: unknown): Record<string, unknown> => (Array.isArray(value)
       ? Object.fromEntries((value as DeviceRange[]).map((range, i) => [`Row ${i + 1}`, `${range.name} ${range.from}-${range.to}`]))
-      : value && typeof value === 'object' ? value as Record<string, unknown> : {});
+      : value && typeof value === 'object' ? value as Record<string, unknown>
+      : value === undefined || value === null ? {} : { Enabled: value ? 'Yes' : 'No' });
     return Object.keys(after).map((key) => {
       const was = flat(before[key]);
       const now = flat(after[key]);
@@ -526,8 +549,16 @@ function createPrefsEditor(deps: ContextModule, working: WorkingCopy) {
    * @throws Error when validation or the underlying operation fails.
    */
   async function savePrefs(gate: Gate, body: Body, was: GatePrefs): Promise<Reply> {
-    const prefs: { relayLabels?: Record<string, string>; deviceAssociation?: DeviceRange[]; gateConfig?: Record<string, string>;
-      features?: GateFeatures; tracker?: GateTracker } = {};
+    const prefs: Partial<GatePrefs> = {};
+    if (body.adminPhone !== undefined) prefs.adminPhone = String(body.adminPhone ?? '').trim().slice(0, 30);
+    if (body.requireStrongAdmin !== undefined) {
+      if (gate.role !== 'admin') throw dk.httpError('Only a gate admin can change admin security policy.', 403);
+      if (typeof body.requireStrongAdmin === 'boolean') prefs.requireStrongAdmin = body.requireStrongAdmin;
+    }
+    if (body.residentPortal !== undefined) {
+      if (gate.role !== 'admin') throw dk.httpError('Only a gate admin can change Resident Portal settings.', 403);
+      prefs.residentPortal = dk.normalizeResidentPortalPrefs({ ...(was.residentPortal || {}), ...(objectField(body, 'residentPortal') || {}) });
+    }
     const features = objectField(body, 'features');
     if (features) prefs.features = { floors: features.floors !== false, elevators: features.elevators !== false };
     const tracker = objectField(body, 'tracker');
@@ -617,7 +648,42 @@ export function createEditing(deps: ContextModule) {
   const { applyToCache, cameraTransactions, editOpts, editorResidents, gateData, gateSettings, refuseDuplicates, saveSettings, sendFile, TX_PAGE, TX_PAGE_MAX, workingBuffers } = working;
   const { changeDetails, dropNote, logChange, pick, PREF_LABELS, revertEvent, same, saveNote, withHistory, workingCopyDiff } = history;
   const { gateConfigFrom, savePrefs } = prefs;
-  return { gateData, cameraTransactions, TX_PAGE, TX_PAGE_MAX, gateSettings, saveSettings, commandRelays, liveRelays, refuseDuplicates, editorResidents, saveNote, dropNote, applyToCache, PREF_LABELS, workingBuffers, changeDetails, logChange, withHistory, pick, same, revertEvent, savePrefs, gateConfigFrom, editOpts, sendFile, workingCopyDiff };
+  /** Applies a resident edit + shown rule + tidyBoard inside `applyToCache` (shared by staff, portal, and account phone sync). */
+  function editResidentInCache(
+    phone: string,
+    directoryCode: string,
+    fields: Omit<ResidentEdit, 'directoryCode'>,
+    opts: Awaited<ReturnType<typeof editOpts>>,
+    ctx: EditContext,
+  ): Promise<Reply> {
+    return applyToCache(
+      phone,
+      (bufs) => dk.tidyBoard(dk.applyShownRule(dk.applyResidentEdit(bufs, { ...fields, directoryCode }, opts), directoryCode)),
+      ctx,
+    );
+  }
+
+  /** Renders and sends a pre-filled `ResidentInstructions.pdf` with a sanitized Content-Disposition filename. */
+  async function sendInstructionsPdf(
+    reply: FastifyReply,
+    info: { residentName: string; directoryCode: string; entryCode: string; adminPhone: string; grantAccessDigit: string },
+  ) {
+    const pdf = await dk.fillResidentInstructionsPdf(info);
+    const slug = [info.directoryCode, info.residentName]
+      .filter(Boolean)
+      .join('-')
+      .replace(/[^A-Za-z0-9_-]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 40);
+    const filename = slug ? `ResidentInstructions-${slug}.pdf` : 'ResidentInstructions.pdf';
+    return reply
+      .code(200)
+      .header('Content-Type', 'application/pdf')
+      .header('Content-Disposition', `attachment; filename="${filename}"`)
+      .send(Buffer.from(pdf));
+  }
+
+  return { gateData, cameraTransactions, TX_PAGE, TX_PAGE_MAX, gateSettings, saveSettings, commandRelays, liveRelays, refuseDuplicates, editorResidents, saveNote, dropNote, applyToCache, editResidentInCache, sendInstructionsPdf, PREF_LABELS, workingBuffers, changeDetails, logChange, withHistory, pick, same, revertEvent, savePrefs, gateConfigFrom, editOpts, sendFile, workingCopyDiff };
 }
 
 export type EditingModule = ReturnType<typeof createEditing>;

@@ -18,10 +18,23 @@ import { httpError, UnknownPasskeyError } from './errors.ts';
 
 export type { PasskeyInfo };
 /**
- * rpID: the site name passkeys are tied to; origin: the page's origin (https://<name>, or http://localhost:<port>);
+ * rpID: the site name passkeys are tied to; origin: the allowed WebAuthn origin(s) (`https://<name>`,
+ * `http://localhost:<port>`, and optional `android:apk-key-hash:<base64url>` for native Android apps);
  * challenges: where the challenges handed out are kept until answered.
  */
-export interface RelyingParty { rpID: string; origin: string; challenges: PasskeyChallenges }
+export interface RelyingParty { rpID: string; origin: string | string[]; challenges: PasskeyChallenges }
+
+/**
+ * Converts a colon-separated SHA-256 signing-certificate fingerprint (`AA:BB:...`) into the WebAuthn Android origin
+ * format (`android:apk-key-hash:<base64url>`) verified by `@simplewebauthn/server`.
+ *
+ * @param sha256Fingerprint - Colon-separated 32-byte hex SHA-256 certificate fingerprint.
+ * @returns Android APK key-hash WebAuthn origin string.
+ */
+export function androidApkKeyHashOrigin(sha256Fingerprint: string): string {
+  const hex = sha256Fingerprint.replace(/:/g, '').trim();
+  return `android:apk-key-hash:${Buffer.from(hex, 'hex').toString('base64url')}`;
+}
 
 const RP_NAME = 'DoorKing Gate Manager';
 const CHALLENGE_MS = 5 * 60000;
@@ -154,15 +167,15 @@ async function savePasskey(store: Store, username: string, response: unknown, la
   const name = userKey(username);
   const title = String(label ?? '').trim() || 'Passkey';
   if (title.length > NAME_MAX) throw httpError(`The passkey name must be at most ${NAME_MAX} characters`);
-  let v;
+  let verification;
   try {
-    v = await verifyRegistrationResponse({
+    verification = await verifyRegistrationResponse({
       response: response as RegistrationResponseJSON, expectedChallenge: (challenge) => relyingParty.challenges.take(challenge, registration.purpose, name, relyingParty.rpID),
       expectedOrigin: relyingParty.origin, expectedRPID: relyingParty.rpID, requireUserVerification: registration.userVerification === 'required',
     });
   } catch (err) { throw httpError(`The passkey could not be added: ${(err as Error).message}`); }
-  if (!v.verified) throw httpError('The passkey could not be added');
-  const { credential: cred, credentialDeviceType, credentialBackedUp } = v.registrationInfo;
+  if (!verification.verified) throw httpError('The passkey could not be added');
+  const { credential: cred, credentialDeviceType, credentialBackedUp } = verification.registrationInfo;
   const added = await run(store, `INSERT INTO passkeys (id, username, rp_id, public_key, counter, transports, name, device_type, backed_up, created_at)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (id) DO NOTHING`,
   [cred.id, name, relyingParty.rpID, Buffer.from(cred.publicKey), cred.counter, JSON.stringify(cred.transports || []), title, credentialDeviceType,
@@ -253,18 +266,18 @@ async function checkPasskey(store: Store, response: unknown, relyingParty: Relyi
     ? await one<PasskeyRow>(store, 'SELECT * FROM passkeys WHERE id = $1 AND rp_id = $2', [res.id, relyingParty.rpID]) : undefined;
   if (!row) throw new UnknownPasskeyError(refused('this passkey is not registered here (it may have been removed)').message);
   if (username !== null && row.username !== username) throw refused('this passkey belongs to another account');
-  let v;
+  let verification;
   try {
-    v = await verifyAuthenticationResponse({
+    verification = await verifyAuthenticationResponse({
       response: res, expectedChallenge: (challenge) => relyingParty.challenges.take(challenge, username === null ? 'signin' : 'confirm', username, relyingParty.rpID),
       expectedOrigin: relyingParty.origin, expectedRPID: relyingParty.rpID,
       credential: { id: row.id, publicKey: new Uint8Array(row.public_key), counter: Number(row.counter), transports: row.transports || undefined },
       requireUserVerification: true,
     });
   } catch (err) { throw refused((err as Error).message); }
-  if (!v.verified) throw refused('the signature did not match');
+  if (!verification.verified) throw refused('the signature did not match');
   await run(store, 'UPDATE passkeys SET counter = $2, last_used_at = $3, backed_up = $4 WHERE id = $1',
-    [row.id, v.authenticationInfo.newCounter, new Date().toISOString(), v.authenticationInfo.credentialBackedUp]);
+    [row.id, verification.authenticationInfo.newCounter, new Date().toISOString(), verification.authenticationInfo.credentialBackedUp]);
   return row.username;
 }
 

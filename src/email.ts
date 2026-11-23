@@ -203,6 +203,10 @@ export const messages = {
     subject: 'You have been invited to DoorKing Gate Manager',
     text: `Hello,\n\n${by} created an account for you (username: ${user}) with access to ${gate}.\n\nChoose your password by opening this link (valid for ${TOKEN_HOURS.invite} hours):\n\n${app}/#invite=${token}\n\nThen sign in at ${app}.${SIGN}`,
   }),
+  residentInvite: (app: string, email: string, gate: string, code: string, token: string) => ({
+    subject: `Set up your ${gate} Resident Portal`,
+    text: `Hello,\n\nYour Resident Portal for ${gate} (Directory Code ${code}) is ready.\n\nChoose a password by opening this link (valid for ${TOKEN_HOURS.invite} hours):\n\n${app}/#invite=${token}\n\nAfter setting your password, sign in anytime at ${app} using your email address (${email}) or a passkey.\n\nInstall on your phone for quick access & push alerts:\n• iPhone (Safari): open ${app}, tap Share → Add to Home Screen, then open the app icon.\n• Android (Chrome): open ${app}, tap ⋮ → Install app.\n\nOnce installed, you can turn on Push Notifications and Passkey sign-in under the Account tab.${SIGN}`,
+  }),
   accessGranted: (app: string, user: string, by: string, gate: string, role: string) => ({
     subject: `You now have access to ${gate}`,
     text: `Hello ${user},\n\n${by} gave you ${role} access to ${gate}. Sign in at ${app} to open it.${SIGN}`,

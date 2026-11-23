@@ -7,7 +7,7 @@
  */
 import { phoneQuery } from './phone.ts';
 
-const SORT_MARK = /\s*[▲▼]\s*[12]?\s*$/;
+const SORT_MARK = /\s*(?:[▲▼]\s*[12]?|\([12]\)|sorted\s+(?:ascending|descending))\s*$/i;
 
 /**
  * The name of each column: the header texts above it, top to bottom.

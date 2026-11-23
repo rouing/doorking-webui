@@ -232,8 +232,8 @@ function sendReply(reply: FastifyReply, out: Reply, req: FastifyRequest, pathnam
  * @returns Promise resolving to the configured `FastifyInstance`.
  */
 export async function createFastifyServer(modules: Modules, routes: Route[], isStopping: () => boolean): Promise<FastifyInstance> {
-  const { ADMIN_ONLY, asGate, gateFor, MAX_BODY_BYTES, NO_GATE, store } = modules.context;
-  const { ALLOWED_HOSTS, ALLOWED_ORIGINS, currentSession, stepUpRefusal, strongUntil } = modules.auth;
+  const { ADMIN_ONLY, asGate, gateFor, MAX_BODY_BYTES, NO_GATE, prefsOf, store } = modules.context;
+  const { ALLOWED_HOSTS, ALLOWED_ORIGINS, currentSession, NATIVE_SESSION_PREFIX, sessionFromToken, stepUpRefusal, strongUntil } = modules.auth;
   const requestIds = new WeakMap<FastifyRequest, string>();
   const fastify = Fastify({ logger: false, bodyLimit: MAX_BODY_BYTES, routerOptions: { maxParamLength: 1400 }, exposeHeadRoutes: false });
 
@@ -272,15 +272,25 @@ export async function createFastifyServer(modules: Modules, routes: Route[], isS
    * @param pathname - Request URL pathname.
    * @returns Promise resolving to `Session`, `null`, or a refusal `Reply`.
    */
+  async function resolveCallerSession(req: FastifyRequest, route: Route, params: Record<string, string>, pathname: string): Promise<Session | null | Reply> {
+    if (req.headers.authorization === undefined) return currentSession(req);
+    const bearer = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization);
+    if (bearer && bearer[1].startsWith(NATIVE_SESSION_PREFIX)) {
+      const nativeSession = await sessionFromToken(bearer[1].slice(NATIVE_SESSION_PREFIX.length));
+      if (nativeSession) return nativeSession;
+      return route.scope === 'public' ? null : [401, { error: 'Session expired. Sign in again.' }];
+    }
+    return apiKeySession(req, route, params, pathname);
+  }
+
   async function sessionFor(req: FastifyRequest, route: Route, params: Record<string, string>, pathname: string): Promise<Session | null | Reply> {
-    const keyed = req.headers.authorization !== undefined ? await apiKeySession(req, route, params, pathname) : null;
-    if (keyed && isReply(keyed)) return keyed;
-    const session = keyed ?? await currentSession(req);
-    if (!session && route.scope !== 'public') return [401, { error: 'Not logged in' }];
-    if (session && session.mustChangePassword && route.scope !== 'public' && !(route.method === 'PUT' && pathname === '/api/me/password')) {
+    const resolved = await resolveCallerSession(req, route, params, pathname);
+    if (resolved && isReply(resolved)) return resolved;
+    if (!resolved && route.scope !== 'public') return [401, { error: 'Not logged in' }];
+    if (resolved && resolved.mustChangePassword && route.scope !== 'public' && !(route.method === 'PUT' && pathname === '/api/me/password')) {
       return [403, { error: 'Choose a new password first', mustChangePassword: true }];
     }
-    return session;
+    return resolved;
   }
 
   /**
@@ -316,9 +326,15 @@ export async function createFastifyServer(modules: Modules, routes: Route[], isS
       return withContext({ ...(session && { user: session.user }) }, async () => {
         try {
           const gate = route.scope.startsWith('gate') ? await routeGate(session!, params.phone) : null;
+          if (gate && route.scope !== 'gate-resident' && gate.role === 'resident') {
+            return sendReply(reply, [403, { error: 'Staff access is required for this page.' }], req, pathname);
+          }
           if (gate && route.scope === 'gate-admin' && gate.role !== 'admin') return sendReply(reply, [403, { error: ADMIN_ONLY }], req, pathname);
           if (gate && route.scope === 'gate-editor' && gate.role === 'readonly') return sendReply(reply, [403, { error: 'Editor or admin access is required for this change.' }], req, pathname);
-          if (route.stepUp && !session!.apiKey && !strongUntil(session!)) return sendReply(reply, await stepUpRefusal(session!), req, pathname);
+          const gateRequiresStrong = req.method !== 'GET' && gate && gate.role === 'admin'
+            && (route.scope === 'gate-admin' || route.scope === 'gate-editor')
+            && !session!.apiKey && (await prefsOf(gate.phoneNumber)).requireStrongAdmin === true;
+          if ((route.stepUp || gateRequiresStrong) && !session!.apiKey && !strongUntil(session!)) return sendReply(reply, await stepUpRefusal(session!), req, pathname);
           const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Body;
           const out = await route.handler({ session, gate, params, body, req, reply });
           return isReply(out) ? sendReply(reply, out, req, pathname) : out;

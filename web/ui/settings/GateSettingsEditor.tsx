@@ -1,9 +1,23 @@
 import type { ReactNode } from 'react';
-import { Box as RadixBox, Callout, Flex, Grid, Heading, Table, Text } from '@radix-ui/themes';
+import {
+  Alert,
+  Box as MuiBox,
+  Paper,
+  Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Tooltip,
+  Typography,
+} from '@mui/material';
+import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import type { GateSettingRow } from '../../../src/types.ts';
 import type { GateApi } from '../api.ts';
 import { HelpTip } from '../HelpTip.tsx';
-import { Box, setBit } from './GroupPage.tsx';
+import { Box, PENDING_BG, setBit, UNSAVED_BG } from './GroupPage.tsx';
 import { SettingInput, SettingsBar } from './SettingsBar.tsx';
 import type { GateSettings } from './useGateSettings.ts';
 
@@ -29,15 +43,17 @@ interface FieldGridProps {
 
 function FieldGrid({ settings, fields }: FieldGridProps) {
   return (
-    <Grid columns={{ initial: '1', sm: '2', md: '3' }} gap="3">
+    <MuiBox sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' }, gap: 2 }}>
       {fields.map((setting) => (
-        <label key={setting.key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <Text size="2">{setting.name}<HelpTip of={setting.key} /></Text>
+        <Stack key={setting.key} spacing={0.5} component="label">
+          <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center' }}>
+            {setting.name}<HelpTip of={setting.key} />
+          </Typography>
           <SettingInput settings={settings} setting={setting} />
-          {setting.note && <Text size="1" color="gray">{setting.note}</Text>}
-        </label>
+          {setting.note && <Typography variant="caption" color="text.secondary">{setting.note}</Typography>}
+        </Stack>
       ))}
-    </Grid>
+    </MuiBox>
   );
 }
 
@@ -56,19 +72,23 @@ interface FieldRowsProps {
  */
 function FieldRows({ settings, fields }: FieldRowsProps) {
   return (
-    <Table.Root size="1" variant="surface" style={{ width: 'fit-content', maxWidth: '100%' }}>
-      <Table.Body>
-        {fields.map((setting) => (
-          <Table.Row key={setting.key} align="center">
-            <Table.RowHeaderCell>
-              <Text size="2" weight="regular">{setting.name}<HelpTip of={setting.key} /></Text>
-              {setting.note && <Text as="div" size="1" color="gray">{setting.note}</Text>}
-            </Table.RowHeaderCell>
-            <Table.Cell><SettingInput settings={settings} setting={setting} /></Table.Cell>
-          </Table.Row>
-        ))}
-      </Table.Body>
-    </Table.Root>
+    <TableContainer component={Paper} variant="outlined" sx={{ width: 'fit-content', maxWidth: '100%' }}>
+      <Table size="small">
+        <TableBody>
+          {fields.map((setting) => (
+            <TableRow key={setting.key}>
+              <TableCell component="th" scope="row">
+                <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center' }}>
+                  {setting.name}<HelpTip of={setting.key} />
+                </Typography>
+                {setting.note && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{setting.note}</Typography>}
+              </TableCell>
+              <TableCell><SettingInput settings={settings} setting={setting} /></TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </TableContainer>
   );
 }
 
@@ -127,77 +147,109 @@ function RelayTable({ settings, fields, relayLabels, lockedRelays, relays, nameC
   const label = (relay: number) => (relayLabels[relay] && relayLabels[relay] !== `Relay ${relay}` ? relayLabels[relay] : '');
   const span = RELAY_COLS.length + RELAY_BITS.length;
   const rows = relays.map((relay) => (relay > 2 ? (
-    <Table.Row key={relay}>
-      <Table.RowHeaderCell>Relay {relay}</Table.RowHeaderCell>
-      <Table.Cell>{nameCell ? nameCell(relay) : label(relay)}</Table.Cell>
-      <Table.Cell colSpan={span}><Text size="1" color="gray">Tracker relay ({relay <= 10 ? 'Tracker 2, commanded by relay 2' : 'Tracker 1, commanded by relay 1'}): times are set at the hardware</Text></Table.Cell>
-    </Table.Row>
+    <TableRow key={relay}>
+      <TableCell component="th" scope="row">Relay {relay}</TableCell>
+      <TableCell>{nameCell ? nameCell(relay) : label(relay)}</TableCell>
+      <TableCell colSpan={span}>
+        <Typography variant="caption" color="text.secondary">
+          Tracker relay ({relay <= 10 ? 'Tracker 2, commanded by relay 2' : 'Tracker 1, commanded by relay 1'}): times are set at the hardware
+        </Typography>
+      </TableCell>
+    </TableRow>
   ) : (
-    <Table.Row key={relay}>
-      <Table.RowHeaderCell>Relay {relay}</Table.RowHeaderCell>
-      <Table.Cell>{nameCell ? nameCell(relay) : label(relay)}</Table.Cell>
+    <TableRow key={relay}>
+      <TableCell component="th" scope="row">Relay {relay}</TableCell>
+      <TableCell>{nameCell ? nameCell(relay) : label(relay)}</TableCell>
       {RELAY_COLS.map(([suffix]) => {
         const setting = byKey.get(`relay${relay}${suffix}`);
         if (setting) used.add(setting.key);
         if (setting && lockedRelays[relay]) {
           const text = suffix === 'Time' ? '00' : settings.current(setting) || '—';
-          return <Table.Cell key={suffix}><Text size="2" color="gray" title={`Locked: ${lockedRelays[relay]}`}>{text} 🔒</Text></Table.Cell>;
+          return (
+            <TableCell key={suffix}>
+              <Tooltip title={`Locked: ${lockedRelays[relay]}`}>
+                <Typography variant="body2" color="text.secondary" component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
+                  {text}<LockOutlinedIcon sx={{ fontSize: 14 }} />
+                </Typography>
+              </Tooltip>
+            </TableCell>
+          );
         }
         return (
-          <Table.Cell key={suffix}>
-            {setting ? <SettingInput settings={settings} setting={setting} invalid={clash.keys.has(setting.key) ? 'This digit is already used by another tone' : undefined} />
-              : <Text color="gray">—</Text>}
-          </Table.Cell>
+          <TableCell key={suffix}>
+            {setting
+              ? <SettingInput settings={settings} setting={setting} invalid={clash.keys.has(setting.key) ? 'Duplicate digit' : undefined} />
+              : <Typography variant="body2" color="text.secondary">—</Typography>}
+          </TableCell>
         );
       })}
-      {RELAY_BITS.map(([key]) => {
+      {RELAY_BITS.map(([key, bitLabel]) => {
         const setting = byKey.get(key);
-        if (!setting) return <Table.Cell key={key}><Text color="gray">—</Text></Table.Cell>;
+        if (!setting) return <TableCell key={key}><Typography variant="body2" color="text.secondary">—</Typography></TableCell>;
         used.add(setting.key);
         const on = settings.current(setting)[relay] === '1';
         if (lockedRelays[relay]) {
-          return <Table.Cell key={key}><Text size="2" color="gray" title={`Locked: ${lockedRelays[relay]}`}>{on ? 'On' : 'Off'} 🔒</Text></Table.Cell>;
+          return (
+            <TableCell key={key}>
+              <Tooltip title={`Locked: ${lockedRelays[relay]}`}>
+                <Typography variant="body2" color="text.secondary" component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
+                  {on ? 'On' : 'Off'}<LockOutlinedIcon sx={{ fontSize: 14 }} />
+                </Typography>
+              </Tooltip>
+            </TableCell>
+          );
         }
-        const background = settings.current(setting)[relay] !== setting.value[relay] ? 'var(--blue-a4)' : setting.value[relay] !== setting.gate[relay] ? 'var(--green-a4)' : undefined;
+        const background = settings.current(setting)[relay] !== setting.value[relay] ? UNSAVED_BG
+          : setting.value[relay] !== setting.gate[relay] ? PENDING_BG : undefined;
         return (
-          <Table.Cell key={key} style={{ background: background }}>
-            <Box checked={on} onChange={(on) => settings.edit(setting, setBit(settings.current(setting), relay, on))} />
-          </Table.Cell>
+          <TableCell key={key} sx={{ backgroundColor: background }}>
+            <Box
+              checked={on}
+              ariaLabel={`${bitLabel} for Relay ${relay}`}
+              onChange={(checked) => settings.edit(setting, setBit(settings.current(setting), relay, checked))}
+            />
+          </TableCell>
         );
       })}
-    </Table.Row>
+    </TableRow>
   )));
   const rest = fields.filter((setting) => !used.has(setting.key));
   return (
-    <Flex direction="column" gap="3">
+    <Stack spacing={2}>
       {clash.lines.length > 0 && (
-        <Callout.Root color="red" role="alert">
-          <Callout.Text><strong>Each tone-open digit can be used only once.</strong> Change the red boxes before saving:</Callout.Text>
-          <RadixBox asChild><ul style={{ margin: 0 }}>{clash.lines.map((line) => <li key={line}>{line}</li>)}</ul></RadixBox>
-        </Callout.Root>
+        <Alert severity="error" role="alert">
+          <MuiBox component="strong">Each tone-open digit can be used only once.</MuiBox> Change the red boxes before saving:
+          <MuiBox component="ul" sx={{ m: 0, pl: 2.5 }}>
+            {clash.lines.map((line) => <li key={line}>{line}</li>)}
+          </MuiBox>
+        </Alert>
       )}
-      <Table.Root size="1" variant="surface">
-        <Table.Header>
-          <Table.Row>
-            <Table.ColumnHeaderCell rowSpan={2}>Relay</Table.ColumnHeaderCell>
-            <Table.ColumnHeaderCell rowSpan={2}>Name<HelpTip of="relayName" /></Table.ColumnHeaderCell>
-            <Table.ColumnHeaderCell rowSpan={2}>Strike time (s)<HelpTip of="strikeTime" /></Table.ColumnHeaderCell>
-            <Table.ColumnHeaderCell colSpan={4}>Tone to open<HelpTip of="toneToOpen" /></Table.ColumnHeaderCell>
-            <Table.ColumnHeaderCell colSpan={2}>Entry code range<HelpTip of="entryCodeRange" /></Table.ColumnHeaderCell>
-            <Table.ColumnHeaderCell colSpan={2}>Activated by</Table.ColumnHeaderCell>
-          </Table.Row>
-          <Table.Row>
-            {RELAY_COLS.slice(1).map(([k, label]) => <Table.ColumnHeaderCell key={k}>{label}</Table.ColumnHeaderCell>)}
-            {RELAY_BITS.map(([k, label]) => (
-              <Table.ColumnHeaderCell key={k}>{label}<HelpTip of={k === 'relayPostalSwitch' ? 'postalSwitch' : 'rotaryDial9'} /></Table.ColumnHeaderCell>
-            ))}
-          </Table.Row>
-        </Table.Header>
-        <Table.Body>{rows}</Table.Body>
-      </Table.Root>
-      {Object.entries(lockedRelays).map(([relay, note]) => <Text key={relay} size="1" color="gray">Relay {relay}: {note}</Text>)}
+      <TableContainer component={Paper} variant="outlined" sx={{ maxWidth: '100%' }}>
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell rowSpan={2}>Relay</TableCell>
+              <TableCell rowSpan={2}>Name<HelpTip of="relayName" /></TableCell>
+              <TableCell rowSpan={2}>Strike time (s)<HelpTip of="strikeTime" /></TableCell>
+              <TableCell colSpan={4}>Tone to open<HelpTip of="toneToOpen" /></TableCell>
+              <TableCell colSpan={2}>Entry code range<HelpTip of="entryCodeRange" /></TableCell>
+              <TableCell colSpan={2}>Activated by</TableCell>
+            </TableRow>
+            <TableRow>
+              {RELAY_COLS.slice(1).map(([k, colLabel]) => <TableCell key={k}>{colLabel}</TableCell>)}
+              {RELAY_BITS.map(([k, colLabel]) => (
+                <TableCell key={k}>{colLabel}<HelpTip of={k === 'relayPostalSwitch' ? 'postalSwitch' : 'rotaryDial9'} /></TableCell>
+              ))}
+            </TableRow>
+          </TableHead>
+          <TableBody>{rows}</TableBody>
+        </Table>
+      </TableContainer>
+      {Object.entries(lockedRelays).map(([relay, note]) => (
+        <Typography key={relay} variant="caption" color="text.secondary">Relay {relay}: {note}</Typography>
+      ))}
       {rest.length > 0 && <FieldGrid settings={settings} fields={rest} />}
-    </Flex>
+    </Stack>
   );
 }
 
@@ -240,33 +292,36 @@ export function GateSettingsEditor({ settings, view, displayMode = 'single', rel
   const clash = view === 'relays' ? toneClashes(settings, lockedRelays) : { keys: new Set<string>(), lines: [] };
 
   return (
-    <Flex direction="column" gap="4">
+    <Stack spacing={3}>
       <SettingsBar settings={settings} gapi={gapi} onReload={onReload}
         blocked={clash.lines.length ? 'Two or more tones use the same digit; change the red boxes first' : undefined} />
       {view === 'display' ? wanted.map((group) => (
-        <Flex key={group} direction="column" gap="2">
-          <Heading size="3">{group}</Heading>
-          <Table.Root size="1" variant="surface" style={{ width: 'fit-content', maxWidth: '100%' }}>
-            <Table.Header>
-              <Table.Row><Table.ColumnHeaderCell>Setting</Table.ColumnHeaderCell><Table.ColumnHeaderCell>Value</Table.ColumnHeaderCell></Table.Row>
-            </Table.Header>
-            <Table.Body>
-              {shown.filter((setting) => setting.group === group).map((setting) => (
-                <Table.Row key={setting.key}>
-                  <Table.Cell>{setting.name}</Table.Cell><Table.Cell><SettingInput settings={settings} setting={setting} /></Table.Cell>
-                </Table.Row>
-              ))}
-            </Table.Body>
-          </Table.Root>
-        </Flex>
+        <Stack key={group} spacing={1.5}>
+          <Typography variant="h6" component="h3">{group}</Typography>
+          <TableContainer component={Paper} variant="outlined" sx={{ width: 'fit-content', maxWidth: '100%' }}>
+            <Table size="small">
+              <TableHead>
+                <TableRow><TableCell>Setting</TableCell><TableCell>Value</TableCell></TableRow>
+              </TableHead>
+              <TableBody>
+                {shown.filter((setting) => setting.group === group).map((setting) => (
+                  <TableRow key={setting.key}>
+                    <TableCell>{setting.name}</TableCell>
+                    <TableCell><SettingInput settings={settings} setting={setting} /></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Stack>
       )) : wanted.map((group) => (
-        <Flex key={group} direction="column" gap="2">
-          {view === 'prefs' && <Heading size="3">{group}</Heading>}
+        <Stack key={group} spacing={1.5}>
+          {view === 'prefs' && <Typography variant="h6" component="h3">{group}</Typography>}
           {group === 'Relays' ? <RelayTable settings={settings} fields={shown.filter((setting) => setting.group === group)} relayLabels={relayLabels} lockedRelays={lockedRelays}
             relays={relays} nameCell={nameCell} clash={clash} />
             : <FieldRows settings={settings} fields={shown.filter((setting) => setting.group === group)} />}
-        </Flex>
+        </Stack>
       ))}
-    </Flex>
+    </Stack>
   );
 }

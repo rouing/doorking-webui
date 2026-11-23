@@ -14,7 +14,7 @@ import type { Body, Gate, Reply, Session } from './context.ts';
  * reaches only the public routes and PUT /api/me/password until they do.
  */
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
-type Scope = 'public' | 'user' | 'gate' | 'gate-editor' | 'gate-admin';
+type Scope = 'public' | 'user' | 'gate-resident' | 'gate' | 'gate-editor' | 'gate-admin';
 interface Ctx<S extends Scope> {
   session: S extends 'public' ? Session | null : Session;
   gate: S extends `gate${string}` ? Gate : null;

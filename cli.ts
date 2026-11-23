@@ -194,6 +194,13 @@ program.command('emails')
     }
   }));
 
+program.command('vapid-keys')
+  .description('Generate a VAPID keypair for config.json push settings')
+  .action(() => {
+    const keys = dk.generateVapidKeys();
+    console.log(JSON.stringify({ push: { vapidPublicKey: keys.publicKey, vapidPrivateKey: keys.privateKey, subject: 'mailto:admin@example.com' } }, null, 2));
+  });
+
 // Local board file parsers (read-only)
 program.command('transactions <file>')
   .description('Export a TRANSnnn.TRA transaction log as CSV')

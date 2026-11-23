@@ -134,7 +134,10 @@ export class Application {
       setInterval(sweepSessions, 60000),
       setInterval(sendEmails, 30000),
       setInterval(deliverWebhooks, 30000),
-      setInterval(() => { dk.deleteExpiredTokens(store).catch(logged('session', 'Expired link clean-up failed')); }, 3600000),
+      setInterval(() => {
+        dk.deleteExpiredTokens(store).catch(logged('session', 'Expired link clean-up failed'));
+        dk.pruneLoginAudit(store).catch(logged('session', 'Login audit clean-up failed'));
+      }, 3600000),
       setInterval(tidy, SNAPSHOT_TIDY_MS),
     ];
   }

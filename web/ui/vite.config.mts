@@ -10,16 +10,19 @@ const API = 'http://localhost:8080';
 export default defineConfig({
   root: fileURLToPath(new URL('.', import.meta.url)),
   plugins: [react(), VitePWA({
-    // Installable app (manifest + icons in public/) whose service worker keeps only the page itself (HTML, scripts,
-    // styles, icons) for a fast start; /api, /help and camera files always go to the server. UpdateNotice registers it
-    // and offers the reload when a newer build is waiting.
+    // Installable app (manifest + icons in public/) whose service worker (sw.ts) keeps only the page itself (HTML,
+    // scripts, styles, icons) for a fast start and displays incoming Web Push alerts; /api, /help and camera files
+    // always go to the server. UpdateNotice registers it and offers the reload when a newer build is waiting.
+    strategies: 'injectManifest',
+    srcDir: '.',
+    filename: 'sw.ts',
     registerType: 'prompt',
     injectRegister: false,
     includeAssets: ['favicon.ico', 'apple-touch-icon-180x180.png', 'icon.svg'],
     manifest: {
-      name: 'DoorKing Gate Data', short_name: 'Gate Data', description: 'Manage DoorKing gates through DKS Cloud',
+      name: 'Doorking Gate', short_name: 'Doorking Gate', description: 'Manage DoorKing gates through DKS Cloud',
       theme_color: '#0090ff', background_color: '#0090ff', // start screen: the icon on its own blue, for light and dark
-      display: 'standalone', start_url: '/', scope: '/',
+      display: 'standalone', orientation: 'portrait', start_url: '/', scope: '/',
       icons: [
         { src: 'pwa-64x64.png', sizes: '64x64', type: 'image/png' },
         { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
@@ -27,11 +30,8 @@ export default defineConfig({
         { src: 'maskable-icon-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
       ],
     },
-    workbox: {
+    injectManifest: {
       globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
-      navigateFallback: 'index.html',
-      navigateFallbackDenylist: [/^\/api\//, /^\/help/],
-      cleanupOutdatedCaches: true,
     },
   })],
   build: { outDir: fileURLToPath(new URL('../dist', import.meta.url)), emptyOutDir: true },

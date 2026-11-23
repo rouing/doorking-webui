@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, Card, Flex, IconButton, Text } from '@radix-ui/themes';
+import { Alert, Box, Button, IconButton, Paper, Stack, Typography } from '@mui/material';
+import CloseIcon from '@mui/icons-material/Close';
+import OpenInFullIcon from '@mui/icons-material/OpenInFull';
+import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
+import RemoveIcon from '@mui/icons-material/Remove';
 import { Choice } from '../panes/fields.tsx';
 import type { CameraSettings } from '../../../src/types.ts';
 import { gateUrl } from '../api.ts';
 import { useBackLayer } from '../back.ts';
 
 const PAUSE_MS = 10 * 60000;
-type Status = { kind: 'connecting' | 'playing' } | { kind: 'stopped'; text: string; retry: boolean };
+type Status = { kind: 'connecting' | 'playing' } | { kind: 'stopped'; text: string; retry: boolean; isError?: boolean };
 
 interface LiveViewProps {
   phone: string;
@@ -35,6 +39,15 @@ export function LiveView({ phone, settings }: LiveViewProps) {
     if (!settings.channels.some((saved) => String(saved.channel) === channel)) setChannel(String(settings.channels[0]?.channel ?? 1));
   }, [settings, channel]);
 
+  useEffect(() => {
+    if (dock === 'closed') return undefined;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setDock('closed');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dock]);
+
   // While connecting, watch for the first picture; while streaming, pause after PAUSE_MS.
   useEffect(() => {
     if (dock !== 'open' || status.kind === 'stopped') return undefined;
@@ -57,35 +70,95 @@ export function LiveView({ phone, settings }: LiveViewProps) {
 
   return (
     <>
-      <IconButton size="3" variant="surface" title="View Camera" aria-label="View Camera" onClick={toggleOpen}
-        className="live-toggle">
-        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M9 4 7.2 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.2L15 4H9zm3 4.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zm0 2a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z" /></svg>
+      <IconButton
+        color="primary"
+        title="View Camera"
+        aria-label="View Camera"
+        onClick={toggleOpen}
+        className="live-toggle"
+        sx={{
+          bgcolor: 'background.paper',
+          border: 1,
+          borderColor: 'divider',
+          boxShadow: 2,
+          '&:hover': { bgcolor: 'action.hover' },
+        }}
+      >
+        <PhotoCameraIcon />
       </IconButton>
       {dock !== 'closed' && (
-        <Card className="live-window">
-          <Flex align="center" gap="2" wrap="wrap">
-            <Text weight="bold">View Camera</Text>
+        <Paper
+          elevation={6}
+          className="live-window"
+          sx={{
+            top: 56,
+            right: 14,
+            width: 420,
+            maxWidth: 'calc(100vw - 28px)',
+            p: 1.5,
+            border: 1,
+            borderColor: 'divider',
+          }}
+        >
+          <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap', mb: dock === 'open' ? 1 : 0 }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>View Camera</Typography>
             {settings.channels.length > 1 && (
-              <Choice size="1" title="Channel" value={channel} onChange={(value) => { setChannel(value); start(); }}
-                options={settings.channels.map((channel) => [String(channel.channel), channel.name || `Channel ${channel.channel}`] as const)} />
+              <Choice
+                size="1"
+                title="Channel"
+                ariaLabel="Channel"
+                value={channel}
+                onChange={(value) => { setChannel(value); start(); }}
+                options={settings.channels.map((ch) => [String(ch.channel), ch.name || `Channel ${ch.channel}`] as const)}
+              />
             )}
-            <Choice size="1" title="Quality" value={quality} onChange={(value) => { setQuality(value); start(); }}
-              options={[['low', 'Low quality'], ['high', 'High quality']]} />
-            <Flex flexGrow="1" />
-            <IconButton size="1" variant="ghost" color="gray" title={dock === 'min' ? 'Restore' : 'Minimize'}
-              onClick={() => { setDock(dock === 'min' ? 'open' : 'min'); if (dock === 'min') start(); }}>–</IconButton>
-            <IconButton size="1" variant="ghost" color="gray" title="Close" onClick={() => setDock('closed')}>✕</IconButton>
-          </Flex>
+            <Choice
+              size="1"
+              title="Quality"
+              ariaLabel="Quality"
+              value={quality}
+              onChange={(value) => { setQuality(value); start(); }}
+              options={[['low', 'Low quality'], ['high', 'High quality']]}
+            />
+            <Box sx={{ flexGrow: 1 }} />
+            <IconButton
+              size="small"
+              aria-label={dock === 'min' ? 'Restore' : 'Minimize'}
+              title={dock === 'min' ? 'Restore' : 'Minimize'}
+              onClick={() => { setDock(dock === 'min' ? 'open' : 'min'); if (dock === 'min') start(); }}
+            >
+              {dock === 'min' ? <OpenInFullIcon fontSize="small" /> : <RemoveIcon fontSize="small" />}
+            </IconButton>
+            <IconButton size="small" aria-label="Close" title="Close" onClick={() => setDock('closed')}>
+              <CloseIcon fontSize="small" />
+            </IconButton>
+          </Stack>
           {dock === 'open' && (
             <div className="live-body">
-              {src && <img ref={img} src={src} alt="Live camera view" hidden={status.kind !== 'playing'}
-                onError={() => setStatus({ kind: 'stopped', text: 'Could not show the live view. The recorder may be offline or busy.', retry: true })} />}
-              {status.kind === 'connecting' && <p>Connecting to the recorder…</p>}
-              {status.kind === 'stopped' && <p>{status.text}</p>}
-              {status.kind === 'stopped' && status.retry && <Button variant="soft" mb="3" onClick={start}>Try again</Button>}
+              {src && (
+                <img
+                  ref={img}
+                  src={src}
+                  alt="Live camera view"
+                  hidden={status.kind !== 'playing'}
+                  onError={() => setStatus({
+                    kind: 'stopped',
+                    text: 'Could not show the live view. The recorder may be offline or busy.',
+                    retry: true,
+                    isError: true,
+                  })}
+                />
+              )}
+              {status.kind === 'connecting' && <Typography variant="body2">Connecting to the recorder…</Typography>}
+              {status.kind === 'stopped' && (
+                <Stack spacing={1.5} sx={{ alignItems: 'center', p: 2, maxWidth: '100%' }}>
+                  <Alert severity={status.isError ? 'error' : 'info'}>{status.text}</Alert>
+                  {status.retry && <Button variant="contained" size="small" onClick={start}>Try again</Button>}
+                </Stack>
+              )}
             </div>
           )}
-        </Card>
+        </Paper>
       )}
     </>
   );

@@ -7,7 +7,7 @@
  * there with the code filled in (App keeps it as APPROVAL_KEY).
  */
 import { useEffect, useRef, useState } from 'react';
-import { Button, Code, Flex, Text } from '@radix-ui/themes';
+import { Alert, Box, Button, CircularProgress, Stack, Typography } from '@mui/material';
 import QRCode from 'qrcode';
 import { api, errorText } from '../api.ts';
 
@@ -33,7 +33,7 @@ function ApprovalQr({ code }: ApprovalQrProps) {
   useEffect(() => {
     if (canvas.current) QRCode.toCanvas(canvas.current, `${window.location.origin}/#approve=${code}`, { width: 180, margin: 1 }).catch(() => {});
   }, [code]);
-  return <canvas ref={canvas} aria-label="QR code with the approval code" style={{ borderRadius: 'var(--radius-2)', background: '#fff' }} />;
+  return <canvas ref={canvas} aria-label="QR code with the approval code" style={{ borderRadius: 8, background: '#fff' }} />;
 }
 
 /**
@@ -43,32 +43,44 @@ function ApprovalQr({ code }: ApprovalQrProps) {
  */
 export function ApproveDevice() {
   const [approval, setApproval] = useState<Approval | null>(null);
-  const [info, setInfo] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
   const create = async () => {
-    setInfo('');
-    try { setApproval(await api<Approval>('POST', '/api/me/passkeys/approval', {})); } catch (err) { setInfo(errorText(err)); }
+    setError('');
+    setBusy(true);
+    try { setApproval(await api<Approval>('POST', '/api/me/passkeys/approval', {})); } catch (err) { setError(errorText(err)); }
+    setBusy(false);
   };
   return (
-    <Flex direction="column" gap="2">
-      <Text size="2" weight="bold">Add a passkey on another device</Text>
-      <Text size="2" color="gray">
+    <Stack spacing={1.5}>
+      <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Add a passkey on another device</Typography>
+      <Typography variant="body2" color="text.secondary">
         If your new phone or computer has no passkey for this site yet, approve it from here: you get a code for it, valid for 10 minutes.
-        (If your passkey is on a phone, you can also confirm on the new device by choosing a phone or tablet in its browser's prompt.)
-      </Text>
-      <Flex gap="3" align="center" wrap="wrap">
-        <Button variant="soft" onClick={create}>{approval ? 'New code' : 'Approve another device'}</Button>
-        {info && <Text size="2" color="red">{info}</Text>}
-      </Flex>
+        (If your passkey is on a phone, you can also confirm on the new device by choosing a phone or tablet in its browser&apos;s prompt.)
+      </Typography>
+      <Stack direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+        <Button variant="outlined" disabled={busy} onClick={create}
+          startIcon={busy ? <CircularProgress size={16} color="inherit" /> : undefined}>
+          {approval ? 'New code' : 'Approve another device'}
+        </Button>
+      </Stack>
+      {error && <Alert severity="error" role="alert">{error}</Alert>}
       {approval && (
-        <Flex gap="4" align="center" wrap="wrap">
+        <Stack direction="row" spacing={3} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
           <ApprovalQr code={approval.code} />
-          <Flex direction="column" gap="1">
-            <Code size="6" variant="ghost" style={{ letterSpacing: '0.1em' }}>{shown(approval.code)}</Code>
-            <Text size="2" color="gray">Valid until {new Date(approval.expiresAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}.</Text>
-            <Text size="2" color="gray">On the new device, scan the QR code with its camera, or sign in there and enter the code under User Settings → Passkeys.</Text>
-          </Flex>
-        </Flex>
+          <Stack spacing={0.5}>
+            <Box component="code" sx={{ fontFamily: 'monospace', fontSize: '1.75rem', fontWeight: 700, letterSpacing: '0.1em' }}>
+              {shown(approval.code)}
+            </Box>
+            <Typography variant="body2" color="text.secondary">
+              Valid until {new Date(approval.expiresAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}.
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              On the new device, scan the QR code with its camera, or sign in there and enter the code under User Settings → Passkeys.
+            </Typography>
+          </Stack>
+        </Stack>
       )}
-    </Flex>
+    </Stack>
   );
 }

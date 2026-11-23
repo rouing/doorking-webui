@@ -84,11 +84,11 @@ function dirCode(names: Buffer, value: unknown): string {
  * @param code - Directory code, HTTP status code, or verification code.
  * @returns `number` result.
  */
-export function findNamesEntry(names: Buffer, code: string | null): number {
+export function findNamesEntry(names: Buffer, code: string | null): number | null {
   for (let offset = dirStart(names); offset + NAMES_ENTRY_SIZE <= names.length; offset += NAMES_ENTRY_SIZE) {
     if (namesEntryCode(names, offset) === code) return offset;
   }
-  return -1;
+  return null;
 }
 
 const isEntryAt = (names: Buffer, offset: number): boolean => namesEntryCode(names, offset) !== null;
@@ -165,12 +165,12 @@ export function withPointer<T extends { names: Buffer }>(before: Buffer, result:
  * @param code - Directory code, HTTP status code, or verification code.
  * @returns `number` result.
  */
-export function findPhoneRecord(phone: Buffer, code: string): number {
+export function findPhoneRecord(phone: Buffer, code: string): number | null {
   for (let offset = 0; offset + PHONE_RECORD_SIZE <= phone.length; offset += PHONE_RECORD_SIZE) {
     if (phone[offset] === 0xff && phone[offset + 1] === 0xff) continue;
     if (bcd(phone.subarray(offset, offset + 2)) === code) return offset;
   }
-  return -1;
+  return null;
 }
 
 /**
@@ -299,8 +299,8 @@ export function tidyBoard(buffers: BoardBuffers): BoardBuffers {
  * @returns `string` result.
  */
 function holderLabel(names: Buffer | undefined, code: string | null): string {
-  const offset = names ? findNamesEntry(names, code) : -1;
-  const name = offset >= 0 ? names!.toString('latin1', offset, offset + 15).trim() : '';
+  const offset = names ? findNamesEntry(names, code) : null;
+  const name = offset !== null ? names!.toString('latin1', offset, offset + 15).trim() : '';
   return `directory code ${code}${name ? ` (${name})` : ''}`;
 }
 
@@ -385,22 +385,18 @@ function editBuffers(buffers: BoardBuffers, edit: ResidentEdit, opts: EditOption
   const cards = Buffer.from(buffers.cards);
   const code = dirCode(names, edit.directoryCode);
   const entry = findNamesEntry(names, code);
-  if (entry < 0) throw httpError(`No directory entry for code ${code}`, 404);
+  if (entry === null) throw httpError(`No directory entry for code ${code}`, 404);
   if ('name' in edit) names.write(String(edit.name ?? '').slice(0, 15).padEnd(15, ' '), entry, 15, 'latin1');
   if ('vendor' in edit || 'hidden' in edit) names[entry + 15] = editedFlag(names[entry + 15], edit);
   let phoneOffset = findPhoneRecord(phone, code);
-  /**
-   * A names entry with no phone record (other software can leave one): it gets a blank record when a phone field is
-   * given a value; otherwise only names and cards change.
-   */
   const phoneValueGiven = PHONE_FIELDS.some((key) => key in edit && String(edit[key] ?? '') !== '');
-  if (phoneOffset < 0 && !phoneValueGiven) {
+  if (phoneOffset === null && !phoneValueGiven) {
     if ('cards' in edit) applyCards(cards, code, edit.cards, names);
     return { names, phone, cards };
   }
-  if (phoneOffset < 0) {
+  if (phoneOffset === null) {
     phone = insertPhoneRecord(phone, code);
-    phoneOffset = findPhoneRecord(phone, code);
+    phoneOffset = findPhoneRecord(phone, code)!;
   }
   if ('areaCode' in edit || 'phone' in edit) editPhoneNumber(names, phone, phoneOffset, edit, opts);
   if ('entryCode' in edit) editEntryCode(names, phone, phoneOffset, edit.entryCode);
@@ -455,27 +451,20 @@ function localNumberOf(value: unknown): string | null {
 function editEntryCode(names: Buffer, phone: Buffer, phoneOffset: number, entryCode: unknown): void {
   const bytes = encodeBcd(entryCode, 2);
   const changed = !bytes.equals(phone.subarray(phoneOffset + 6, phoneOffset + 8)) && digits(entryCode);
-  const holder = changed ? entryCodeHolder(phone, bytes, phoneOffset) : -1;
-  if (holder >= 0) {
+  const holder = changed ? entryCodeHolder(phone, bytes, phoneOffset) : null;
+  if (holder !== null) {
     throw httpError(`Entry code ${digits(entryCode)} is already used by ${holderLabel(names, bcd(phone.subarray(holder, holder + 2)))}`, 409);
   }
   bytes.copy(phone, phoneOffset + 6);
 }
 
-/**
- * Offset of another phone record with this entry code, or -1.
- *
- * @param phone - Gate system phone number (digits or formatted).
- * @param bytes - `Buffer` value.
- * @param skipOffset - `number` value.
- * @returns `number` result.
- */
-function entryCodeHolder(phone: Buffer, bytes: Buffer, skipOffset: number): number {
+/** Offset of another phone record with this entry code, or `null`. */
+function entryCodeHolder(phone: Buffer, bytes: Buffer, skipOffset: number): number | null {
   for (let offset = 0; offset + PHONE_RECORD_SIZE <= phone.length; offset += PHONE_RECORD_SIZE) {
     const blank = phone[offset] === 0xff && phone[offset + 1] === 0xff;
     if (offset !== skipOffset && !blank && bytes.equals(phone.subarray(offset + 6, offset + 8))) return offset;
   }
-  return -1;
+  return null;
 }
 
 function securityLevelOf(value: unknown): number {
@@ -517,82 +506,56 @@ export function applyShownRule(buffers: BoardBuffers, directoryCode: string): Bo
   const code = dirCode(names, directoryCode);
   const entry = findNamesEntry(names, code);
   const phoneOffset = findPhoneRecord(buffers.phone, code);
-  if (entry < 0 || phoneOffset < 0) return buffers;
+  if (entry === null || phoneOffset === null) return buffers;
   const { phone } = readPhoneFields(buffers.phone.subarray(phoneOffset, phoneOffset + PHONE_RECORD_SIZE), phoneMode(names));
   const shown = !(names[entry + 15] & 0x01) && names.toString('latin1', entry, entry + 15).trim() !== '' && phone != null;
   names[entry + 15] = shown ? names[entry + 15] | 0x20 : names[entry + 15] & ~0x20;
   return withPointer(buffers.names, { ...buffers, names });
 }
 
-/**
- * Deletes a resident/vendor by returning its slot to the gate's own "empty slot" state: the directory
- * entry keeps its code but the name is blanked and the flag cleared (0x00), the phone record keeps its
- * code but every field is blanked (area/phone/entry = 0xFF, byte 8 = 0x01, floor = 0xFF), and all of the
- * slot's cards are removed. This matches genuine empty slots byte-for-byte (verified against names.bin).
- *
- * @param buffers - Board file buffers (`names`, `phone`, `cards`).
- * @param directoryCode - Directory code (with or without leading zeros).
- * @returns `BoardBuffers` result.
- * @throws HTTP 404 error on invalid input or conflict.
- */
 export function deleteResident(buffers: BoardBuffers, directoryCode: string): BoardBuffers {
   const names = Buffer.from(buffers.names);
   const phone = Buffer.from(buffers.phone);
   const cards = Buffer.from(buffers.cards);
   const code = dirCode(names, directoryCode);
   const entry = findNamesEntry(names, code);
-  if (entry < 0) throw httpError(`No directory entry for code ${code}`, 404);
-  names.fill(0x20, entry, entry + 15); // blank name (15 spaces), keep the code (16-19)
-  names[entry + 15] = 0x00; // flag: empty, unused slot
+  if (entry === null) throw httpError(`No directory entry for code ${code}`, 404);
+  names.fill(0x20, entry, entry + 15);
+  names[entry + 15] = 0x00;
   const phoneOffset = findPhoneRecord(phone, code);
-  if (phoneOffset >= 0) {
-    phone.fill(0xff, phoneOffset + 2, phoneOffset + 8); // area index, phone, entry code -> unset
-    phone[phoneOffset + 8] = 0x01; // security level 1, elevator ref default (matches empty slots)
-    phone[phoneOffset + 9] = 0xff; // floor unset
+  if (phoneOffset !== null) {
+    phone.fill(0xff, phoneOffset + 2, phoneOffset + 8);
+    phone[phoneOffset + 8] = 0x01;
+    phone[phoneOffset + 9] = 0xff;
   }
-  applyCards(cards, code, []); // drop every card assigned to this code
+  applyCards(cards, code, []);
   return withPointer(buffers.names, { names, phone, cards });
 }
 
-/**
- * Removes a directory code entirely, as DoorKing32 does: the names entry and phone record are taken out,
- * later entries/records move up, the freed bytes at the end become 0xFF, and the code's cards are removed.
- *
- * @param buffers - Board file buffers (`names`, `phone`, `cards`).
- * @param directoryCode - Directory code (with or without leading zeros).
- * @returns `BoardBuffers` result.
- * @throws HTTP 404 error on invalid input or conflict.
- */
 export function removeDirectoryCode(buffers: BoardBuffers, directoryCode: string): BoardBuffers {
   const names = Buffer.from(buffers.names);
   const phone = Buffer.from(buffers.phone);
   const cards = Buffer.from(buffers.cards);
   const code = dirCode(names, directoryCode);
   const entry = findNamesEntry(names, code);
-  if (entry < 0) throw httpError(`No directory entry for code ${code}`, 404);
-  const nEnd = directoryEnd(names);
-  names.copyWithin(entry, entry + NAMES_ENTRY_SIZE, nEnd);
-  names.fill(0xff, nEnd - NAMES_ENTRY_SIZE, nEnd);
+  if (entry === null) throw httpError(`No directory entry for code ${code}`, 404);
+  const namesEnd = directoryEnd(names);
+  names.copyWithin(entry, entry + NAMES_ENTRY_SIZE, namesEnd);
+  names.fill(0xff, namesEnd - NAMES_ENTRY_SIZE, namesEnd);
   const phoneOffset = findPhoneRecord(phone, code);
-  if (phoneOffset >= 0) {
-    const pEnd = phoneEnd(phone);
-    phone.copyWithin(phoneOffset, phoneOffset + PHONE_RECORD_SIZE, pEnd);
-    phone.fill(0xff, pEnd - PHONE_RECORD_SIZE, pEnd);
+  if (phoneOffset !== null) {
+    const recordsEnd = phoneEnd(phone);
+    phone.copyWithin(phoneOffset, phoneOffset + PHONE_RECORD_SIZE, recordsEnd);
+    phone.fill(0xff, recordsEnd - PHONE_RECORD_SIZE, recordsEnd);
   }
   applyCards(cards, code, []);
   return withPointer(buffers.names, { names, phone, cards });
 }
 
-/**
- * The directory codes the gate's memory holds (System memory, names.bin 0xBF), or null when it isn't set.
- *
- * @param names - Raw `names.bin` buffer.
- * @returns `number | null` result.
- */
 function memoryEntries(names: Buffer): number | null {
   const field = SYSTEM_MEMORY;
-  const v = field ? field.type.decode(names.subarray(field.offset, field.offset + field.type.size)) : '';
-  return /^\d+$/.test(v) ? Number(v) : null;
+  const decoded = field ? field.type.decode(names.subarray(field.offset, field.offset + field.type.size)) : '';
+  return /^\d+$/.test(decoded) ? Number(decoded) : null;
 }
 const SYSTEM_MEMORY = GATE_SETTING_FIELDS.find((field) => field.key === 'systemMemory');
 
@@ -751,21 +714,11 @@ export function addEntry(buffers: BoardBuffers, entry: ResidentEdit, opts: EditO
   const code = dirCode(buffers.names, entry && entry.directoryCode);
   if (!String(entry.name || '').trim()) throw httpError('A name is required');
   const slot = findNamesEntry(buffers.names, code);
-  if (slot >= 0 && !isEmptySlot(buffers.names, slot)) throw httpError(`Directory code ${code} is already in use`, 409);
-  if (slot < 0 && findPhoneRecord(buffers.phone, code) >= 0) throw httpError(`Directory code ${code} has a phone record but no directory entry`, 409);
-  return placeEntry(buffers, code, entry, opts, slot < 0);
+  if (slot !== null && !isEmptySlot(buffers.names, slot)) throw httpError(`Directory code ${code} is already in use`, 409);
+  if (slot === null && findPhoneRecord(buffers.phone, code) !== null) throw httpError(`Directory code ${code} has a phone record but no directory entry`, 409);
+  return placeEntry(buffers, code, entry, opts, slot === null);
 }
 
-/**
- * Writes the entry's fields under `code`, first inserting its directory entry when `insert` (addEntry, addStoredEntry).
- *
- * @param buffers - Board file buffers (`names`, `phone`, `cards`).
- * @param code - Directory code, HTTP status code, or verification code.
- * @param entry - Resident/vendor entry data or history entry.
- * @param opts - Optional settings.
- * @param insert - `boolean` value.
- * @returns `BoardBuffers` result.
- */
 function placeEntry(buffers: BoardBuffers, code: string, entry: ResidentEdit, opts: EditOptions, insert: boolean): BoardBuffers {
   const vendor = Boolean(entry.vendor);
   const hidden = Boolean(entry.hidden);
@@ -774,19 +727,9 @@ function placeEntry(buffers: BoardBuffers, code: string, entry: ResidentEdit, op
   return withPointer(buffers.names, editBuffers(start, { ...entry, directoryCode: code, vendor, hidden }, opts));
 }
 
-/**
- * Adds a directory code exactly as given, for rebuilding files from stored values: a blank name with neither vendor
- * nor shown makes the gate's empty slot (as deleteResident leaves it). Users add through addEntry.
- *
- * @param buffers - Board file buffers (`names`, `phone`, `cards`).
- * @param entry - Resident/vendor entry data or history entry.
- * @param [opts] - Optional settings.
- * @returns `BoardBuffers` result.
- * @throws HTTP 409 error on invalid input or conflict.
- */
 export function addStoredEntry(buffers: BoardBuffers, entry: ResidentEdit, opts: EditOptions = {}): BoardBuffers {
   const code = dirCode(buffers.names, entry && entry.directoryCode);
-  if (findNamesEntry(buffers.names, code) >= 0 || findPhoneRecord(buffers.phone, code) >= 0) {
+  if (findNamesEntry(buffers.names, code) !== null || findPhoneRecord(buffers.phone, code) !== null) {
     throw httpError(`Directory code ${code} is already in use`, 409);
   }
   return placeEntry(buffers, code, entry, opts, true);

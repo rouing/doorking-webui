@@ -265,8 +265,8 @@ export function buildFiles(base: BoardBuffers, working: WorkingState, { masterCo
   for (const code of have.keys()) if (!want.has(code)) bufs = removeDirectoryCode(bufs, code);
   for (const resident of working.residents) {
     const was = have.get(resident.directoryCode);
-    const offset = was && (was.entryCode || '') !== (resident.entryCode || '') ? findPhoneRecord(bufs.phone, resident.directoryCode) : -1;
-    if (offset >= 0) bufs.phone.fill(0xff, offset + 6, offset + 8);
+    const offset = was && (was.entryCode || '') !== (resident.entryCode || '') ? findPhoneRecord(bufs.phone, resident.directoryCode) : null;
+    if (offset !== null) bufs.phone.fill(0xff, offset + 6, offset + 8);
   }
   for (const resident of working.residents) {
     if (have.has(resident.directoryCode) && differs(have.get(resident.directoryCode)!, resident)) bufs = applyResidentEdit(bufs, editOf(resident), opts);
@@ -656,8 +656,10 @@ const hex = (value: number) => `0x${value.toString(16)}`;
  * @returns `RoundTripProblem[]` result.
  */
 export function fileDifferences(a: BoardBuffers, b: BoardBuffers): RoundTripProblem[] {
-  return (['names', 'phone', 'cards'] as const).map((file) => ({ n: file, d: differences(a[file], b[file]) })).filter((diff) => diff.d.bytes)
-    .map(({ n, d }) => ({ file: `${n}.bin`, bytes: d.bytes, offsets: d.offsets.slice(0, MAX_OFFSETS).map(hex) }));
+  return (['names', 'phone', 'cards'] as const)
+    .map((fileName) => ({ fileName, diff: differences(a[fileName], b[fileName]) }))
+    .filter(({ diff }) => diff.bytes)
+    .map(({ fileName, diff }) => ({ file: `${fileName}.bin`, bytes: diff.bytes, offsets: diff.offsets.slice(0, MAX_OFFSETS).map(hex) }));
 }
 
 /**
@@ -813,24 +815,27 @@ interface GateWorkingRow {
   dir_digits: number; area_code_mode: number; area_codes: (string | null)[]; middle_pointer: string; base_ok: boolean; saved_at: string;
   extra: Record<string, string> | null; sizes: WorkingState['sizes'] | null; conflicts: Conflict[];
 }
-/**
- * Load working state.
- *
- * @param store - Database store handle.
- * @param phone - Gate system phone number (digits or formatted).
- * @returns Promise resolving to `{ state: WorkingState; baseOk: boolean; savedAt: Date; conflicts: Conflict[] } | null`.
- */
-export async function loadWorkingState(store: Store, phone: string):
-  Promise<{ state: WorkingState; baseOk: boolean; savedAt: Date; conflicts: Conflict[] } | null> {
+export interface LoadedWorkingState {
+  state: WorkingState;
+  baseOk: boolean;
+  savedAt: Date;
+  conflicts: Conflict[];
+}
+
+interface CardDbRow {
+  slot: number;
+  card_number: string;
+  directory_code: string | null;
+  raw_code: string | null;
+}
+
+export async function loadWorkingState(store: Store, phone: string): Promise<LoadedWorkingState | null> {
   const phoneKey = phoneDigits(phone);
   const head = await one<GateWorkingRow>(store,
     'SELECT dir_digits, area_code_mode, area_codes, middle_pointer, base_ok, saved_at, extra, sizes, conflicts FROM gate_working WHERE phone = $1', [phoneKey]);
   if (!head) return null;
-  /**
-   * One query after another: store may be a transaction's single connection (no queries at the same time on it).
-   */
   const res = await all<ResidentDbRow>(store, 'SELECT * FROM gate_residents WHERE phone = $1 ORDER BY seq', [phoneKey]);
-  const cards = await all<{ slot: number; card_number: string; directory_code: string | null; raw_code: string | null }>(store,
+  const cards = await all<CardDbRow>(store,
     'SELECT slot, card_number, directory_code, raw_code FROM gate_cards WHERE phone = $1 ORDER BY slot', [phoneKey]);
   const settings = await all<{ key: string; value: string }>(store, 'SELECT key, value FROM gate_settings WHERE phone = $1', [phoneKey]);
   return {

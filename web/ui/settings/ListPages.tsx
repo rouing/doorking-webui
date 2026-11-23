@@ -1,10 +1,21 @@
 import { useMemo, useState } from 'react';
-import { Button, Flex, Select, Table, Text, TextField } from '@radix-ui/themes';
+import {
+  Button,
+  Chip,
+  MenuItem,
+  Paper,
+  Select,
+  Stack,
+  Switch,
+  TextField,
+  Typography,
+} from '@mui/material';
 import { usHolidaysForYear } from '../../../src/holidays.ts';
 import type { GateSettingRow } from '../../../src/types.ts';
 import type { GateApi } from '../api.ts';
 import { useConfirm } from '../Confirm.tsx';
-import { Box, CLEAR_NOTE, GroupPage, Head, rowState } from './GroupPage.tsx';
+import { HelpTip } from '../HelpTip.tsx';
+import { CLEAR_NOTE, GroupPage, rowState } from './GroupPage.tsx';
 import { useGateSettings, type GateSettings } from './useGateSettings.ts';
 
 type Holiday = { name: string; month: number; day: number };
@@ -26,32 +37,65 @@ function HolidayRow({ settings, setting, index, holidays }: HolidayRowProps) {
     return holidays.find((holiday) => holiday.month === month && holiday.day === day)?.name || '';
   };
   const known = v !== '' && Boolean(name(v));
-  const row = rowState(settings, [setting], { pendingText: 'saved, not sent' });
+  const row = rowState(settings, [setting], { pendingText: 'Not sent' });
+  const dirty = setting.key in settings.edits;
+  const pending = setting.value !== setting.gate;
+  const pill = dirty
+    ? { label: 'Unsaved', color: 'primary' as const }
+    : pending
+      ? { label: 'Not sent', color: 'success' as const }
+      : v === ''
+        ? { label: 'Unused', color: 'default' as const }
+        : known
+          ? { label: 'Active', color: 'success' as const }
+          : { label: 'Custom', color: 'info' as const };
+
   return (
-    <Table.Row style={row.style} title={`Gate (pulled): ${setting.gate || '(none)'}${setting.value !== setting.gate ? `\nWorking copy: ${setting.value || '(none)'}` : ''}`
-      + `${setting.key in settings.edits ? `\nYour change: ${v || '(none)'}` : ''}`}>
-      <Table.Cell>{index + 1}</Table.Cell>
-      <Table.Cell>
-        <Select.Root size="1" value={custom || (v !== '' && !known) ? CUSTOM : v === '' ? NONE : v}
-          onValueChange={(sel) => {
+    <Paper
+      variant="outlined"
+      title={`Gate (pulled): ${setting.gate || '(none)'}${setting.value !== setting.gate ? `\nWorking copy: ${setting.value || '(none)'}` : ''}`
+        + `${dirty ? `\nYour change: ${v || '(none)'}` : ''}`}
+      sx={{
+        px: 1.5,
+        py: 1,
+        width: '100%',
+        boxSizing: 'border-box',
+        backgroundColor: row.style.background || 'background.paper',
+      }}
+    >
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', width: '100%' }}>
+        <Chip size="small" label={`#${index + 1}`} sx={{ flexShrink: 0, minWidth: 36, fontVariantNumeric: 'tabular-nums' }} />
+        <Select
+          size="small"
+          value={custom || (v !== '' && !known) ? CUSTOM : v === '' ? NONE : v}
+          inputProps={{ 'aria-label': `Holiday ${index + 1}` }}
+          sx={{ flex: '1 1 auto', minWidth: 0, '& .MuiSelect-select': { py: 0.5, fontSize: '0.85rem' } }}
+          onChange={(event) => {
+            const sel = String(event.target.value);
             if (sel === CUSTOM) { setCustom(true); return; }
             setCustom(false);
             settings.edit(setting, sel === NONE ? '' : sel);
-          }}>
-          <Select.Trigger style={{ minWidth: '16ch' }} />
-          <Select.Content>
-            <Select.Item value={NONE}>— none —</Select.Item>
-            {holidays.map((holiday) => <Select.Item key={holiday.name} value={`${holiday.month}/${holiday.day}`}>{holiday.name}</Select.Item>)}
-            <Select.Item value={CUSTOM}>Custom date…</Select.Item>
-          </Select.Content>
-        </Select.Root>
-      </Table.Cell>
-      <Table.Cell><TextField.Root size="1" placeholder="M/D" style={{ width: '8ch' }} value={settings.current(setting)}
-        onChange={(event) => { setCustom(false); settings.edit(setting, event.target.value.trim()); }} /></Table.Cell>
-      <Table.Cell><Text size="1" color="gray">
-        {v === '' ? '' : (name(v) || 'Custom') + (row.status === 'unsaved' ? ' · unsaved' : row.status ? ' · saved, not sent' : '')}
-      </Text></Table.Cell>
-    </Table.Row>
+          }}
+        >
+          <MenuItem value={NONE}>— none —</MenuItem>
+          {holidays.map((holiday) => <MenuItem key={holiday.name} value={`${holiday.month}/${holiday.day}`}>{holiday.name}</MenuItem>)}
+          <MenuItem value={CUSTOM}>Custom date…</MenuItem>
+        </Select>
+        <TextField
+          size="small"
+          placeholder="M/D"
+          value={settings.current(setting)}
+          slotProps={{ htmlInput: { 'aria-label': `Holiday ${index + 1} date` } }}
+          sx={{
+            width: '7.5ch',
+            flexShrink: 0,
+            '& .MuiInputBase-input': { py: 0.5, px: 0.75, fontSize: '0.85rem', textAlign: 'center', fontVariantNumeric: 'tabular-nums' },
+          }}
+          onChange={(event) => { setCustom(false); settings.edit(setting, event.target.value.trim()); }}
+        />
+        <Chip size="small" color={pill.color} label={pill.label} sx={{ minWidth: 68, flexShrink: 0 }} />
+      </Stack>
+    </Paper>
   );
 }
 
@@ -62,29 +106,43 @@ interface HolidaysForSecurityProps {
 }
 
 /**
- * The "Holidays for Security Levels" box. Turning it on asks first, as DoorKing32 does: TZ4 of every security
+ * The "Holidays for Security Levels" switch card. Turning it on asks first, as DoorKing32 does: TZ4 of every security
  * level becomes the Holiday time zone.
  *
  * @param props - Component props.
- * @param props.settings - Settings map or configuration.
  * @returns Rendered React element.
  */
 function HolidaysForSecurity({ settings }: HolidaysForSecurityProps) {
   const [dialog, confirm] = useConfirm();
   const field = settings.field(HOL_FOR_SL);
   if (!field) return null;
-  const row = rowState(settings, [field], { pendingText: 'saved, not sent' });
+  const row = rowState(settings, [field], { pendingText: 'Not sent' });
+  const cur = settings.current(field) === 'Yes';
+  const dirty = field.key in settings.edits;
+  const pending = field.value !== field.gate;
+  const pill = dirty
+    ? { label: 'Unsaved', color: 'primary' as const }
+    : pending
+      ? { label: 'Not sent', color: 'success' as const }
+      : cur
+        ? { label: 'Enabled', color: 'success' as const }
+        : { label: 'Disabled', color: 'default' as const };
   const toggle = async (on: boolean) => {
     if (on && !await confirm({ title: 'Enable Holidays for Security Levels?', action: 'Enable',
       body: 'Time zone 4 (TZ4) of every security level becomes the Holiday schedule (HOL), and it overrides the other time zones of the level on holidays. Nothing is sent to the gate until you Send.' })) return;
     settings.edit(field, on ? 'Yes' : 'No');
   };
   return (
-    <Flex align="center" gap="2" px="2" style={{ ...row.style, borderRadius: 'var(--radius-2)' }}>
+    <Paper variant="outlined" sx={{ px: 2, py: 1, width: '100%', boxSizing: 'border-box', backgroundColor: row.style.background || 'background.paper' }}>
       {dialog}
-      <Box checked={settings.current(field) === 'Yes'} onChange={toggle} label="Holidays for Security Levels (TZ4 becomes HOL)" help="holidaysForSecurity" />
-      {row.status && <Text size="1" color="gray">{row.status}</Text>}
-    </Flex>
+      <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+        <Typography variant="body2" component="div" sx={{ fontWeight: 600, flex: '1 1 auto', minWidth: 0, display: 'flex', alignItems: 'center' }}>
+          Holidays for Security Levels (TZ4 → HOL)<HelpTip of="holidaysForSecurity" />
+        </Typography>
+        <Switch checked={cur} onChange={(_, checked) => toggle(checked)} slotProps={{ input: { 'aria-label': 'Holidays for Security Levels' } }} />
+        <Chip size="small" color={pill.color} label={pill.label} sx={{ minWidth: 74, flexShrink: 0 }} />
+      </Stack>
+    </Paper>
   );
 }
 
@@ -98,8 +156,6 @@ interface HolidaysPageProps {
  * The gate stores only month/day.
  *
  * @param props - Component props.
- * @param props.gapi - Gate-scoped API fetch helper.
- * @param props.holidays - Fallback fixed holiday list from the session.
  * @returns Rendered React element.
  */
 export function HolidaysPage({ gapi }: HolidaysPageProps) {
@@ -115,28 +171,30 @@ export function HolidaysPage({ gapi }: HolidaysPageProps) {
     });
   };
   return (
-    <GroupPage settings={settings} group="Holidays" title="Holidays" help="holidays" clearValue={(setting) => (setting.key === HOL_FOR_SL ? undefined : '')}
+    <GroupPage settings={settings} group="Holidays" title="Holidays" help="holidays" bare
+      clearValue={(setting) => (setting.key === HOL_FOR_SL ? undefined : '')}
       buttons={(
-        <Flex align="center" gap="2" wrap="wrap">
-          <Select.Root size="2" value={String(year)} onValueChange={(value) => setYear(Number(value))}>
-            <Select.Trigger />
-            <Select.Content>
-              {[thisYear, thisYear + 1, thisYear + 2].map((optionYear) => (
-                <Select.Item key={optionYear} value={String(optionYear)}>{optionYear}</Select.Item>
-              ))}
-            </Select.Content>
-          </Select.Root>
-          <Button variant="soft" onClick={fillYear} disabled={!holidayFields.length}>Fill {year} US holidays</Button>
-          <HolidaysForSecurity settings={settings} />
-        </Flex>
+        <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+          <Select
+            size="small"
+            value={String(year)}
+            inputProps={{ 'aria-label': 'Holiday year' }}
+            onChange={(event) => setYear(Number(event.target.value))}
+          >
+            {[thisYear, thisYear + 1, thisYear + 2].map((optionYear) => (
+              <MenuItem key={optionYear} value={String(optionYear)}>{optionYear}</MenuItem>
+            ))}
+          </Select>
+          <Button variant="outlined" onClick={fillYear} disabled={!holidayFields.length}>Fill {year} US holidays</Button>
+        </Stack>
       )}
-      intro={`Pick a holiday from the ${year} list (fixed and floating US holidays) or enter a date. ${CLEAR_NOTE} Clear leaves Holidays for Security Levels as it is. Edits go to the working copy (blue = unsaved, green = saved but not on the gate yet). The gate stores only month/day; names come from the built-in list.`}>
-      <Head cols={['#', 'Holiday', 'Date (M/D)', 'Status']} />
-      <Table.Body>
+      intro={`Pick a holiday from the ${year} list (fixed and floating US holidays) or enter a date. ${CLEAR_NOTE} Clear leaves Holidays for Security Levels as it is. Edits go to the working copy.`}>
+      <Stack spacing={1} sx={{ width: '100%', maxWidth: 680 }}>
+        <HolidaysForSecurity settings={settings} />
         {holidayFields.map((setting, index) => (
           <HolidayRow key={setting.key} settings={settings} setting={setting} index={index} holidays={yearHolidays} />
         ))}
-      </Table.Body>
+      </Stack>
     </GroupPage>
   );
 }
@@ -154,27 +212,75 @@ interface FacilityPageProps {
  */
 export function FacilityPage({ gapi }: FacilityPageProps) {
   const settings = useGateSettings(gapi);
+  const fields = settings.fields.filter((setting) => setting.group === 'Facility Codes');
   return (
-    <GroupPage settings={settings} group="Facility Codes" title="Facility Codes" help="facility" clearValue={(setting) => (setting.key === 'facilityEnabled' ? 'No' : '')}
-      intro={`Enable facility codes and set up to 10 values (000–255; blank = unused). For MicroPLUS transmitters, leave off the leading 0 of the 4-digit facility code (0124 → 124). ${CLEAR_NOTE} Edits go to the working copy (blue = unsaved, green = saved but not sent to the gate).`}>
-      <Head cols={['Setting', 'Value', 'Status']} />
-      <Table.Body>
-        {settings.fields.filter((setting) => setting.group === 'Facility Codes').map((setting) => {
-          const row = rowState(settings, [setting], { pendingText: 'saved, not sent' });
+    <GroupPage settings={settings} group="Facility Codes" title="Facility Codes" help="facility" bare
+      clearValue={(setting) => (setting.key === 'facilityEnabled' ? 'No' : '')}
+      intro={`Enable facility codes and set up to 10 values (000–255; blank = unused). For MicroPLUS transmitters, leave off the leading 0 of the 4-digit facility code (0124 → 124). ${CLEAR_NOTE} Edits go to the working copy.`}>
+      <Stack spacing={1} sx={{ width: '100%', maxWidth: 640 }}>
+        {fields.map((setting) => {
+          const row = rowState(settings, [setting], { pendingText: 'Not sent' });
+          const cur = settings.current(setting);
+          const dirty = setting.key in settings.edits;
+          const pending = setting.value !== setting.gate;
+          const isToggle = setting.key === 'facilityEnabled';
+          const pill = dirty
+            ? { label: 'Unsaved', color: 'primary' as const }
+            : pending
+              ? { label: 'Not sent', color: 'success' as const }
+              : isToggle
+                ? { label: cur === 'Yes' ? 'Enabled' : 'Disabled', color: cur === 'Yes' ? ('success' as const) : ('default' as const) }
+                : cur
+                  ? { label: 'Active', color: 'success' as const }
+                  : { label: 'Unused', color: 'default' as const };
           return (
-            <Table.Row key={setting.key} style={row.style}>
-              <Table.Cell>{setting.name}</Table.Cell>
-              <Table.Cell>
-                {setting.key === 'facilityEnabled'
-                  ? <Box checked={settings.current(setting) === 'Yes'} onChange={(on) => settings.edit(setting, on ? 'Yes' : 'No')} />
-                  : <TextField.Root size="1" type="number" min={0} max={255} style={{ width: '10ch' }} value={settings.current(setting)}
-                    onChange={(event) => settings.edit(setting, event.target.value.trim())} />}
-              </Table.Cell>
-              <Table.Cell><Text size="1" color="gray">{row.status}</Text></Table.Cell>
-            </Table.Row>
+            <Paper
+              key={setting.key}
+              variant="outlined"
+              sx={{
+                px: 2,
+                py: 1,
+                width: '100%',
+                boxSizing: 'border-box',
+                backgroundColor: row.style.background || 'background.paper',
+              }}
+            >
+              <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                <Typography variant="body2" sx={{ fontWeight: 600, flex: '1 1 auto', minWidth: 0 }}>
+                  {setting.name}
+                </Typography>
+                {isToggle ? (
+                  <Switch
+                    checked={cur === 'Yes'}
+                    onChange={(_, checked) => settings.edit(setting, checked ? 'Yes' : 'No')}
+                    slotProps={{ input: { 'aria-label': setting.name } }}
+                  />
+                ) : (
+                  <TextField
+                    size="small"
+                    type="number"
+                    placeholder="—"
+                    value={cur}
+                    slotProps={{ htmlInput: { min: 0, max: 255, inputMode: 'numeric', 'aria-label': setting.name } }}
+                    sx={{
+                      width: '8.5ch',
+                      flexShrink: 0,
+                      '& .MuiInputBase-input': { py: 0.5, px: 1, fontSize: '0.875rem', textAlign: 'center', fontVariantNumeric: 'tabular-nums' },
+                    }}
+                    onChange={(event) => settings.edit(setting, event.target.value.trim())}
+                  />
+                )}
+                <Chip
+                  size="small"
+                  color={pill.color}
+                  label={pill.label}
+                  sx={{ minWidth: 74, flexShrink: 0 }}
+                />
+              </Stack>
+            </Paper>
           );
         })}
-      </Table.Body>
+      </Stack>
     </GroupPage>
   );
 }

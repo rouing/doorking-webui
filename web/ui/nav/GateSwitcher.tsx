@@ -1,6 +1,7 @@
-import { useState } from 'react';
-import { DropdownMenu, Flex, Text } from '@radix-ui/themes';
-import { CheckIcon, ChevronDownIcon } from '@radix-ui/react-icons';
+import { useState, type MouseEvent } from 'react';
+import { Button, Divider, ListItemIcon, ListItemText, Menu, MenuItem, Typography } from '@mui/material';
+import CheckIcon from '@mui/icons-material/Check';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import type { GateInfo } from '../../../src/types.ts';
 import { api, errorText } from '../api.ts';
 import { useBackLayer } from '../back.ts';
@@ -22,40 +23,80 @@ interface GateSwitcherProps {
  * @returns Rendered React element.
  */
 export function GateSwitcher({ gate, onSwitch, onAllGates }: GateSwitcherProps) {
-  const [open, setOpen] = useState(false);
+  const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [gates, setGates] = useState<GateInfo[] | null>(null);
   const [error, setError] = useState('');
-  useBackLayer(open, () => setOpen(false));
-  const toggle = (next: boolean) => {
-    setOpen(next);
-    if (next) api<{ gates: GateInfo[] }>('GET', '/api/gates').then((reply) => { setGates(reply.gates); setError(''); }, (err) => setError(errorText(err)));
+  const open = Boolean(anchorEl);
+  const close = () => setAnchorEl(null);
+  useBackLayer(open, close);
+
+  const openMenu = (event: MouseEvent<HTMLButtonElement>) => {
+    setAnchorEl(event.currentTarget);
+    api<{ gates: GateInfo[] }>('GET', '/api/gates').then(
+      (reply) => { setGates(reply.gates); setError(''); },
+      (err) => setError(errorText(err)),
+    );
   };
+
   return (
-    <DropdownMenu.Root open={open} onOpenChange={toggle}>
-      <DropdownMenu.Trigger>
-        <button type="button" className="gate-switcher" aria-label={`${gateLabel(gate)}: switch gate`}>
-          <Text size="3" weight="bold" style={{ overflowWrap: 'anywhere' }}>{gateLabel(gate)}</Text>
-          <ChevronDownIcon />
-        </button>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Content align="start" style={{ minWidth: 220, maxWidth: 'min(360px, 90vw)' }}>
-        <DropdownMenu.Label>Your gates</DropdownMenu.Label>
-        {!gates && !error && <DropdownMenu.Item disabled>Loading…</DropdownMenu.Item>}
-        {error && <DropdownMenu.Item disabled>{error}</DropdownMenu.Item>}
+    <>
+      <Button
+        type="button"
+        fullWidth
+        color="inherit"
+        endIcon={<KeyboardArrowDownIcon />}
+        aria-label={`${gateLabel(gate)}: switch gate`}
+        aria-haspopup="menu"
+        aria-expanded={open ? 'true' : undefined}
+        onClick={openMenu}
+        sx={{
+          justifyContent: 'space-between',
+          textAlign: 'left',
+          px: 1,
+          py: 0.75,
+          fontWeight: 700,
+          fontSize: '0.95rem',
+          lineHeight: 1.3,
+        }}
+      >
+        <Typography component="span" variant="subtitle2" sx={{ fontWeight: 700, overflowWrap: 'anywhere', textAlign: 'left' }}>
+          {gateLabel(gate)}
+        </Typography>
+      </Button>
+      <Menu
+        anchorEl={anchorEl}
+        open={open}
+        onClose={close}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+        slotProps={{ paper: { sx: { minWidth: 220, maxWidth: 'min(360px, 90vw)' } } }}
+      >
+        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, px: 2, py: 0.5, display: 'block' }}>
+          Your gates
+        </Typography>
+        {!gates && !error && <MenuItem disabled>Loading…</MenuItem>}
+        {error && <MenuItem disabled>{error}</MenuItem>}
         {gates?.map((other) => (
-          <DropdownMenu.Item key={other.phoneNumber} onSelect={() => { if (other.phoneNumber !== gate.phoneNumber) onSwitch(other); }}>
-            <Flex align="center" gap="2" width="100%">
-              <span style={{ width: 15, display: 'inline-flex' }}>{other.phoneNumber === gate.phoneNumber && <CheckIcon aria-label="Open now" />}</span>
-              <Text truncate>{gateLabel(other)}</Text>
-              <Flex flexGrow="1" />
-              {other.role !== 'admin' && <Text size="1" color="gray">{roleLabel(other.role)}</Text>}
-            </Flex>
-          </DropdownMenu.Item>
+          <MenuItem
+            key={other.phoneNumber}
+            selected={other.phoneNumber === gate.phoneNumber}
+            onClick={() => { close(); if (other.phoneNumber !== gate.phoneNumber) onSwitch(other); }}
+          >
+            <ListItemIcon sx={{ minWidth: 28 }}>
+              {other.phoneNumber === gate.phoneNumber && <CheckIcon fontSize="small" aria-label="Open now" />}
+            </ListItemIcon>
+            <ListItemText primary={gateLabel(other)} slotProps={{ primary: { noWrap: true, variant: 'body2' } }} />
+            {other.role !== 'admin' && (
+              <Typography variant="caption" color="text.secondary" sx={{ ml: 1.5, flexShrink: 0 }}>
+                {roleLabel(other.role)}
+              </Typography>
+            )}
+          </MenuItem>
         ))}
-        <DropdownMenu.Separator />
-        <DropdownMenu.Item onSelect={onAllGates}>All gates…</DropdownMenu.Item>
-      </DropdownMenu.Content>
-    </DropdownMenu.Root>
+        <Divider />
+        <MenuItem onClick={() => { close(); onAllGates(); }}>All gates…</MenuItem>
+      </Menu>
+    </>
   );
 }
 

@@ -26,9 +26,17 @@ export interface DatabaseConfig {
  * to this provider can't sign in with a password. maxAgeHours: refuse sign-ins whose authentication at the provider
  * (auth_time) is older than this (0 = no limit).
  */
+export interface SsoRoleMap {
+  /** ID token claim holding group/role names (default `'groups'`). */
+  claim?: string;
+  /** Group/role name -> `{ "<gatePhone or *>": "admin" | "editor" | "readonly" }`. */
+  map: Record<string, Record<string, 'admin' | 'editor' | 'readonly'>>;
+}
 export interface SsoProvider {
   id: string; name: string; issuer: string; clientId: string; clientSecret: string;
   allowedDomains: string[]; autoCreate: boolean; passwords: boolean; maxAgeHours: number;
+  strongAcrs?: string[];
+  roleMap?: SsoRoleMap;
 }
 export interface ServerConfig {
   file: string | null; // the config file read, or null when there was none
@@ -45,6 +53,10 @@ export interface ServerConfig {
    * 'none'. appUrl: the address links in emails point to ('' = https://<server.publicHost>).
    */
   email: { host: string; port: number; security: string; user: string; password: string; from: string; appUrl: string };
+  /** Optional VAPID keys for Web Push; when blank, keys are auto-generated and saved in PostgreSQL `meta`. */
+  push: { vapidPublicKey: string; vapidPrivateKey: string; subject: string };
+  /** Optional native Android app verification (`/.well-known/assetlinks.json`, WebAuthn `android:apk-key-hash:` origins, and `/download` APK path). */
+  android: { packageName: string; sha256CertFingerprints: string[]; apkPath: string };
   sso: { providers: SsoProvider[] };
   gateDefaults: typeof GATE_DEFAULTS;
 }
@@ -93,6 +105,11 @@ const SsoProviderSchema = z.strictObject({
     .min(0, { error: 'must be a whole number of hours, 0-720 (0 = no limit)' })
     .max(720, { error: 'must be a whole number of hours, 0-720 (0 = no limit)' })
     .default(0),
+  strongAcrs: z.array(z.string().min(1)).optional(),
+  roleMap: z.strictObject({
+    claim: z.string().min(1).optional(),
+    map: z.record(z.string(), z.record(z.string(), z.enum(['admin', 'editor', 'readonly']))),
+  }, objError).optional(),
 }, objError).superRefine((provider, ctx) => {
   if (provider.autoCreate && !provider.allowedDomains.length) {
     ctx.addIssue({ code: 'custom', path: ['autoCreate'], message: 'needs allowedDomains' });
@@ -156,6 +173,23 @@ const ConfigSchema = z.strictObject({
     password: textField(''),
     from: textField(''),
     appUrl: textField(''),
+  }, objError).prefault({}),
+  push: z.strictObject({
+    vapidPublicKey: textField(''),
+    vapidPrivateKey: textField(''),
+    subject: textField(''),
+  }, objError).prefault({}),
+  android: z.strictObject({
+    packageName: textField('').refine((value) => !value || /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(value), {
+      error: 'must be a valid Android applicationId such as "com.doorking.gate"',
+    }),
+    sha256CertFingerprints: z.array(
+      z.string().trim().regex(/^[0-9a-f]{2}(:[0-9a-f]{2}){31}$/i, {
+        error: 'must be colon-separated SHA-256 hex (32 bytes, e.g. "AA:BB:...")',
+      }).transform((value) => value.toUpperCase()),
+      { error: 'must be a list of SHA-256 certificate fingerprints' },
+    ).default([]),
+    apkPath: textField(''),
   }, objError).prefault({}),
   sso: SsoSectionSchema,
   gateDefaults: z.strictObject({
@@ -271,6 +305,7 @@ export function loadConfig({ file: given, env = process.env, args = process.argv
   sections.email.appUrl = String(sections.email.appUrl || (sections.server.publicHost ? `https://${sections.server.publicHost}` : `http://localhost:${sections.server.port}`)).replace(/\/+$/, '');
   // A path (with a folder) is relative to the config file's folder; a bare name such as "ffmpeg" is looked up on the PATH.
   if (/[\\/]/.test(sections.cameras.ffmpeg)) sections.cameras.ffmpeg = path.resolve(dir, sections.cameras.ffmpeg);
+  if (sections.android.apkPath.trim()) sections.android.apkPath = path.resolve(dir, sections.android.apkPath.trim());
   return { file: fs.existsSync(configFile) ? configFile : null, ...sections };
 }
 
@@ -316,6 +351,7 @@ export function maskedConfig(config: ServerConfig): ServerConfig {
     ...config,
     database: { ...config.database, password: config.database.password ? '***' : '', url: config.database.url ? config.database.url.replace(/:[^:@/]*@/, ':***@') : '' },
     email: { ...config.email, password: config.email.password ? '***' : '' },
+    push: { ...config.push, vapidPrivateKey: config.push.vapidPrivateKey ? '***' : '' },
     sso: { providers: config.sso.providers.map((provider) => ({ ...provider, clientSecret: provider.clientSecret ? '***' : '' })) },
   };
 }

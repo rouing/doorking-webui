@@ -1,13 +1,17 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { Button, Callout, Flex, IconButton, Spinner, Text, Theme } from '@radix-ui/themes';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Alert, Box, Button, CircularProgress, CssBaseline, IconButton, Stack, ThemeProvider, Typography } from '@mui/material';
+import { StyledEngineProvider } from '@mui/material/styles';
+import CloseIcon from '@mui/icons-material/Close';
 import type { SessionReply } from '../../src/types.ts';
 import { api, errorText, lsGet, lsSet, onSignedOut } from './api.ts';
+import { createAppTheme } from './theme.ts';
 import { StepUpDialog } from './account/Passkeys.tsx';
 import { APPROVAL_KEY } from './account/ApproveDevice.tsx';
 import { EmailLink, FirstSetup, ForcedPasswordChange } from './account/SignInPages.tsx';
 import { Login } from './Login.tsx';
 import { Gates } from './Gates.tsx';
 import { GateApp } from './GateApp.tsx';
+import { ResidentPortal } from './portal/ResidentPortal.tsx';
 import { UpdateNotice } from './UpdateNotice.tsx';
 
 export type SignedIn = Extract<SessionReply, { loggedIn: true }>;
@@ -64,6 +68,8 @@ export function App() {
   const [approvalNotice, setApprovalNotice] = useState(approvalInAddress);
   const [session, setSession] = useState<SessionReply | null>(null);
   const [error, setError] = useState('');
+  const [portalMode, setPortalMode] = useState(false);
+  const [choseGateList, setChoseGateList] = useState(false);
 
   const reload = useCallback(async () => {
     try {
@@ -86,22 +92,17 @@ export function App() {
   }, [error, session, reload]);
 
   const dark = session && session.loggedIn ? session.dark : lsGet('dk-theme', false);
+  const theme = useMemo(() => createAppTheme(dark), [dark]);
   // The phone's status bar and the page background follow the page's light or dark mode (index.html has the
   // system-based colours until now).
   useEffect(() => {
     document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
-    /** Read once the theme has applied its colours (after this paint). */
-    const frame = requestAnimationFrame(() => {
-      const themed = document.querySelector(dark ? '.radix-themes.dark' : '.radix-themes.light') || document.querySelector('.radix-themes');
-      const panel = themed ? getComputedStyle(themed).getPropertyValue('--color-panel-solid').trim() : '';
-      document.querySelectorAll('meta[name="theme-color"]').forEach((meta, i) => {
-        if (i) { meta.remove(); return; }
-        meta.removeAttribute('media');
-        meta.setAttribute('content', panel || (dark ? '#111111' : '#ffffff'));
-      });
+    document.querySelectorAll('meta[name="theme-color"]').forEach((meta, i) => {
+      if (i) { meta.remove(); return; }
+      meta.removeAttribute('media');
+      meta.setAttribute('content', theme.palette.background.paper);
     });
-    return () => cancelAnimationFrame(frame);
-  }, [dark]);
+  }, [dark, theme.palette.background.paper]);
 
   const linkDone = () => { window.history.replaceState(null, '', window.location.pathname); setLink(null); reload(); };
 
@@ -109,47 +110,80 @@ export function App() {
     if (link) return <EmailLink kind={link.kind} sso={session ? session.sso : []} token={link.token} onDone={linkDone} />;
     if (error && !session) {
       return (
-        <Flex direction="column" align="start" gap="3" m={{ initial: '4', sm: '6' }}>
-          <Callout.Root color="red" role="alert">
-            <Callout.Text>
-              Can't reach the gate server. Check your internet connection, then try again. It tries again by itself when the connection
-              comes back.
-            </Callout.Text>
-          </Callout.Root>
-          <Button onClick={() => { setError(''); reload(); }}>Try again</Button>
-          <Text size="1" color="gray">Details: {error}</Text>
-        </Flex>
+        <Stack spacing={2} sx={{ alignItems: 'flex-start', m: { xs: 2, sm: 4 } }}>
+          <Alert severity="error" role="alert">
+            Can't reach the gate server. Check your internet connection, then try again. It tries again by itself when the connection
+            comes back.
+          </Alert>
+          <Button variant="contained" onClick={() => { setError(''); reload(); }}>Try again</Button>
+          <Typography variant="caption" color="text.secondary">Details: {error}</Typography>
+        </Stack>
       );
     }
-    if (!session) return <Flex justify="center" p="9"><Spinner size="3" /></Flex>;
+    if (!session) return <Box sx={{ display: 'flex', justifyContent: 'center', p: 8 }}><CircularProgress /></Box>;
     if (!session.loggedIn) {
       return session.setup ? <FirstSetup onDone={reload} /> : <Login onSignedIn={reload} emailEnabled={session.emailEnabled} sso={session.sso} />;
     }
     if (session.mustChangePassword) return <ForcedPasswordChange user={session.user} onDone={reload} />;
-    if (!session.gate) return <Gates session={session} onChange={reload} />;
-    return <GateApp key={session.gate.phoneNumber} session={session} gate={session.gate} onChange={reload} />;
+    if (!session.gate) return <Gates session={session} autoOpen={!choseGateList} onChange={() => { setChoseGateList(false); setPortalMode(false); reload(); }} />;
+    if (session.gate.role === 'resident' || portalMode) {
+      return (
+        <ResidentPortal
+          key={session.gate.phoneNumber}
+          session={session}
+          gate={session.gate}
+          onChange={() => { setChoseGateList(true); setPortalMode(false); reload(); }}
+          onSessionReload={reload}
+          onBackToStaff={session.gate.role !== 'resident' ? () => setPortalMode(false) : undefined}
+        />
+      );
+    }
+    return (
+      <GateApp
+        key={session.gate.phoneNumber}
+        session={session}
+        gate={session.gate}
+        onChange={reload}
+        onOpenPortal={() => setPortalMode(true)}
+      />
+    );
   };
   return (
-    <Theme appearance={dark ? 'dark' : 'light'} accentColor="blue" radius="medium">
+    <StyledEngineProvider enableCssLayer>
+      <ThemeProvider theme={theme}>
+        <CssBaseline />
       {ssoNotice && (
-        <Callout.Root color={ssoNotice.ok ? 'green' : 'red'} role="alert" m="3">
-          <Flex align="center" gap="3">
-            <Callout.Text>{ssoNotice.text}</Callout.Text>
-            <IconButton size="1" variant="ghost" color="gray" title="Dismiss" onClick={() => setSsoNotice(null)}>✕</IconButton>
-          </Flex>
-        </Callout.Root>
+        <Alert
+          severity={ssoNotice.ok ? 'success' : 'error'}
+          role="alert"
+          sx={{ m: 2 }}
+          action={
+            <IconButton size="small" color="inherit" aria-label="Dismiss" onClick={() => setSsoNotice(null)}>
+              <CloseIcon fontSize="small" />
+            </IconButton>
+          }
+        >
+          {ssoNotice.text}
+        </Alert>
       )}
       {approvalNotice && (
-        <Callout.Root color="blue" role="status" m="3">
-          <Flex align="center" gap="3">
-            <Callout.Text>Approval code received. Sign in, then open User Settings → Passkeys and click Add a passkey (within 10 minutes).</Callout.Text>
-            <IconButton size="1" variant="ghost" color="gray" title="Dismiss" onClick={() => setApprovalNotice(false)}>✕</IconButton>
-          </Flex>
-        </Callout.Root>
+        <Alert
+          severity="info"
+          role="status"
+          sx={{ m: 2 }}
+          action={
+            <IconButton size="small" color="inherit" aria-label="Dismiss" onClick={() => setApprovalNotice(false)}>
+              <CloseIcon fontSize="small" />
+            </IconButton>
+          }
+        >
+          Approval code received. Sign in, then open User Settings → Passkeys and click Add a passkey (within 10 minutes).
+        </Alert>
       )}
       {renderPage()}
       {session && session.loggedIn && <StepUpDialog />}
       <UpdateNotice />
-    </Theme>
+      </ThemeProvider>
+    </StyledEngineProvider>
   );
 }

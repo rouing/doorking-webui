@@ -314,32 +314,22 @@ function createFfmpeg({ binDir, ffmpegPath, grabMs, clipExtraMs }: { binDir: str
     });
   }
 
-  /**
-   * Runs ffmpeg on local files: { code, err } (err: the last 4000 characters of its output).
-   *
-   * @param args - Command-line arguments.
-   * @param [ms] - Ms.
-   * @returns Promise resolving to `{ code: number | null; err: string }`.
-   */
+  /** Runs ffmpeg on local files, rejecting on spawn errors instead of returning a sentinel exit code. */
   function localFfmpeg(args: string[], ms = 60000): Promise<{ code: number | null; err: string }> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const proc = spawn(executable(ffmpegPath || ffmpegCommand(binDir)), ['-hide_banner', ...args], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
       let err = '';
       proc.stderr.on('data', (chunk) => { err = (err + chunk).slice(-4000); });
       const timer = setTimeout(() => proc.kill(), ms);
-      proc.on('error', (error) => { clearTimeout(timer); resolve({ code: -1, err: error.message }); });
+      proc.on('error', (error) => { clearTimeout(timer); reject(new Error(`ffmpeg: ${error.message}`)); });
       proc.on('exit', (code) => { clearTimeout(timer); resolve({ code, err }); });
     });
   }
 
-  /**
-   * A local video file's duration in seconds (0 when unreadable).
-   *
-   * @param file - File path or filename.
-   * @returns Promise resolving to `number`.
-   */
+  /** A local video file's duration in seconds (0 when unreadable). */
   async function clipSeconds(file: string): Promise<number> {
-    const match = /Duration: (\d+):(\d+):(\d+(?:\.\d+)?)/.exec((await localFfmpeg(['-i', file], 30000)).err);
+    const out = await localFfmpeg(['-i', file], 30000).catch(() => ({ code: null, err: '' }));
+    const match = /Duration: (\d+):(\d+):(\d+(?:\.\d+)?)/.exec(out.err);
     return match ? Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) : 0;
   }
 

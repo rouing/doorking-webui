@@ -6,6 +6,8 @@
 import type { GateFeatures, GatePrefs, GateTracker, ResidentRow, TransactionRow } from '../../src/types.ts';
 import { NO_FOOTAGE_EVENTS } from '../../src/snapshot-files.ts';
 
+export { doorKingCsv, downloadCsv, downloadText } from './csv.ts';
+
 /**
  * A row's value for a column key (a field of the row; undefined when it has none).
  *
@@ -166,80 +168,10 @@ export function residentFinder(rows: ResidentRow[]): (transaction: TransactionRo
   };
 }
 
-/**
- * Downloads rows as a CSV file.
- *
- * @param name - Display name or filename.
- * @param header - CSV column headers.
- * @param rows - List of data rows.
- */
-export function downloadCsv(name: string, header: string[], rows: string[][]) {
-  const esc = (value: string) => (/[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value);
-  downloadText(name, [header, ...rows].map((row) => row.map(esc).join(',')).join('\r\n') + '\r\n');
-}
-
-/**
- * The whole directory as DoorKing's cloud exports it (ResidentsExport.csv, matched against one, 2026-11-16): one row per
- * directory code in the gate's directory order (empty slots first, vendors last), 62 columns: ACCOUNT (the site
- * name), Resident, H (hidden: Y/N; vendors N), AAC (area code as stored, 3 or 4 digits), PHONE (555-0142), Dir, ENT, SL,
- * Device + DEVICE2-25 (card numbers, 5 digits, ascending), FL (blank when unset), ER, NOTES + NOTES2-25 (per-device
- * notes: kept empty), Vendor (Y/N), RESIDENTNOTES (the local note). Text columns are always quoted, the others never;
- * CRLF line ends. Cards without a directory code are listed on directory code 0 (000), as the cloud does. 25 is also
- * the gate's limit of cards per directory code.
- *
- * @param account - Gate site name written to the CSV `ACCOUNT` column.
- * @param rows - List of data rows.
- * @param [unassignedCards] - `string[]` value.
- * @returns `string` result.
- */
-export function doorKingCsv(account: string, rows: ResidentRow[], unassignedCards: string[] = []): string {
-  const quoted = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
-  const plain = (value: unknown) => String(value ?? '').replace(/[",\r\n]/g, ' ');
-  const devices = [''].concat(Array.from({ length: 24 }, (_, i) => String(i + 2)));
-  const header = ['ACCOUNT', 'Resident', 'H', 'AAC', 'PHONE', 'Dir', 'ENT', 'SL', 'Device', 'FL', 'ER', 'NOTES', 'Vendor',
-    ...devices.slice(1).flatMap((device) => [`DEVICE${device}`, `NOTES${device}`]), 'RESIDENTNOTES'];
-  const ordered = [...rows].sort((a, b) => (a.entryOffset ?? Infinity) - (b.entryOffset ?? Infinity) || a.directoryCode.localeCompare(b.directoryCode));
-  const lines = ordered.map((resident) => {
-    const vendor = resident.type === 'Vendor';
-    const own = /^0+$/.test(resident.directoryCode) ? [...resident.cards, ...unassignedCards] : resident.cards;
-    const cards = [...new Set(own.map((card) => Number(card)))].filter((card) => card > 0).sort((x, y) => x - y).slice(0, 25).map((card) => String(card).padStart(5, '0'));
-    const dev = (i: number) => plain(cards[i] || '');
-    return [quoted(account), quoted(resident.name), resident.hidden && !vendor ? 'Y' : 'N', plain(resident.areaCode), plain(resident.phone), plain(resident.directoryCode), plain(resident.entryCode),
-      plain(resident.securityLevel), dev(0), plain(resident.floor), plain(resident.elevatorRef), quoted(''), vendor ? 'Y' : 'N',
-      ...devices.slice(1).flatMap((_, i) => [dev(i + 1), quoted('')]), quoted(resident.note || '')].join(',');
-  });
-  return [header.join(','), ...lines].join('\r\n') + '\r\n';
-}
-
-/**
- * Downloads text as a file.
- *
- * @param name - Display name or filename.
- * @param text - Input text string.
- * @param [type] - MIME type or record type.
- */
-export function downloadText(name: string, text: string, type = 'text/csv') {
-  const link = document.createElement('a');
-  link.href = URL.createObjectURL(new Blob([text], { type }));
-  link.download = name;
-  link.click();
-  URL.revokeObjectURL(link.href);
-}
-
-/**
- * An account phone number (E.164) for display: +1 (214) 555-0100 for US/Canada, else as stored.
- *
- * @param e164 - `string` value.
- * @returns Operation result.
- */
+/** An account phone number (E.164) for display: `+1 (214) 555-0100` for US/Canada, else as stored. */
 export const fmtIntlPhone = (e164: string) => {
   const match = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(e164 || '');
   return match ? `+1 (${match[1]}) ${match[2]}-${match[3]}` : e164 || '';
 };
-/**
- * Fmt time.
- *
- * @param time - `string | number | undefined | null` value.
- * @returns Computed result.
- */
+
 export const fmtTime = (time: string | number | undefined | null) => (time ? new Date(time).toLocaleString('en-US') : '');

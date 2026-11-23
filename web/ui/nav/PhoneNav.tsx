@@ -4,18 +4,29 @@
  * The phone layout's navigation (GateApp): the top bar, the bottom tab bar, the Gate tab's sheet and the More drawer.
  */
 import type { ReactNode } from 'react';
-import { Button, Dialog, Flex, Text, VisuallyHidden } from '@radix-ui/themes';
-import { ActivityLogIcon, BackpackIcon, DotsHorizontalIcon, PersonIcon } from '@radix-ui/react-icons';
+import {
+  AppBar, Badge, BottomNavigation, BottomNavigationAction, Box, Button, ButtonBase, Chip, Drawer, Paper, Stack, Toolbar, Typography,
+} from '@mui/material';
+import FenceIcon from '@mui/icons-material/Fence';
+import ListAltIcon from '@mui/icons-material/ListAlt';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
+import PeopleIcon from '@mui/icons-material/People';
+import WorkIcon from '@mui/icons-material/Work';
 import type { Job } from '../../../src/types.ts';
-import type { GateApi } from '../api.ts';
+import type { DraftActions, GateApi } from '../api.ts';
 import { JOB_COLORS, jobLabel } from '../JobDock.tsx';
 import { useGateActions, type WorkingCopyState } from '../panes/WorkingCopyBar.tsx';
 
-/** The pages the tab bar opens (Relays through the Gate sheet's Live relays). */
-export type TabPage = 'residents' | 'vendors' | 'transactions' | 'relays';
-export const TAB_PAGES: readonly string[] = ['residents', 'vendors', 'transactions', 'relays'] satisfies TabPage[];
-/** The pages with a tab of their own; More is highlighted for every other page (Relays included). */
-const OWN_TAB: readonly string[] = ['residents', 'vendors', 'transactions'] satisfies TabPage[];
+/** The pages with a tab of their own in the bottom bar; More is highlighted for every other page (Relays included). */
+export type TabPage = 'residents' | 'vendors' | 'transactions';
+export const TAB_PAGES: readonly string[] = ['residents', 'vendors', 'transactions'] satisfies TabPage[];
+
+const WORKING_COPY_COLOR: Record<WorkingCopyState['color'], string> = {
+  gray: 'text.secondary',
+  red: 'error.main',
+  amber: 'warning.main',
+  green: 'success.main',
+};
 
 interface PhoneTopBarProps {
   gateName: string;
@@ -39,61 +50,58 @@ interface PhoneTopBarProps {
  * @returns Rendered React element.
  */
 export function PhoneTopBar({ gateName, workingCopy, job, hasCamera, onOpenGate, onShowProgress }: PhoneTopBarProps) {
+  const statusLabel = jobLabel(job);
   return (
-    <header className={hasCamera ? 'mobile-bar has-camera' : 'mobile-bar'}>
-      <button type="button" className="title-button" onClick={onOpenGate}
-        aria-label={`${gateName}, working copy: ${workingCopy.label}. Open the gate connection`}>
-        <Text as="div" size="3" weight="bold" truncate>{gateName}</Text>
-        <Text as="div" size="1" color={workingCopy.color} truncate><span className="status-dot" />{workingCopy.label}</Text>
-      </button>
-      {jobLabel(job) && <Button size="2" variant="soft" color={JOB_COLORS[job!.state]} onClick={onShowProgress}
-        style={{ flexShrink: 0 }} aria-label={`Gate connection ${jobLabel(job)}: show progress`}>{jobLabel(job)}</Button>}
-    </header>
-  );
-}
-
-/**
- * A gate, drawn like the app icon (web/ui/public/icon.svg), for the Gate tab.
- *
- * @returns Rendered React element.
- */
-function GateIcon() {
-  return (
-    <svg viewBox="96 126 320 300" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="32" strokeLinecap="round"
-      strokeLinejoin="round">
-      <path d="M120 400V150M392 400V150M120 210q136-70 272 0M120 400h272M166 230v170M256 208v192M346 230v170" />
-    </svg>
-  );
-}
-
-interface TabButtonProps {
-  label: string;
-  icon: ReactNode;
-  current: boolean;
-  status?: string; // shown as a dot and added to the spoken label
-  className?: string;
-  onClick: () => void;
-}
-
-/**
- * One tab of the bottom bar.
- *
- * @param props - Component props.
- * @param props.label - Display label.
- * @param props.icon - Icon.
- * @param props.current - Current password or state.
- * @param props.status - Working-copy status badge text (`matches the gate`, `changes not sent`, etc.).
- * @param [props.className] - Class name.
- * @param props.onClick - On click.
- * @returns Rendered React element.
- */
-function TabButton({ label, icon, current, status, className = '', onClick }: TabButtonProps) {
-  return (
-    <button type="button" className={`tab ${className}`} aria-current={current ? 'page' : undefined} aria-label={status && `${label} (${status})`}
-      onClick={onClick}>
-      <span className="tab-icon">{icon}{status && <span className="tab-dot" />}</span>
-      <span className="tab-label">{label}</span>
-    </button>
+    <AppBar position="sticky" color="default" elevation={0}
+      sx={{ borderBottom: 1, borderColor: 'divider', pt: 'env(safe-area-inset-top)' }}>
+      <Toolbar variant="dense" sx={{
+        gap: 1, minHeight: 52,
+        pl: 'calc(env(safe-area-inset-left) + 16px)',
+        pr: hasCamera ? 'calc(env(safe-area-inset-right) + 64px)' : 'calc(env(safe-area-inset-right) + 16px)',
+      }}>
+        <ButtonBase
+          type="button"
+          onClick={onOpenGate}
+          aria-label={`${gateName}, working copy: ${workingCopy.label}. Open the gate connection`}
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            textAlign: 'left',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'flex-start',
+            py: 0.5,
+            borderRadius: 1,
+          }}
+        >
+          <Typography variant="subtitle1" noWrap sx={{ fontWeight: 700, width: '100%' }}>{gateName}</Typography>
+          <Typography
+            variant="caption"
+            noWrap
+            sx={{
+              color: 'text.secondary',
+              display: 'flex',
+              alignItems: 'center',
+              width: '100%',
+            }}
+          >
+            <Box component="span" sx={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', bgcolor: WORKING_COPY_COLOR[workingCopy.color], mr: 0.75, flexShrink: 0 }} />
+            <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{workingCopy.label}</Box>
+          </Typography>
+        </ButtonBase>
+        {statusLabel && (
+          <Chip
+            size="small"
+            clickable
+            label={statusLabel}
+            color={JOB_COLORS[job!.state]}
+            onClick={onShowProgress}
+            sx={{ flexShrink: 0 }}
+            aria-label={`Gate connection ${statusLabel}: show progress`}
+          />
+        )}
+      </Toolbar>
+    </AppBar>
   );
 }
 
@@ -102,6 +110,7 @@ interface PhoneTabBarProps {
   menuOpen: boolean;
   gateOpen: boolean;
   running: boolean;
+  unsavedCount: number;
   onGo: (page: TabPage) => void;
   onOpenGate: () => void;
   onOpenMore: () => void;
@@ -120,15 +129,43 @@ interface PhoneTabBarProps {
  * @param props.onOpenMore - On open more.
  * @returns Rendered React element.
  */
-export function PhoneTabBar({ page, menuOpen, gateOpen, running, onGo, onOpenGate, onOpenMore }: PhoneTabBarProps) {
+export function PhoneTabBar({ page, menuOpen, gateOpen, running, unsavedCount, onGo, onOpenGate, onOpenMore }: PhoneTabBarProps) {
+  const value = gateOpen ? 'gate' : menuOpen || !TAB_PAGES.includes(page) ? 'more' : page;
   return (
-    <nav className="tab-bar" aria-label="Main">
-      <TabButton label="Residents" icon={<PersonIcon />} current={page === 'residents'} onClick={() => onGo('residents')} />
-      <TabButton label="Vendors" icon={<BackpackIcon />} current={page === 'vendors'} onClick={() => onGo('vendors')} />
-      <TabButton label="Transactions" className="wide" icon={<ActivityLogIcon />} current={page === 'transactions'} onClick={() => onGo('transactions')} />
-      <TabButton label="Gate" icon={<GateIcon />} current={gateOpen} status={running ? 'connection running' : undefined} onClick={onOpenGate} />
-      <TabButton label="More" icon={<DotsHorizontalIcon />} current={menuOpen || !OWN_TAB.includes(page)} onClick={onOpenMore} />
-    </nav>
+    <Paper
+      component="nav"
+      aria-label="Main"
+      elevation={4}
+      sx={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 1100, pb: 'env(safe-area-inset-bottom)' }}
+    >
+      <BottomNavigation
+        showLabels
+        value={value}
+        onChange={(_event, next: string) => {
+          if (next === 'residents' || next === 'vendors' || next === 'transactions') onGo(next);
+          else if (next === 'gate') onOpenGate();
+          else if (next === 'more') onOpenMore();
+        }}
+      >
+        <BottomNavigationAction value="residents" label="Residents" icon={<PeopleIcon />} sx={{ minWidth: 0, px: 0.5 }} />
+        <BottomNavigationAction value="vendors" label="Vendors" icon={<WorkIcon />} sx={{ minWidth: 0, px: 0.5 }} />
+        <BottomNavigationAction value="transactions" label="Transactions" icon={<ListAltIcon />} sx={{ minWidth: 0, px: 0.5 }} />
+        <BottomNavigationAction
+          value="gate"
+          label="Gate"
+          aria-label={running ? 'Gate (connection running)' : unsavedCount ? `Gate (${unsavedCount} unsaved)` : 'Gate'}
+          icon={
+            unsavedCount > 0 ? (
+              <Badge badgeContent={unsavedCount} color="success"><FenceIcon /></Badge>
+            ) : (
+              <Badge variant="dot" color="primary" invisible={!running}><FenceIcon /></Badge>
+            )
+          }
+          sx={{ minWidth: 0, px: 0.5 }}
+        />
+        <BottomNavigationAction value="more" label="More" icon={<MoreHorizIcon />} sx={{ minWidth: 0, px: 0.5 }} />
+      </BottomNavigation>
+    </Paper>
   );
 }
 
@@ -141,6 +178,7 @@ interface GateSheetProps {
   isAdmin: boolean;
   workingCopy: WorkingCopyState;
   hasWorkingCopy: boolean;
+  draft: DraftActions | null;
   onPull: (what: 'residents' | 'transactions') => void;
   onShowProgress: () => void;
   onLiveRelays: () => void;
@@ -169,7 +207,7 @@ interface GateSheetProps {
  * @param props.onNotify - On notify.
  * @returns Rendered React element.
  */
-export function GateSheet({ open, onOpenChange, gapi, job, readOnly, isAdmin, workingCopy, hasWorkingCopy, onPull, onShowProgress, onLiveRelays, onReset,
+export function GateSheet({ open, onOpenChange, gapi, job, readOnly, isAdmin, workingCopy, hasWorkingCopy, draft, onPull, onShowProgress, onLiveRelays, onReset,
   onJobStarted, onNotify }: GateSheetProps) {
   const running = job?.state === 'running';
   const actions = useGateActions({ gapi, workingCopy, hasWorkingCopy, running, onReset, onJobStarted, onNotify });
@@ -177,32 +215,78 @@ export function GateSheet({ open, onOpenChange, gapi, job, readOnly, isAdmin, wo
   return (
     <>
       {actions.dialog}
-      <Dialog.Root open={open} onOpenChange={onOpenChange}>
-        <Dialog.Content className="sheet" aria-describedby={undefined}>
-          <Flex direction="column" gap="3">
-            <Dialog.Title size="4" mb="0">Gate connection</Dialog.Title>
-            <Text size="2" color="gray">
-              {running ? `${jobLabel(job)}. You can keep working; the data reloads when it finishes.` : 'Get the latest data from the gate.'}
-            </Text>
-            <Text as="div" size="2" color={workingCopy.color}><span className="status-dot" />Working copy: {workingCopy.label}</Text>
-            {!readOnly && (
-              <>
-                <Button size="3" disabled={!isAdmin || !actions.canSend} onClick={closeThen(actions.send)}>
-                  Send to gate
-                </Button>
-                {!isAdmin && <Text size="2" color="gray">Ask a gate admin to Send to gate.</Text>}
-                {workingCopy.conflicts.length > 0 && <Text size="2" color="red">Decide the conflicts on the Residents page first.</Text>}
-                <Button size="3" variant="soft" color="gray" disabled={!actions.canReset} onClick={closeThen(actions.reset)}>Reset to gate</Button>
-              </>
-            )}
-            <Button size="3" variant="soft" disabled={running} onClick={() => onPull('residents')}>Pull residents</Button>
-            <Button size="3" variant="soft" disabled={running} onClick={() => onPull('transactions')}>Pull transactions</Button>
-            {job && job.log.length > 0 && <Button size="3" variant="soft" color="gray" onClick={closeThen(onShowProgress)}>Show progress</Button>}
-            <Button size="3" variant="soft" color="gray" onClick={onLiveRelays}>Live relays</Button>
-            <Dialog.Close><Button size="3" variant="ghost" color="gray">Close</Button></Dialog.Close>
-          </Flex>
-        </Dialog.Content>
-      </Dialog.Root>
+      <Drawer
+        anchor="bottom"
+        open={open}
+        onClose={() => onOpenChange(false)}
+        slotProps={{
+          paper: {
+            sx: {
+              maxHeight: '85dvh',
+              overflowY: 'auto',
+              borderTopLeftRadius: 16,
+              borderTopRightRadius: 16,
+              pb: 'env(safe-area-inset-bottom)',
+            },
+          },
+        }}
+      >
+        <Stack spacing={1.5} sx={{ p: 2.5 }}>
+          <Typography variant="h6" component="h2">Gate connection</Typography>
+          <Typography variant="body2" color="text.secondary">
+            {running ? `${jobLabel(job)}. You can keep working; the data reloads when it finishes.` : 'Get the latest data from the gate.'}
+          </Typography>
+          <Typography variant="body2" sx={{ color: WORKING_COPY_COLOR[workingCopy.color], display: 'flex', alignItems: 'center' }}>
+            <Box component="span" sx={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', bgcolor: 'currentColor', mr: 0.75, flexShrink: 0 }} />
+            Working copy: {workingCopy.label}
+          </Typography>
+          {!readOnly && draft && (
+            <>
+              <Button
+                variant="contained"
+                color="success"
+                size="large"
+                fullWidth
+                disabled={!draft.unsaved || Boolean(draft.blocked)}
+                onClick={closeThen(() => { void draft.save(); })}
+              >
+                Save to working copy{draft.unsaved ? ` (${draft.unsaved})` : ''}
+              </Button>
+              <Button
+                variant="contained"
+                color="error"
+                size="large"
+                fullWidth
+                disabled={!draft.unsaved}
+                onClick={closeThen(draft.discard)}
+              >
+                Discard unsaved
+              </Button>
+            </>
+          )}
+          {!readOnly && (
+            <>
+              <Button variant="contained" size="large" fullWidth disabled={!isAdmin || !actions.canSend} onClick={closeThen(actions.send)}>
+                Send to gate
+              </Button>
+              {!isAdmin && <Typography variant="body2" color="text.secondary">Ask a gate admin to Send to gate.</Typography>}
+              {workingCopy.conflicts.length > 0 && (
+                <Typography variant="body2" color="error">Decide the conflicts on the Residents page first.</Typography>
+              )}
+              <Button variant="outlined" color="error" size="large" fullWidth disabled={!actions.canReset} onClick={closeThen(actions.reset)}>
+                Reset to gate
+              </Button>
+            </>
+          )}
+          <Button variant="outlined" size="large" fullWidth disabled={running} onClick={() => onPull('residents')}>Pull residents</Button>
+          <Button variant="outlined" size="large" fullWidth disabled={running} onClick={() => onPull('transactions')}>Pull transactions</Button>
+          {job && job.log.length > 0 && (
+            <Button variant="outlined" color="inherit" size="large" fullWidth onClick={closeThen(onShowProgress)}>Show progress</Button>
+          )}
+          <Button variant="outlined" color="inherit" size="large" fullWidth onClick={onLiveRelays}>Live relays</Button>
+          <Button variant="text" color="inherit" size="large" fullWidth onClick={() => onOpenChange(false)}>Close</Button>
+        </Stack>
+      </Drawer>
     </>
   );
 }
@@ -214,7 +298,7 @@ interface PhoneMenuProps {
 }
 
 /**
- * The More drawer: the sidebar's items in a dialog at the left edge.
+ * The More drawer: the sidebar's items in a drawer at the left edge.
  *
  * @param props - Component props.
  * @param props.open - Whether the layer/dialog is open.
@@ -224,11 +308,15 @@ interface PhoneMenuProps {
  */
 export function PhoneMenu({ open, onOpenChange, children }: PhoneMenuProps) {
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Content className="drawer" aria-describedby={undefined}>
-        <VisuallyHidden><Dialog.Title>Menu</Dialog.Title></VisuallyHidden>
-        <nav className="sidebar">{children}</nav>
-      </Dialog.Content>
-    </Dialog.Root>
+    <Drawer
+      anchor="left"
+      open={open}
+      onClose={() => onOpenChange(false)}
+      slotProps={{ paper: { sx: { width: 'min(280px, 85vw)', display: 'flex', flexDirection: 'column' } } }}
+    >
+      <Box component="nav" aria-label="Menu" sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        {children}
+      </Box>
+    </Drawer>
   );
 }

@@ -275,14 +275,21 @@ export async function acceptInviteWithSso(store: Store, username: string): Promi
  * @returns Promise resolving to `User`.
  * @throws HTTP 400/409 error on invalid input or conflict.
  */
+/** Normalizes an email local-part into a valid 3–28 character username base, appending `-{attempt}` safely within 32 chars. */
+function usernameCandidate(email: string, attempt: number): string {
+  let base = email.split('@')[0].replace(/[^a-z0-9._-]+/g, '.').replace(/^[^a-z0-9]+/, '').slice(0, 28).replace(/[._-]+$/, '');
+  if (base.length < 3) base = `${base || 'user'}${'000'.slice(base.length)}`.slice(0, 28);
+  if (attempt === 1) return base;
+  const suffix = `-${attempt}`;
+  return `${base.slice(0, Math.max(3, 32 - suffix.length))}${suffix}`;
+}
+
 export async function createSsoUser(store: Store, { email, createdBy }: { email: unknown; createdBy: string }): Promise<User> {
   const mail = checkEmail(email);
   if (!mail) throw httpError('An email address is needed');
   if (await emailTaken(store, mail)) throw httpError('That email address is already used by another account', 409);
-  let base = mail.split('@')[0].replace(/[^a-z0-9._-]+/g, '.').replace(/^[^a-z0-9]+/, '').slice(0, 28).replace(/[._-]+$/, '');
-  if (base.length < 3) base = `${base || 'user'}${'000'.slice(base.length)}`.slice(0, 28);
   for (let i = 1; ; i++) {
-    const name = i === 1 ? base : `${base}-${i}`;
+    const name = usernameCandidate(mail, i);
     if (await getUser(store, name)) continue;
     const added = await run(store, `INSERT INTO users (username, password_hash, email, dark, must_change, created_at, created_by, sign_ins)
       VALUES ($1, $2, $3, false, false, $4, $5, 0) ON CONFLICT (username) DO NOTHING`, [name, SSO_ONLY, mail, new Date().toISOString(), userKey(createdBy)]);
@@ -364,7 +371,7 @@ export async function unconfirmOldEmails(store: Store): Promise<number | null> {
  */
 export async function authenticate(store: Store, username: string, password: unknown,
   refuse?: (name: string) => Promise<string | null>): Promise<User | null> {
-  const row = await one<UserRow>(store, 'SELECT * FROM users WHERE username = $1', [userKey(username)]);
+  const row = await one<UserRow>(store, 'SELECT * FROM users WHERE username = $1 OR (email = $1 AND email IS NOT NULL)', [userKey(username)]);
   /**
    * An account whose password sign-in is refused is checked against the dummy hash too, so the answer is the same
    * whether or not the old password was right.
@@ -385,6 +392,65 @@ export async function authenticate(store: Store, username: string, password: unk
  */
 export async function recordSignIn(store: Store, username: string): Promise<void> {
   await run(store, 'UPDATE users SET last_sign_in = $2, sign_ins = sign_ins + 1 WHERE username = $1', [userKey(username), new Date().toISOString()]);
+}
+
+/**
+ * Finds an existing account by its confirmed or pending email address (case-insensitive).
+ *
+ * @param store - Database store handle.
+ * @param email - Email address.
+ * @returns Promise resolving to `User | null`.
+ */
+export async function findUserByEmail(store: Store, email: string): Promise<User | null> {
+  const mail = userKey(email);
+  if (!mail) return null;
+  const row = await one<UserRow>(store, 'SELECT * FROM users WHERE email = $1 OR pending_email = $1 ORDER BY (email = $1) DESC LIMIT 1', [mail]);
+  return row ? fromRow(row) : null;
+}
+
+/**
+ * Finds an existing account eligible to be bound to a Resident Portal unit for `email`:
+ * matches only a confirmed `email` OR an unaccepted admin invitation (`pending_email` with `password_hash = '!'`).
+ * Unverified `pending_email` changes on active accounts are intentionally ignored to prevent unit takeover.
+ */
+export async function findUserForPortalBind(store: Store, email: string): Promise<User | null> {
+  const mail = userKey(email);
+  if (!mail) return null;
+  const row = await one<UserRow>(store,
+    "SELECT * FROM users WHERE email = $1 OR (pending_email = $1 AND password_hash = '!') ORDER BY (email = $1) DESC LIMIT 1",
+    [mail]);
+  return row ? fromRow(row) : null;
+}
+
+/**
+ * Generates an unused local username derived from an email address (e.g. `jane.smith`, `jane.smith-2`).
+ */
+export async function uniqueUsernameForEmail(store: Store, email: string): Promise<string> {
+  const mail = checkEmail(email);
+  if (!mail) throw httpError('An email address is needed');
+  for (let i = 1; ; i++) {
+    const candidate = usernameCandidate(mail, i);
+    if (!await getUser(store, candidate)) return candidate;
+  }
+}
+
+/**
+ * Permanently wipes a user account along with all sessions, passkeys, push subscriptions, email tokens,
+ * SSO identities, and resident requests (used when revoking a resident-only account with no remaining access).
+ *
+ * @param store - Database store handle (or active transaction).
+ * @param username - Local account username.
+ */
+export async function deleteUserCompletely(store: Store, username: string): Promise<void> {
+  const name = userKey(username);
+  if (!name) return;
+  await run(store, 'DELETE FROM sessions WHERE username = $1', [name]);
+  await run(store, 'DELETE FROM passkeys WHERE username = $1', [name]);
+  await run(store, 'DELETE FROM push_subscriptions WHERE username = $1', [name]);
+  await run(store, 'DELETE FROM email_tokens WHERE username = $1', [name]);
+  await run(store, 'DELETE FROM user_identities WHERE username = $1', [name]);
+  await run(store, 'DELETE FROM resident_requests WHERE username = $1', [name]);
+  await run(store, 'DELETE FROM users WHERE username = $1', [name]);
 }
 
 /**

@@ -4,38 +4,40 @@
  * Access hygiene and operational analytics over `tx_history`, `gate_residents`, `gate_cards`, and `snapshots`:
  * dormant credentials, active unassigned/unknown cards, high-frequency/possibly leaked entry codes, and traffic stats.
  */
-import { decodeRcvEvent, hasValidDate } from './board-files.ts';
+import { decodeRcvEvent, hasValidDate, type RcvRecord } from './board-files.ts';
 import { minuteKey, listSnapshots } from './camera-log.ts';
-import { loadWorkingState } from './gate-state.ts';
+import { loadWorkingState, type WorkingState } from './gate-state.ts';
 import { readTransactionPage } from './tx-history.ts';
 import type { Store } from './db.ts';
-import type { AccessAuditReply, DormantEntry, EntryCodeUsage, UnknownCardActivity } from './types.ts';
+import type { AccessAuditReply, DormantEntry, EntryCodeUsage, SnapshotMinute, UnknownCardActivity } from './types.ts';
 
 const DAY_MS = 86400000;
 
-/**
- * Builds the access hygiene and traffic audit report for a gate over the trailing `days` window.
- *
- * @param store - Database store handle.
- * @param phone - Gate system phone number (digits or formatted).
- * @param [options] - Audit parameters.
- * @param [options.days] - Look-back window in days (30–730, default 90).
- * @param [options.now] - Reference timestamp in milliseconds (defaults to `Date.now()`).
- * @returns Promise resolving to `AccessAuditReply`.
- */
-export async function buildAccessAudit(
-  store: Store,
-  phone: string,
-  { days = 90, now = Date.now() }: { days?: number; now?: number } = {},
-): Promise<AccessAuditReply> {
-  const [{ records }, working, snapshots] = await Promise.all([
-    readTransactionPage(store, phone),
-    loadWorkingState(store, phone),
-    listSnapshots(store, phone),
-  ]);
+type ResidentState = WorkingState['residents'][number];
+type CardState = WorkingState['cards'][number];
 
-  const residents = working?.state.residents || [];
-  const cards = working?.state.cards || [];
+interface WorkingIndex {
+  residents: ResidentState[];
+  residentByCode: Map<string, ResidentState>;
+  cardsByCode: Map<string, string[]>;
+  ownerByCard: Map<string, string>;
+  ownerByEntry: Map<string, string>;
+}
+
+interface CollectedStats {
+  residentLastSeen: Map<string, { lastSeen: number; totalEvents: number }>;
+  unknownCards: Map<string, { uses: number; admits: number; denies: number; lastSeen: number; lastMinute: string }>;
+  entryStats: Map<string, { uses: number; days: Set<string>; offHours: number; lastSeen: number }>;
+  byHour: number[];
+  byDayMap: Map<string, { admits: number; denies: number }>;
+  totalEvents: number;
+  admits: number;
+  denies: number;
+  holds: number;
+  openCycles: number;
+}
+
+function indexWorkingCopy(residents: ResidentState[], cards: CardState[]): WorkingIndex {
   const cardsByCode = new Map<string, string[]>();
   const ownerByCard = new Map<string, string>();
   for (const card of cards) {
@@ -50,19 +52,22 @@ export async function buildAccessAudit(
   for (const res of residents) {
     if (res.entryCode) ownerByEntry.set(res.entryCode, res.directoryCode);
   }
+  return { residents, residentByCode, cardsByCode, ownerByCard, ownerByEntry };
+}
 
-  const cutoff = now - days * DAY_MS;
-  const trafficCutoff = now - 30 * DAY_MS;
-  const residentLastSeen = new Map<string, { lastSeen: number; totalEvents: number }>();
-  const unknownCards = new Map<string, { uses: number; admits: number; denies: number; lastSeen: number; lastMinute: string }>();
-  const entryStats = new Map<string, { uses: number; days: Set<string>; offHours: number; lastSeen: number }>();
-  const byHour = Array.from({ length: 24 }, () => 0);
-  const byDayMap = new Map<string, { admits: number; denies: number }>();
-  let totalEvents = 0;
-  let admits = 0;
-  let denies = 0;
-  let holds = 0;
-  let openCycles = 0;
+function collectTransactionStats(records: RcvRecord[], index: WorkingIndex, cutoff: number, trafficCutoff: number): CollectedStats {
+  const stats: CollectedStats = {
+    residentLastSeen: new Map(),
+    unknownCards: new Map(),
+    entryStats: new Map(),
+    byHour: Array.from({ length: 24 }, () => 0),
+    byDayMap: new Map(),
+    totalEvents: 0,
+    admits: 0,
+    denies: 0,
+    holds: 0,
+    openCycles: 0,
+  };
 
   for (const rec of records) {
     if (!hasValidDate(rec) || !rec.year) continue;
@@ -71,60 +76,65 @@ export async function buildAccessAudit(
     const dateKey = `${rec.year}-${String(rec.month).padStart(2, '0')}-${String(rec.day).padStart(2, '0')}`;
     const event = decodeRcvEvent(rec);
 
-    let dirCode = '';
-    if (event.lookup === 'directory' && event.number) dirCode = event.number;
-    else if (event.lookup === 'entryCode' && event.number) dirCode = ownerByEntry.get(event.number) || '';
-    else if (event.lookup === 'card' && event.number) dirCode = ownerByCard.get(event.number) || '';
+    const dirCode = event.lookup === 'directory' && event.number ? event.number
+      : event.lookup === 'entryCode' && event.number ? (index.ownerByEntry.get(event.number) || '')
+      : event.lookup === 'card' && event.number ? (index.ownerByCard.get(event.number) || '')
+      : '';
 
     if (dirCode) {
-      const prev = residentLastSeen.get(dirCode);
-      residentLastSeen.set(dirCode, {
+      const prev = stats.residentLastSeen.get(dirCode);
+      stats.residentLastSeen.set(dirCode, {
         lastSeen: prev ? Math.max(prev.lastSeen, ts) : ts,
         totalEvents: (prev?.totalEvents || 0) + 1,
       });
     }
 
-    if (ts >= cutoff) {
-      totalEvents++;
-      byHour[hour24]++;
-      if (event.access === 'Admit' || event.access === 'Open') { admits++; openCycles++; }
-      else if (event.access === 'Deny') denies++;
-      if (event.eventType === 'Hold Begin') holds++;
-      if (event.eventType === 'Open Request') openCycles++;
+    if (ts < cutoff) continue;
 
-      if (ts >= trafficCutoff) {
-        const dayBucket = byDayMap.get(dateKey) || { admits: 0, denies: 0 };
-        if (event.access === 'Admit' || event.access === 'Open') dayBucket.admits++;
-        else if (event.access === 'Deny') dayBucket.denies++;
-        byDayMap.set(dateKey, dayBucket);
-      }
+    stats.totalEvents++;
+    stats.byHour[hour24]++;
+    const isAdmit = event.access === 'Admit' || event.access === 'Open';
+    const isDeny = event.access === 'Deny';
+    if (isAdmit) { stats.admits++; stats.openCycles++; }
+    else if (isDeny) stats.denies++;
+    if (event.eventType === 'Hold Begin') stats.holds++;
+    if (event.eventType === 'Open Request') stats.openCycles++;
 
-      if (event.lookup === 'card' && event.number && !ownerByCard.has(event.number)) {
-        const cur = unknownCards.get(event.number) || { uses: 0, admits: 0, denies: 0, lastSeen: 0, lastMinute: '' };
-        cur.uses++;
-        if (event.access === 'Admit' || event.access === 'Open') cur.admits++;
-        else if (event.access === 'Deny') cur.denies++;
-        if (ts >= cur.lastSeen) { cur.lastSeen = ts; cur.lastMinute = minuteKey(ts); }
-        unknownCards.set(event.number, cur);
-      }
+    if (ts >= trafficCutoff) {
+      const dayBucket = stats.byDayMap.get(dateKey) || { admits: 0, denies: 0 };
+      if (isAdmit) dayBucket.admits++;
+      else if (isDeny) dayBucket.denies++;
+      stats.byDayMap.set(dateKey, dayBucket);
+    }
 
-      if (event.lookup === 'entryCode' && event.number && event.access === 'Admit') {
-        const cur = entryStats.get(event.number) || { uses: 0, days: new Set<string>(), offHours: 0, lastSeen: 0 };
-        cur.uses++;
-        cur.days.add(dateKey);
-        if (hour24 >= 23 || hour24 < 5) cur.offHours++;
-        if (ts > cur.lastSeen) cur.lastSeen = ts;
-        entryStats.set(event.number, cur);
-      }
+    if (event.lookup === 'card' && event.number && !index.ownerByCard.has(event.number)) {
+      const cur = stats.unknownCards.get(event.number) || { uses: 0, admits: 0, denies: 0, lastSeen: 0, lastMinute: '' };
+      cur.uses++;
+      if (isAdmit) cur.admits++;
+      else if (isDeny) cur.denies++;
+      if (ts >= cur.lastSeen) { cur.lastSeen = ts; cur.lastMinute = minuteKey(ts); }
+      stats.unknownCards.set(event.number, cur);
+    }
+
+    if (event.lookup === 'entryCode' && event.number && event.access === 'Admit') {
+      const cur = stats.entryStats.get(event.number) || { uses: 0, days: new Set<string>(), offHours: 0, lastSeen: 0 };
+      cur.uses++;
+      cur.days.add(dateKey);
+      if (hour24 >= 23 || hour24 < 5) cur.offHours++;
+      if (ts > cur.lastSeen) cur.lastSeen = ts;
+      stats.entryStats.set(event.number, cur);
     }
   }
+  return stats;
+}
 
+function findDormantEntries(index: WorkingIndex, stats: CollectedStats, cutoff: number): DormantEntry[] {
   const dormant: DormantEntry[] = [];
-  for (const res of residents) {
+  for (const res of index.residents) {
     if (!res.name.trim()) continue;
-    const resCards = cardsByCode.get(res.directoryCode) || [];
+    const resCards = index.cardsByCode.get(res.directoryCode) || [];
     if (!res.entryCode && !resCards.length) continue;
-    const activity = residentLastSeen.get(res.directoryCode);
+    const activity = stats.residentLastSeen.get(res.directoryCode);
     if (activity && activity.lastSeen >= cutoff) continue;
     dormant.push({
       directoryCode: res.directoryCode,
@@ -136,48 +146,76 @@ export async function buildAccessAudit(
       totalEvents: activity?.totalEvents || 0,
     });
   }
-  dormant.sort((first, second) => (first.lastSeen ? new Date(first.lastSeen).getTime() : 0) - (second.lastSeen ? new Date(second.lastSeen).getTime() : 0)
-    || first.directoryCode.localeCompare(second.directoryCode));
+  return dormant.sort((a, b) =>
+    (a.lastSeen ? new Date(a.lastSeen).getTime() : 0) - (b.lastSeen ? new Date(b.lastSeen).getTime() : 0)
+    || a.directoryCode.localeCompare(b.directoryCode));
+}
 
-  const unknownList: UnknownCardActivity[] = [...unknownCards.entries()]
-    .map(([cardNumber, stats]) => ({
+function summarizeUnknownCards(stats: CollectedStats, snapshots: Record<string, SnapshotMinute>): UnknownCardActivity[] {
+  return [...stats.unknownCards.entries()]
+    .map(([cardNumber, info]) => ({
       cardNumber,
-      uses: stats.uses,
-      admits: stats.admits,
-      denies: stats.denies,
-      lastSeen: new Date(stats.lastSeen).toISOString(),
-      lastMinute: stats.lastMinute,
-      hasSnapshot: Boolean(snapshots[stats.lastMinute]?.files?.length),
+      uses: info.uses,
+      admits: info.admits,
+      denies: info.denies,
+      lastSeen: new Date(info.lastSeen).toISOString(),
+      lastMinute: info.lastMinute,
+      hasSnapshot: Boolean(snapshots[info.lastMinute]?.files?.length),
     }))
-    .sort((first, second) => second.uses - first.uses || second.lastSeen.localeCompare(first.lastSeen));
+    .sort((a, b) => b.uses - a.uses || b.lastSeen.localeCompare(a.lastSeen));
+}
 
-  const entryCodeList: EntryCodeUsage[] = [...entryStats.entries()]
-    .map(([entryCode, stats]) => {
-      const ownerCode = ownerByEntry.get(entryCode) || '';
-      const owner = ownerCode ? residentByCode.get(ownerCode) : undefined;
+function summarizeEntryCodes(index: WorkingIndex, stats: CollectedStats): EntryCodeUsage[] {
+  return [...stats.entryStats.entries()]
+    .map(([entryCode, info]) => {
+      const ownerCode = index.ownerByEntry.get(entryCode) || '';
+      const owner = ownerCode ? index.residentByCode.get(ownerCode) : undefined;
       return {
         entryCode,
         directoryCode: ownerCode,
         name: owner?.name || '',
         type: owner?.type || '',
-        uses: stats.uses,
-        distinctDays: stats.days.size,
-        offHoursUses: stats.offHours,
-        lastSeen: new Date(stats.lastSeen).toISOString(),
-        flagged: (stats.uses >= 30 && stats.days.size >= 10) || stats.offHours >= 10,
+        uses: info.uses,
+        distinctDays: info.days.size,
+        offHoursUses: info.offHours,
+        lastSeen: new Date(info.lastSeen).toISOString(),
+        flagged: (info.uses >= 30 && info.days.size >= 10) || info.offHours >= 10,
       };
     })
-    .sort((first, second) => second.uses - first.uses);
+    .sort((a, b) => b.uses - a.uses);
+}
 
-  const byDay = [...byDayMap.entries()]
-    .sort(([first], [second]) => first.localeCompare(second))
+/** Builds the access hygiene and traffic audit report for a gate over the trailing `days` window. */
+export async function buildAccessAudit(
+  store: Store,
+  phone: string,
+  { days = 90, now = Date.now() }: { days?: number; now?: number } = {},
+): Promise<AccessAuditReply> {
+  const [{ records }, working, snapshots] = await Promise.all([
+    readTransactionPage(store, phone),
+    loadWorkingState(store, phone),
+    listSnapshots(store, phone),
+  ]);
+  const index = indexWorkingCopy(working?.state.residents || [], working?.state.cards || []);
+  const cutoff = now - days * DAY_MS;
+  const stats = collectTransactionStats(records, index, cutoff, now - 30 * DAY_MS);
+  const byDay = [...stats.byDayMap.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, counts]) => ({ date, ...counts }));
 
   return {
     days,
-    dormant,
-    unknownCards: unknownList,
-    entryCodes: entryCodeList,
-    traffic: { totalEvents, admits, denies, holds, openCycles, byHour, byDay },
+    dormant: findDormantEntries(index, stats, cutoff),
+    unknownCards: summarizeUnknownCards(stats, snapshots),
+    entryCodes: summarizeEntryCodes(index, stats),
+    traffic: {
+      totalEvents: stats.totalEvents,
+      admits: stats.admits,
+      denies: stats.denies,
+      holds: stats.holds,
+      openCycles: stats.openCycles,
+      byHour: stats.byHour,
+      byDay,
+    },
   };
 }

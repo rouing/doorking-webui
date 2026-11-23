@@ -1,14 +1,40 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { Badge, Box, Button, Callout, Card, Checkbox, Dialog, Flex, Heading, IconButton, Link, Table, Text, TextField } from '@radix-ui/themes';
+import {
+  Alert,
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Checkbox,
+  Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  IconButton,
+  Link,
+  Paper,
+  Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  TextField,
+  Typography,
+} from '@mui/material';
+import { alpha } from '@mui/material/styles';
+import CloseIcon from '@mui/icons-material/Close';
 import type { DeviceRange, EntryChange, GateFeatures, ResidentRow, ResidentsReply, TransactionRow } from '../../../src/types.ts';
-import { dirCell, doorKingCsv, downloadText, fieldOf, fmtTime, isEmptySlot, txTone } from '../format.ts';
+import { dirCell, doorKingCsv, downloadText, fmtTime, isEmptySlot, phoneFull } from '../format.ts';
 import { nextSort, SortHead, sortRows, useShownRows, type Column, type Sort } from '../table.tsx';
 import { CardList } from './fields.tsx';
-import { SnapCell } from '../camera/SnapViews.tsx';
 import type { Snaps } from '../camera/snapshots.ts';
 import { ImportCsvDialog } from './ImportCsvDialog.tsx';
 import { ResidentForm } from './ResidentForm.tsx';
-import { TX_COLUMNS } from './Transactions.tsx';
+import { WelcomeInstructionsDialog } from './WelcomeInstructionsDialog.tsx';
+import { TransactionCard } from './Transactions.tsx';
 import { ACTIONS } from './History.tsx';
 import { WorkingCopyBar } from './WorkingCopyBar.tsx';
 import { errorText, useReadOnly, type GateApi } from '../api.ts';
@@ -23,10 +49,11 @@ const COLUMNS: Record<'residents' | 'vendors', Column[]> = {
   vendors: [['Directory Code', 'directoryCode'], ['Name', 'name'], ['Entry Code', 'entryCode'], ['Security', 'securityLevel'],
     ['Cards', 'cards'], ['Notes', 'note']],
 };
-const HISTORY_COLUMNS = TX_COLUMNS.filter(([, k]) => k !== 'name' && k !== 'directoryCode');
 
 interface DirectoryProps {
   kind: 'residents' | 'vendors';
+  gatePhone: string;
+  adminPhone: string;
   account: string; // the site name, the export's ACCOUNT column
   list: ResidentsReply | null;
   tx: TransactionRow[] | null;
@@ -57,7 +84,7 @@ interface DirectoryProps {
  * @param props.onReload - Callback to reload the gate data.
  * @returns Rendered React element.
  */
-export function Directory({ kind, account, list, tx, devices, features, snaps, onOpenSnap, highlight, gapi, onReload }: DirectoryProps) {
+export function Directory({ kind, gatePhone, adminPhone, account, list, tx, devices, features, snaps, onOpenSnap, highlight, gapi, onReload }: DirectoryProps) {
   const cols = COLUMNS[kind].filter(([, k]) => (k !== 'floor' || features.floors) && (k !== 'elevatorRef' || features.elevators));
   const vendor = kind === 'vendors';
   const [filter, setFilter] = useState('');
@@ -66,7 +93,10 @@ export function Directory({ kind, account, list, tx, devices, features, snaps, o
   const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [welcomeResident, setWelcomeResident] = useState<ResidentRow | null>(null);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const usedEntryCodes = useMemo(() => (list?.rows ?? []).map((row) => row.entryCode).filter(Boolean), [list]);
+  const grantAccessDigit = list?.grantAccessDigit || '9';
   const [bulkLevel, setBulkLevel] = useState('1');
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkError, setBulkError] = useState('');
@@ -119,12 +149,12 @@ export function Directory({ kind, account, list, tx, devices, features, snaps, o
     setSelected((cur) => { const next = new Set(cur); if (next.has(code)) next.delete(code); else next.add(code); return next; });
   };
   const visibleRows = rows.slice(0, end);
-  const allVisibleSelected = visibleRows.length > 0 && visibleRows.every((r) => selected.has(r.directoryCode));
+  const allVisibleSelected = visibleRows.length > 0 && visibleRows.every((row) => selected.has(row.directoryCode));
   const toggleAllVisible = () => {
     setSelected((cur) => {
       const next = new Set(cur);
-      if (allVisibleSelected) visibleRows.forEach((r) => next.delete(r.directoryCode));
-      else visibleRows.forEach((r) => next.add(r.directoryCode));
+      if (allVisibleSelected) visibleRows.forEach((row) => next.delete(row.directoryCode));
+      else visibleRows.forEach((row) => next.add(row.directoryCode));
       return next;
     });
   };
@@ -132,9 +162,11 @@ export function Directory({ kind, account, list, tx, devices, features, snaps, o
     const codes = [...selected];
     if (!codes.length) return;
     const label = action === 'setSecurityLevel' ? `set security level to ${bulkLevel} on` : 'delete';
-    if (!await confirm({ title: `Bulk ${label} ${codes.length} ${kind}?`, action: action === 'delete' ? 'Delete selected' : 'Apply',
+    if (!await confirm({
+      title: `Bulk ${label} ${codes.length} ${kind}?`, action: action === 'delete' ? 'Delete selected' : 'Apply',
       color: action === 'delete' ? 'red' : 'blue',
-      body: 'This updates the working copy in one History entry. The gate is not changed until Send to gate.' })) return;
+      body: 'This updates the working copy in one History entry. The gate is not changed until Send to gate.',
+    })) return;
     setBulkBusy(true);
     setBulkError('');
     try {
@@ -146,105 +178,351 @@ export function Directory({ kind, account, list, tx, devices, features, snaps, o
   }
 
   return (
-    <Flex direction="column" gap="3">
+    <Stack spacing={2}>
       {dialog}
       <ImportCsvDialog open={importing} onOpenChange={setImporting} vendor={vendor} gapi={gapi} onImported={onReload} />
-      <Heading>{kind === 'vendors' ? 'Vendors' : 'Residents'}</Heading>
+      {welcomeResident && (
+        <WelcomeInstructionsDialog
+          open={Boolean(welcomeResident)}
+          onOpenChange={(next) => { if (!next) setWelcomeResident(null); }}
+          phone={gatePhone}
+          siteName={account}
+          resident={{
+            name: welcomeResident.name,
+            directoryCode: welcomeResident.directoryCode,
+            entryCode: welcomeResident.entryCode,
+            hidden: welcomeResident.hidden,
+            cards: welcomeResident.cards.map((card) => String(Number(card))),
+          }}
+          defaultAdminPhone={adminPhone}
+          defaultGrantDigit={grantAccessDigit}
+          onAdminPhoneSaved={onReload}
+        />
+      )}
+      <Typography variant="h5">{kind === 'vendors' ? 'Vendors' : 'Residents'}</Typography>
       <WorkingCopyBar cache={list ? list.cache : null} gapi={gapi} onReload={onReload} />
       {list && list.duplicates.length > 0 && (
-        <Callout.Root color="red" role="alert">
-          <Callout.Text>
+        <Alert severity="error" role="alert">
+          <Typography variant="body2">
             <strong>Duplicate {list.duplicates.length === 1 ? 'number' : 'numbers'}: two or more entries share a directory code, entry code or card.</strong>{' '}
-            The gate can't tell them apart, so <strong>Send to gate is refused</strong> until each is changed or removed (marked red below).
-          </Callout.Text>
-          <Box asChild><ul style={{ margin: 0 }}>{list.duplicates.map((duplicate) => <li key={`${duplicate.kind}-${duplicate.value}`}>{duplicate.text}</li>)}</ul></Box>
-        </Callout.Root>
+            The gate can&apos;t tell them apart, so <strong>Send to gate is refused</strong> until each is changed or removed (marked red below).
+          </Typography>
+          <Box component="ul" sx={{ m: 0, mt: 0.5, pl: 2.5 }}>
+            {list.duplicates.map((duplicate) => <li key={`${duplicate.kind}-${duplicate.value}`}>{duplicate.text}</li>)}
+          </Box>
+        </Alert>
       )}
       {adding && list && (
         <Card>
-          <ResidentForm resident={null} vendor={vendor} dirDigits={list.dirDigits} emptyCodes={list.emptyCodes} devices={devices}
-            features={features} gapi={gapi} onDone={async () => { setAdding(false); await onReload(); }} onCancel={() => setAdding(false)} />
+          <CardContent>
+            <ResidentForm
+              resident={null}
+              vendor={vendor}
+              gatePhone={gatePhone}
+              siteName={account}
+              dirDigits={list.dirDigits}
+              emptyCodes={list.emptyCodes}
+              usedEntryCodes={usedEntryCodes}
+              adminPhone={adminPhone}
+              grantAccessDigit={grantAccessDigit}
+              devices={devices}
+              features={features}
+              gapi={gapi}
+              onDone={async () => { setAdding(false); await onReload(); }}
+              onAdminPhoneSaved={onReload}
+              onCancel={() => setAdding(false)}
+            />
+          </CardContent>
         </Card>
       )}
-      <Flex gap="3" align="center" wrap="wrap">
-        {!readOnly && <Button onClick={() => setAdding(!adding)} disabled={!list}>{vendor ? 'Add vendor' : 'Add resident'}</Button>}
-        {!readOnly && !phone && <Button variant="soft" onClick={() => setImporting(true)} disabled={!list}>Import CSV</Button>}
-        <TextField.Root type="search" placeholder="Filter rows" value={filter} onChange={(event) => setFilter(event.target.value)} />
-        {!phone && <Button variant="soft" onClick={csv} disabled={!list} title="Every directory code (residents, vendors and empty units), in the format DoorKing's cloud exports">Export CSV</Button>}
-        <Text size="2" color="gray">
+      <Stack direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+        {!readOnly && (
+          <Button variant="contained" onClick={() => setAdding(!adding)} disabled={!list}>
+            {vendor ? 'Add vendor' : 'Add resident'}
+          </Button>
+        )}
+        {!readOnly && !phone && (
+          <Button variant="outlined" onClick={() => setImporting(true)} disabled={!list}>Import CSV</Button>
+        )}
+        <TextField
+          size="small"
+          type="search"
+          placeholder="Filter rows"
+          slotProps={{ htmlInput: { 'aria-label': 'Filter rows' } }}
+          value={filter}
+          onChange={(event) => setFilter(event.target.value)}
+        />
+        {!phone && (
+          <Button
+            variant="outlined"
+            onClick={csv}
+            disabled={!list}
+            title="Every directory code (residents, vendors and empty units), in the format DoorKing's cloud exports"
+          >
+            Export CSV
+          </Button>
+        )}
+        <Typography variant="body2" color="text.secondary">
           {!list ? 'No data yet. Pull residents from the gate.'
             : `${rows.length} ${kind}${rows.length > limit ? ` (first ${limit} shown)` : ''} · downloaded ${fmtTime(list.updated)}`
               + (kind === 'residents' && list.unassignedCards.length ? ` · ${list.unassignedCards.length} cards without a directory code` : '')}
-        </Text>
-      </Flex>
+        </Typography>
+      </Stack>
       {!readOnly && selected.size > 0 && (
-        <Callout.Root color="blue">
-          <Flex align="center" gap="3" wrap="wrap">
-            <Text size="2" weight="medium">{selected.size} selected</Text>
-            <Flex align="center" gap="1">
-              <Text size="1" color="gray">Security level:</Text>
-              <TextField.Root size="1" type="number" min={0} max={30} style={{ width: '7ch' }} value={bulkLevel} onChange={(e) => setBulkLevel(e.target.value)} />
-              <Button size="1" variant="soft" disabled={bulkBusy} onClick={() => runBulk('setSecurityLevel')}>Set level</Button>
-            </Flex>
-            <Button size="1" variant="soft" color="red" disabled={bulkBusy} onClick={() => runBulk('delete')}>Delete selected</Button>
-            <Button size="1" variant="ghost" color="gray" onClick={() => setSelected(new Set())}>Clear</Button>
-            {bulkError && <Text size="1" color="red">{bulkError}</Text>}
-          </Flex>
-        </Callout.Root>
+        <Alert severity="info">
+          <Stack spacing={1}>
+            <Stack direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+              <Typography variant="body2" sx={{ fontWeight: 500 }}>{selected.size} selected</Typography>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                <Typography variant="caption" color="text.secondary">Security level:</Typography>
+                <TextField
+                  size="small"
+                  type="number"
+                  slotProps={{ htmlInput: { min: 0, max: 30, 'aria-label': 'Bulk security level' } }}
+                  sx={{ width: '8ch' }}
+                  value={bulkLevel}
+                  onChange={(event) => setBulkLevel(event.target.value)}
+                />
+                <Button size="small" variant="outlined" disabled={bulkBusy} onClick={() => runBulk('setSecurityLevel')}>Set level</Button>
+              </Stack>
+              <Button size="small" variant="outlined" color="error" disabled={bulkBusy} onClick={() => runBulk('delete')}>Delete selected</Button>
+              <Button size="small" variant="text" color="inherit" onClick={() => setSelected(new Set())}>Clear</Button>
+            </Stack>
+            {bulkError && <Alert severity="error" sx={{ py: 0 }}>{bulkError}</Alert>}
+          </Stack>
+        </Alert>
       )}
-      <Table.Root size="1" variant="surface" className="dir-table">
-        <SortHead cols={cols} sort={sort} onSort={(column) => setSort(nextSort(sort, column))}
-          leading={!readOnly && !phone ? (
-            <Table.ColumnHeaderCell style={{ width: 28 }}>
-              <Checkbox checked={allVisibleSelected} onCheckedChange={toggleAllVisible} aria-label="Select all visible" />
-            </Table.ColumnHeaderCell>
-          ) : undefined} />
-        <Table.Body>
-          {visibleRows.map((resident) => (
-            <Fragment key={resident.directoryCode}>
-              <Table.Row className="card-row" data-code={resident.directoryCode} data-open={open === resident.directoryCode || undefined}
-                onClick={() => { setOpen(open === resident.directoryCode ? null : resident.directoryCode); setEditing(false); }}
-                style={{ cursor: 'pointer', background: resident.directoryCode === highlight ? 'var(--accent-a4)' : undefined,
-                  color: resident.hidden && kind === 'residents' ? 'var(--gray-10)' : undefined }}>
-                {!readOnly && !phone && (
-                  <Table.Cell onClick={(event) => event.stopPropagation()}>
-                    <Checkbox checked={selected.has(resident.directoryCode)} onCheckedChange={() => toggleSelected(resident.directoryCode)}
-                      aria-label={`Select ${resident.directoryCode}`} />
-                  </Table.Cell>
-                )}
-                {cols.map(([, k]) => (
-                  <Table.Cell key={k} data-col={k} style={dupCell(resident, k) ? { background: 'var(--red-a5)', color: 'var(--red-11)', fontWeight: 600 } : undefined}
-                    title={dupCell(resident, k) ? 'Also used by another entry' : undefined}>
-                    {k === 'cards' ? <CardList cards={resident.cards} devices={devices} dups={dups.card} />
-                      : k === 'note' ? <Text as="div" className="note-cell" title={resident.note || undefined}>{resident.note}</Text>
-                        : dirCell(resident, k)}
-                  </Table.Cell>
-                ))}
-              </Table.Row>
-              {open === resident.directoryCode && (
-                <Table.Row className="detail-row">
-                  <Table.Cell colSpan={cols.length + (!readOnly && !phone ? 1 : 0)} style={{ background: 'var(--gray-a2)' }}>
-                    {editing && list ? (
-                      <ResidentForm resident={resident} vendor={vendor} dirDigits={list.dirDigits} emptyCodes={list.emptyCodes} devices={devices}
-                        features={features} gapi={gapi} onDone={async () => { setEditing(false); await onReload(); }} onCancel={() => setEditing(false)} />
-                    ) : (
-                      <Flex direction="column" gap="2">
-                        <Flex gap="3" align="center" wrap="wrap">
-                          {!readOnly && <Button size="1" variant="soft" onClick={() => setEditing(true)}>Edit</Button>}
-                          <LastEdit resident={resident} gapi={gapi} version={list ? String(list.saved) : ''} />
-                        </Flex>
-                        <RecentTransactions resident={resident} tx={tx} snaps={snaps} onOpenSnap={onOpenSnap} />
-                      </Flex>
+      {phone ? (
+        <Stack spacing={1.25}>
+          <Stack direction="row" spacing={0.75} sx={{ overflowX: 'auto', pb: 0.5, alignItems: 'center', '&::-webkit-scrollbar': { display: 'none' } }}>
+            <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0, mr: 0.25 }}>Sort:</Typography>
+            {cols.map(([label, key]) => {
+              const active = sort?.col === key;
+              const dir = active ? (sort!.dir > 0 ? ' ▲' : ' ▼') : '';
+              return (
+                <Chip
+                  key={key}
+                  size="small"
+                  clickable
+                  color={active ? 'primary' : 'default'}
+                  label={`${label}${dir}`}
+                  onClick={() => setSort(nextSort(sort, key))}
+                  sx={{ flexShrink: 0 }}
+                />
+              );
+            })}
+          </Stack>
+          <Stack spacing={1}>
+            {visibleRows.map((resident) => {
+              const isOpen = open === resident.directoryCode;
+              const phoneText = !vendor ? phoneFull(resident) : '';
+              const hasDup = dupCell(resident, 'directoryCode') || dupCell(resident, 'entryCode') || dupCell(resident, 'cards');
+              const titleText = `${resident.name || '(Unnamed)'} - #${resident.directoryCode}`;
+              return (
+                <Paper
+                  key={resident.directoryCode}
+                  elevation={0}
+                  data-code={resident.directoryCode}
+                  sx={{
+                    p: 1.5,
+                    borderRadius: 2,
+                    bgcolor: resident.directoryCode === highlight
+                      ? (theme) => alpha(theme.palette.primary.main, 0.14)
+                      : hasDup
+                        ? (theme) => alpha(theme.palette.error.main, 0.1)
+                        : 'action.hover',
+                    color: resident.hidden && !vendor ? 'text.secondary' : undefined,
+                  }}
+                >
+                  <Stack spacing={1}>
+                    <Box
+                      onClick={() => { setOpen(isOpen ? null : resident.directoryCode); setEditing(false); }}
+                      sx={{ cursor: 'pointer' }}
+                    >
+                      <Stack direction="row" spacing={0.75} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 600, mr: 0.25 }}>
+                          {titleText}
+                        </Typography>
+                        {phoneText && (
+                          <Chip size="small" label={phoneText} />
+                        )}
+                        {resident.entryCode && (
+                          <Chip
+                            size="small"
+                            color={dupCell(resident, 'entryCode') ? 'error' : 'primary'}
+                            label={`#${resident.entryCode}`}
+                          />
+                        )}
+                        {resident.hidden && !vendor && (
+                          <Chip size="small" color="warning" label="Hidden" />
+                        )}
+                        {hasDup && (
+                          <Chip size="small" color="error" label="Duplicate" />
+                        )}
+                      </Stack>
+                    </Box>
+
+                    {isOpen && (
+                      <Box sx={{ pt: 0.5 }}>
+                        {editing && list ? (
+                          <ResidentForm
+                            resident={resident}
+                            vendor={vendor}
+                            gatePhone={gatePhone}
+                            siteName={account}
+                            dirDigits={list.dirDigits}
+                            emptyCodes={list.emptyCodes}
+                            usedEntryCodes={usedEntryCodes.filter((code) => code !== resident.entryCode)}
+                            adminPhone={adminPhone}
+                            grantAccessDigit={grantAccessDigit}
+                            devices={devices}
+                            features={features}
+                            gapi={gapi}
+                            onDone={async () => { setEditing(false); await onReload(); }}
+                            onAdminPhoneSaved={onReload}
+                            onCancel={() => setEditing(false)}
+                          />
+                        ) : (
+                          <Stack spacing={1.5}>
+                            {resident.cards.length > 0 && (
+                              <Box>
+                                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                                  Cards
+                                </Typography>
+                                <CardList cards={resident.cards} devices={devices} dups={dups.card} />
+                              </Box>
+                            )}
+                            {resident.note && (
+                              <Typography variant="body2" color="text.secondary">{resident.note}</Typography>
+                            )}
+                            <LastEdit resident={resident} gapi={gapi} version={list ? String(list.saved) : ''} />
+                            <RecentTransactions resident={resident} tx={tx} snaps={snaps} onOpenSnap={onOpenSnap} />
+                            <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                              {!readOnly && (
+                                <Button size="small" variant="contained" onClick={() => setEditing(true)} sx={{ flex: 1 }}>
+                                  Edit
+                                </Button>
+                              )}
+                              {!vendor && (
+                                <Button size="small" variant="outlined" onClick={() => setWelcomeResident(resident)} sx={{ flex: 1 }}>
+                                  Welcome &amp; PDF…
+                                </Button>
+                              )}
+                            </Stack>
+                          </Stack>
+                        )}
+                      </Box>
                     )}
-                  </Table.Cell>
-                </Table.Row>
-              )}
-            </Fragment>
-          ))}
-        </Table.Body>
-      </Table.Root>
+                  </Stack>
+                </Paper>
+              );
+            })}
+          </Stack>
+        </Stack>
+      ) : (
+        <TableContainer component={Paper} variant="outlined" className="dir-table">
+          <Table size="small">
+            <SortHead
+              cols={cols}
+              sort={sort}
+              onSort={(column) => setSort(nextSort(sort, column))}
+              leading={!readOnly ? (
+                <TableCell sx={{ width: 28 }}>
+                  <Checkbox
+                    size="small"
+                    checked={allVisibleSelected}
+                    onChange={toggleAllVisible}
+                    slotProps={{ input: { 'aria-label': 'Select all visible' } }}
+                    sx={{ p: 0.25 }}
+                  />
+                </TableCell>
+              ) : undefined}
+            />
+            <TableBody>
+              {visibleRows.map((resident) => (
+                <Fragment key={resident.directoryCode}>
+                  <TableRow
+                    hover
+                    className="card-row"
+                    data-code={resident.directoryCode}
+                    data-open={open === resident.directoryCode || undefined}
+                    onClick={() => { setOpen(open === resident.directoryCode ? null : resident.directoryCode); setEditing(false); }}
+                    sx={{
+                      cursor: 'pointer',
+                      bgcolor: resident.directoryCode === highlight ? (theme) => alpha(theme.palette.primary.main, 0.14) : undefined,
+                      color: resident.hidden && kind === 'residents' ? 'text.secondary' : undefined,
+                    }}
+                  >
+                    {!readOnly && (
+                      <TableCell onClick={(event) => event.stopPropagation()}>
+                        <Checkbox
+                          size="small"
+                          checked={selected.has(resident.directoryCode)}
+                          onChange={() => toggleSelected(resident.directoryCode)}
+                          slotProps={{ input: { 'aria-label': `Select ${resident.directoryCode}` } }}
+                          sx={{ p: 0.25 }}
+                        />
+                      </TableCell>
+                    )}
+                    {cols.map(([, k]) => (
+                      <TableCell
+                        key={k}
+                        data-col={k}
+                        sx={dupCell(resident, k) ? { bgcolor: (theme) => alpha(theme.palette.error.main, 0.16), color: 'error.main', fontWeight: 600 } : undefined}
+                        title={dupCell(resident, k) ? 'Also used by another entry' : undefined}
+                      >
+                        {k === 'cards' ? <CardList cards={resident.cards} devices={devices} dups={dups.card} />
+                          : k === 'note' ? <Box className="note-cell" title={resident.note || undefined}>{resident.note}</Box>
+                            : dirCell(resident, k)}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                  {open === resident.directoryCode && (
+                    <TableRow className="detail-row">
+                      <TableCell colSpan={cols.length + (!readOnly ? 1 : 0)} sx={{ bgcolor: 'background.paper' }}>
+                        {editing && list ? (
+                          <ResidentForm
+                            resident={resident}
+                            vendor={vendor}
+                            gatePhone={gatePhone}
+                            siteName={account}
+                            dirDigits={list.dirDigits}
+                            emptyCodes={list.emptyCodes}
+                            usedEntryCodes={usedEntryCodes.filter((code) => code !== resident.entryCode)}
+                            adminPhone={adminPhone}
+                            grantAccessDigit={grantAccessDigit}
+                            devices={devices}
+                            features={features}
+                            gapi={gapi}
+                            onDone={async () => { setEditing(false); await onReload(); }}
+                            onAdminPhoneSaved={onReload}
+                            onCancel={() => setEditing(false)}
+                          />
+                        ) : (
+                          <Stack spacing={1.5}>
+                            <Stack direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                              {!readOnly && <Button size="small" variant="contained" onClick={() => setEditing(true)}>Edit</Button>}
+                              {!vendor && (
+                                <Button size="small" variant="outlined" onClick={() => setWelcomeResident(resident)}>
+                                  Welcome &amp; PDF…
+                                </Button>
+                              )}
+                              <LastEdit resident={resident} gapi={gapi} version={list ? String(list.saved) : ''} />
+                            </Stack>
+                            <RecentTransactions resident={resident} tx={tx} snaps={snaps} onOpenSnap={onOpenSnap} />
+                          </Stack>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </Fragment>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
       {more}
-    </Flex>
+    </Stack>
   );
 }
 
@@ -275,54 +553,81 @@ function LastEdit({ resident, gapi, version }: LastEditProps) {
       .then((reply) => { if (live) { setChanges(reply.changes); setError(''); } }, (err) => { if (live) setError(errorText(err)); });
     return () => { live = false; };
   }, [gapi, resident.directoryCode, version]);
-  if (error) return <Text size="1" color="red">Change history unavailable: {error}</Text>;
+  if (error) return <Alert severity="error" sx={{ py: 0 }}>Change history unavailable: {error}</Alert>;
   if (!changes || !changes.length) return null;
   const last = changes[0];
   return (
     <>
-      <Link href="#" size="2" title="See every recorded change to this entry"
-        onClick={(event) => { event.preventDefault(); event.stopPropagation(); setOpen(true); }}>
+      <Link
+        href="#"
+        variant="body2"
+        title="See every recorded change to this entry"
+        onClick={(event) => { event.preventDefault(); event.stopPropagation(); setOpen(true); }}
+      >
         Last edited by {last.user} · {fmtTime(last.time)}{changes.length > 1 ? ` (${changes.length} changes)` : ''}
       </Link>
-      <Dialog.Root open={open} onOpenChange={setOpen}>
-        <Dialog.Content maxWidth="760px" aria-describedby={undefined} onClick={(event) => event.stopPropagation()}>
-          <Flex align="center" mb="3">
-            <Dialog.Title mb="0">Changes to directory code {resident.directoryCode}{resident.name ? ` (${resident.name})` : ''}</Dialog.Title>
-            <Flex flexGrow="1" />
-            <Dialog.Close><IconButton variant="ghost" color="gray" title="Close">✕</IconButton></Dialog.Close>
-          </Flex>
-          <Flex direction="column" gap="3">
+      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="md" fullWidth onClick={(event) => event.stopPropagation()}>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+          <span>Changes to directory code {resident.directoryCode}{resident.name ? ` (${resident.name})` : ''}</span>
+          <IconButton size="small" aria-label="Close" onClick={() => setOpen(false)}>
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2}>
             {changes.map((change) => (
               <Card key={change.id}>
-                <Flex direction="column" gap="1">
-                  <Flex gap="2" align="center" wrap="wrap">
-                    <Text size="2" weight="medium">{fmtTime(change.time)}</Text>
-                    <Text size="2">by {change.user}</Text>
-                    <Badge color="gray">{ACTIONS[change.action] || change.action}</Badge>
-                    {change.change !== 'changed' && <Badge color={change.change === 'added' ? 'green' : 'red'}>{change.change}</Badge>}
-                    {change.revertedBy && <Badge color="amber" title={`${change.revertedBy.user}, ${fmtTime(change.revertedBy.time)}`}>Reverted</Badge>}
-                  </Flex>
-                  <Text size="1" color="gray">{change.summary}</Text>
-                  {change.fields.length > 0 && (
-                    <Table.Root size="1">
-                      <Table.Header><Table.Row>{['What', 'Before', 'After'].map((header) => <Table.ColumnHeaderCell key={header}>{header}</Table.ColumnHeaderCell>)}</Table.Row></Table.Header>
-                      <Table.Body>
-                        {change.fields.map((field, i) => (
-                          <Table.Row key={i}>
-                            <Table.Cell>{field.field}</Table.Cell>
-                            <Table.Cell><Text color="gray">{field.from || '—'}</Text></Table.Cell>
-                            <Table.Cell>{field.to || '—'}</Table.Cell>
-                          </Table.Row>
-                        ))}
-                      </Table.Body>
-                    </Table.Root>
-                  )}
-                </Flex>
+                <CardContent>
+                  <Stack spacing={1}>
+                    <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                      <Typography variant="body2" sx={{ fontWeight: 500 }}>{fmtTime(change.time)}</Typography>
+                      <Typography variant="body2">by {change.user}</Typography>
+                      <Chip size="small" label={ACTIONS[change.action] || change.action} />
+                      {change.change !== 'changed' && (
+                        <Chip size="small" color={change.change === 'added' ? 'success' : 'error'} label={change.change} />
+                      )}
+                      {change.revertedBy && (
+                        <Chip
+                          size="small"
+                          color="warning"
+                          label="Reverted"
+                          title={`${change.revertedBy.user}, ${fmtTime(change.revertedBy.time)}`}
+                        />
+                      )}
+                    </Stack>
+                    <Typography variant="caption" color="text.secondary">{change.summary}</Typography>
+                    {change.fields.length > 0 && (
+                      <TableContainer component={Paper} variant="outlined">
+                        <Table size="small">
+                          <TableHead>
+                            <TableRow>
+                              {['What', 'Before', 'After'].map((header) => <TableCell key={header}>{header}</TableCell>)}
+                            </TableRow>
+                          </TableHead>
+                          <TableBody>
+                            {change.fields.map((field, i) => (
+                              <TableRow key={i}>
+                                <TableCell>{field.field}</TableCell>
+                                <TableCell>
+                                  <Typography variant="body2" color="text.secondary">{field.from || '—'}</Typography>
+                                </TableCell>
+                                <TableCell>{field.to || '—'}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </TableContainer>
+                    )}
+                  </Stack>
+                </CardContent>
               </Card>
             ))}
-          </Flex>
-        </Dialog.Content>
-      </Dialog.Root>
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 1.5 }}>
+          <Button color="inherit" onClick={() => setOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 }
@@ -345,26 +650,20 @@ interface RecentTransactionsProps {
  * @returns Rendered React element.
  */
 function RecentTransactions({ resident, tx, snaps, onOpenSnap }: RecentTransactionsProps) {
-  if (!tx) return <Text size="2" color="gray">No transactions yet. Pull transactions from the gate.</Text>;
+  if (!tx) return <Typography variant="body2" color="text.secondary">No transactions yet. Pull transactions from the gate.</Typography>;
   const recent = tx.filter((transaction) => transaction.directoryCode === resident.directoryCode).slice(0, 5);
-  if (!recent.length) return <Text size="2" color="gray">No transactions for this entry.</Text>;
-  const cols: Column[] = snaps.settings ? [...HISTORY_COLUMNS, ['Camera', 'snap']] : HISTORY_COLUMNS;
+  if (!recent.length) return <Typography variant="body2" color="text.secondary">No transactions for this entry.</Typography>;
   return (
-    <Table.Root size="1">
-      <Table.Header>
-        <Table.Row>{cols.map(([label, k]) => <Table.ColumnHeaderCell key={k}>{label}</Table.ColumnHeaderCell>)}</Table.Row>
-      </Table.Header>
-      <Table.Body>
-        {recent.map((transaction, i) => (
-          <Table.Row key={i} style={txTone(transaction) ? { background: `var(--${txTone(transaction)}-a3)` } : undefined}>
-            {cols.map(([, k]) => (
-              <Table.Cell key={k}>
-                {k === 'snap' ? <SnapCell transaction={transaction} snaps={snaps} onOpen={onOpenSnap} /> : String(fieldOf(transaction, k) ?? '')}
-              </Table.Cell>
-            ))}
-          </Table.Row>
-        ))}
-      </Table.Body>
-    </Table.Root>
+    <Stack spacing={1}>
+      {recent.map((transaction, i) => (
+        <TransactionCard
+          key={`${transaction.raw}-${i}`}
+          transaction={transaction}
+          snaps={snaps}
+          compact
+          onOpenSnap={onOpenSnap}
+        />
+      ))}
+    </Stack>
   );
 }

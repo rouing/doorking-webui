@@ -1,5 +1,18 @@
 import { useState } from 'react';
-import { Badge, Box, Button, Callout, Flex, Table, Text } from '@radix-ui/themes';
+import {
+  Alert,
+  Button,
+  Chip,
+  Paper,
+  Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Typography,
+} from '@mui/material';
 import type { ConflictView, ResidentsReply, SendPreview } from '../../../src/types.ts';
 import { errorText, useReadOnly, type GateApi } from '../api.ts';
 import { useConfirm } from '../Confirm.tsx';
@@ -25,27 +38,37 @@ export function ConflictList({ conflicts, gapi, onDecided }: ConflictListProps) 
   const [error, setError] = useState('');
   if (!conflicts.length) return null;
   const decide = async (conflict: ConflictView, choice: 'mine' | 'gate') => {
-    try { await gapi('POST', '/working-copy/conflicts', { kind: conflict.kind, key: conflict.key, choice }); setError(''); await onDecided(); } catch (err) {
+    try {
+      await gapi('POST', '/working-copy/conflicts', { kind: conflict.kind, key: conflict.key, choice });
+      setError('');
+      await onDecided();
+    } catch (err) {
       setError(errorText(err));
     }
   };
   return (
-    <Callout.Root color="red" role="alert">
-      <Callout.Text>
-        <strong>{conflicts.length} change{conflicts.length === 1 ? '' : 's'} to decide before sending.</strong> Since your last pull,
-        these were changed at the gate and differently here. Your change is kept until you choose.
-      </Callout.Text>
-      <Flex direction="column" gap="2" mt="2">
+    <Alert severity="error" role="alert">
+      <Stack spacing={1}>
+        <Typography variant="body2">
+          <strong>{conflicts.length} change{conflicts.length === 1 ? '' : 's'} to decide before sending.</strong> Since your last pull,
+          these were changed at the gate and differently here. Your change is kept until you choose.
+        </Typography>
         {conflicts.map((conflict) => (
-          <Flex key={`${conflict.kind}-${conflict.key}`} gap="3" align="center" wrap="wrap">
-            <Text size="2"><strong>{conflict.label}</strong>: at the gate {conflict.gate}; yours {conflict.mine}</Text>
-            {!readOnly && <Button size="1" variant="soft" onClick={() => decide(conflict, 'mine')}>Keep mine</Button>}
-            {!readOnly && <Button size="1" variant="soft" color="gray" onClick={() => decide(conflict, 'gate')}>Take the gate's</Button>}
-          </Flex>
+          <Stack key={`${conflict.kind}-${conflict.key}`} direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+            <Typography variant="body2">
+              <strong>{conflict.label}</strong>: at the gate {conflict.gate}; yours {conflict.mine}
+            </Typography>
+            {!readOnly && (
+              <Button size="small" variant="outlined" onClick={() => decide(conflict, 'mine')}>Keep mine</Button>
+            )}
+            {!readOnly && (
+              <Button size="small" variant="outlined" color="inherit" onClick={() => decide(conflict, 'gate')}>Take the gate&apos;s</Button>
+            )}
+          </Stack>
         ))}
-        {error && <Text size="2" color="red">{error}</Text>}
-      </Flex>
-    </Callout.Root>
+        {error && <Alert severity="error" sx={{ py: 0 }}>{error}</Alert>}
+      </Stack>
+    </Alert>
   );
 }
 
@@ -97,8 +120,10 @@ export interface WorkingCopyActionsOptions {
 export function useWorkingCopyActions({ gapi, onReload, onJobStarted, notify, onError, sendLines = [] }: WorkingCopyActionsOptions) {
   const [dialog, confirm] = useConfirm();
   async function reset() {
-    if (!await confirm({ title: 'Reset to gate?', action: 'Reset', color: 'red',
-      body: 'Throw away every change not sent to the gate (on every page), so the working copy matches what the gate holds (as of the last pull)?' })) return;
+    if (!await confirm({
+      title: 'Reset to gate?', action: 'Reset', color: 'red',
+      body: 'Throw away every change not sent to the gate (on every page), so the working copy matches what the gate holds (as of the last pull)?',
+    })) return;
     notify('Resetting…');
     try {
       await gapi('DELETE', '/working-copy');
@@ -109,7 +134,10 @@ export function useWorkingCopyActions({ gapi, onReload, onJobStarted, notify, on
   async function send() {
     let preview: SendPreview;
     try { preview = await gapi<SendPreview>('GET', '/send'); } catch (err) { onError(errorText(err)); return; }
-    if (!await confirm({ title: 'Send the working copy to the gate?', action: 'Send to gate', maxWidth: '680px', body: <SendSummary preview={preview} lines={sendLines} /> })) return;
+    if (!await confirm({
+      title: 'Send the working copy to the gate?', action: 'Send to gate', maxWidth: '680px',
+      body: <SendSummary preview={preview} lines={sendLines} />,
+    })) return;
     try {
       await gapi('POST', '/send', { confirm: true });
       notify('Sending to the gate; see the progress window.');
@@ -170,48 +198,56 @@ function SendSummary({ preview, lines }: SendSummaryProps) {
   const blocks = Object.entries(preview.changedBlocks).filter(([, changed]) => changed.length);
   const changes = preview.changes || [];
   return (
-    <Flex direction="column" gap="2">
-      <Text>This changes the physical gate.</Text>
-      {lines.map((line) => <Text key={line} size="2" color="gray">{line}</Text>)}
+    <Stack spacing={1.5}>
+      <Typography variant="body1">This changes the physical gate.</Typography>
+      {lines.map((line) => <Typography key={line} variant="body2" color="text.secondary">{line}</Typography>)}
       {changes.length > 0 && (
-        <Box style={{ maxHeight: 280, overflowY: 'auto', border: '1px solid var(--gray-a5)', borderRadius: 'var(--radius-2)' }}>
-          <Table.Root size="1">
-            <Table.Header>
-              <Table.Row>
-                <Table.ColumnHeaderCell>Item</Table.ColumnHeaderCell>
-                <Table.ColumnHeaderCell>Field</Table.ColumnHeaderCell>
-                <Table.ColumnHeaderCell>Gate</Table.ColumnHeaderCell>
-                <Table.ColumnHeaderCell>New</Table.ColumnHeaderCell>
-              </Table.Row>
-            </Table.Header>
-            <Table.Body>
+        <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 280 }}>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Item</TableCell>
+                <TableCell>Field</TableCell>
+                <TableCell>Gate</TableCell>
+                <TableCell>New</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
               {changes.flatMap((item) => (item.fields.length ? item.fields : [{ field: '', from: '', to: '' }]).map((field, index) => (
-                <Table.Row key={`${item.key}-${field.field}-${index}`}>
-                  <Table.Cell>
+                <TableRow key={`${item.key}-${field.field}-${index}`}>
+                  <TableCell>
                     {index === 0 && (
-                      <Flex align="center" gap="1" wrap="wrap">
-                        <Text weight="medium">{item.label}</Text>
+                      <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                        <Typography variant="body2" sx={{ fontWeight: 500 }}>{item.label}</Typography>
                         {item.change !== 'changed' && (
-                          <Badge size="1" color={item.change === 'added' ? 'green' : 'red'}>{item.change}</Badge>
+                          <Chip size="small" label={item.change} color={item.change === 'added' ? 'success' : 'error'} />
                         )}
-                      </Flex>
+                      </Stack>
                     )}
-                  </Table.Cell>
-                  <Table.Cell>{field.field}</Table.Cell>
-                  <Table.Cell><Text color="gray">{field.from || '—'}</Text></Table.Cell>
-                  <Table.Cell>{field.to || '—'}</Table.Cell>
-                </Table.Row>
+                  </TableCell>
+                  <TableCell>{field.field}</TableCell>
+                  <TableCell>
+                    <Typography variant="body2" color="text.secondary">{field.from || '—'}</Typography>
+                  </TableCell>
+                  <TableCell>{field.to || '—'}</TableCell>
+                </TableRow>
               )))}
-            </Table.Body>
-          </Table.Root>
-        </Box>
+            </TableBody>
+          </Table>
+        </TableContainer>
       )}
-      <Flex direction="column" gap="1">
-        {blocks.map(([file, changed]) => <Text key={file} size="1" color="gray">{file}: block(s) {changed.join(', ')}</Text>)}
-        <Text size="1" color="gray">Resident / vendor counts (from names.bin): {preview.residentCounts.join(', ')}</Text>
-        <Text size="1" color="gray">A residents pull runs afterwards to verify the gate holds these changes.</Text>
-      </Flex>
-    </Flex>
+      <Stack spacing={0.5}>
+        {blocks.map(([file, changed]) => (
+          <Typography key={file} variant="caption" color="text.secondary">{file}: block(s) {changed.join(', ')}</Typography>
+        ))}
+        <Typography variant="caption" color="text.secondary">
+          Resident / vendor counts (from names.bin): {preview.residentCounts.join(', ')}
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
+          A residents pull runs afterwards to verify the gate holds these changes.
+        </Typography>
+      </Stack>
+    </Stack>
   );
 }
 

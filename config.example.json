@@ -45,6 +45,16 @@
     "from": "DoorKing Gate Manager <gate@example.com>",
     "appUrl": ""
   },
+  "push": {
+    "vapidPublicKey": "",
+    "vapidPrivateKey": "",
+    "subject": ""
+  },
+  "android": {
+    "packageName": "",
+    "sha256CertFingerprints": [],
+    "apkPath": ""
+  },
   "sso": {
     "providers": []
   },

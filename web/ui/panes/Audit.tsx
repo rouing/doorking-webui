@@ -5,9 +5,30 @@
  * shortcuts), high-frequency / possibly leaked entry codes, and gate traffic & cycle volume from `tx_history`.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { Badge, Button, Card, Flex, Grid, Heading, Link, Select, Table, Tabs, Text } from '@radix-ui/themes';
-import type { AccessAuditReply, ResidentRow, TransactionRow } from '../../../src/types.ts';
-import { errorText, type GateApi } from '../api.ts';
+import {
+  Alert,
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Chip,
+  Link,
+  MenuItem,
+  Paper,
+  Select,
+  Stack,
+  Tab,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Tabs,
+  Typography,
+} from '@mui/material';
+import type { AccessAuditReply, ResidentRequest, ResidentRow, SuspiciousReport, TransactionRow } from '../../../src/types.ts';
+import { errorText, useIsAdmin, useReadOnly, type GateApi } from '../api.ts';
 import { fmtTime } from '../format.ts';
 
 interface AuditProps {
@@ -16,6 +37,18 @@ interface AuditProps {
   transactions: TransactionRow[];
   onOpenResident: (resident: ResidentRow) => void;
   onOpenSnap: (transaction: TransactionRow) => void;
+}
+
+type AuditTab = 'dormant' | 'unknown' | 'codes' | 'traffic';
+
+function fmtHourShort(hour: number): string {
+  const h = hour % 12 || 12;
+  return `${h} ${hour < 12 ? 'AM' : 'PM'}`;
+}
+
+function fmtHourFull(hour: number): string {
+  const h = hour % 12 || 12;
+  return `${h}:00 ${hour < 12 ? 'AM' : 'PM'}`;
 }
 
 /**
@@ -31,18 +64,57 @@ interface AuditProps {
  */
 export function Audit({ gapi, residents, transactions, onOpenResident, onOpenSnap }: AuditProps) {
   const [days, setDays] = useState('90');
+  const [tab, setTab] = useState<AuditTab>('dormant');
   const [audit, setAudit] = useState<AccessAuditReply | null>(null);
-  const [info, setInfo] = useState('Loading…');
+  const [reports, setReports] = useState<SuspiciousReport[]>([]);
+  const [requests, setRequests] = useState<ResidentRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [partialWarning, setPartialWarning] = useState('');
+  const isAdmin = useIsAdmin();
+  const readOnly = useReadOnly();
 
   const load = useCallback(async () => {
-    setInfo('Loading…');
+    setLoading(true);
+    setError('');
+    setPartialWarning('');
     try {
-      const reply = await gapi<AccessAuditReply>('GET', `/audit?days=${days}`);
-      setAudit(reply);
-      setInfo('');
-    } catch (err) { setInfo(errorText(err)); }
+      const [auditRes, repsRes, reqsRes] = await Promise.allSettled([
+        gapi<AccessAuditReply>('GET', `/audit?days=${days}`),
+        gapi<{ reports: SuspiciousReport[] }>('GET', '/suspicious-reports'),
+        gapi<{ requests: ResidentRequest[] }>('GET', '/resident-requests'),
+      ]);
+      if (auditRes.status === 'rejected') throw auditRes.reason;
+      setAudit(auditRes.value);
+      const warnings: string[] = [];
+      if (repsRes.status === 'fulfilled') setReports(repsRes.value.reports);
+      else warnings.push(`Suspicious reports unavailable: ${errorText(repsRes.reason)}`);
+      if (reqsRes.status === 'fulfilled') setRequests(reqsRes.value.requests);
+      else warnings.push(`Resident requests unavailable: ${errorText(reqsRes.reason)}`);
+      if (warnings.length) setPartialWarning(warnings.join(' · '));
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setLoading(false);
+    }
   }, [gapi, days]);
   useEffect(() => { load(); }, [load]);
+
+  const resolveReport = async (id: number) => {
+    setError('');
+    try {
+      await gapi('POST', `/suspicious-reports/${id}/resolve`, {});
+      await load();
+    } catch (err) { setError(errorText(err)); }
+  };
+
+  const reviewRequest = async (id: number, decision: 'approved' | 'rejected') => {
+    setError('');
+    try {
+      await gapi('POST', `/resident-requests/${id}/review`, { decision, apply: decision === 'approved' });
+      await load();
+    } catch (err) { setError(errorText(err)); }
+  };
 
   const byCode = new Map(residents.map((res) => [res.directoryCode, res]));
   const openByCode = (code: string) => { const found = byCode.get(code); if (found) onOpenResident(found); };
@@ -55,213 +127,418 @@ export function Audit({ gapi, residents, transactions, onOpenResident, onOpenSna
   const maxHour = audit ? Math.max(1, ...audit.traffic.byHour) : 1;
 
   return (
-    <Flex direction="column" gap="3">
-      <Heading>Access Insights</Heading>
-      <Flex gap="3" align="center" wrap="wrap">
-        <Select.Root value={days} onValueChange={setDays}>
-          <Select.Trigger />
-          <Select.Content>
-            {[['30', 'Last 30 days'], ['90', 'Last 90 days'], ['180', 'Last 180 days'], ['365', 'Last 365 days']].map(([val, label]) => (
-              <Select.Item key={val} value={val}>{label}</Select.Item>
-            ))}
-          </Select.Content>
-        </Select.Root>
-        <Button variant="soft" color="gray" onClick={load}>Refresh</Button>
-        {info && <Text size="2" color="gray">{info}</Text>}
-      </Flex>
+    <Stack spacing={2}>
+      <Typography variant="h5">Access Insights</Typography>
+      {reports.length > 0 && (
+        <Card>
+          <CardContent>
+            <Stack spacing={1.5}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                <Typography variant="h6">Suspicious activity reports</Typography>
+                <Chip size="small" color="error" label={`${reports.filter((report) => report.status === 'open').length} open`} />
+              </Stack>
+              <TableContainer component={Paper} variant="outlined">
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Reported</TableCell>
+                      <TableCell>Unit</TableCell>
+                      <TableCell>Transaction</TableCell>
+                      <TableCell>Note</TableCell>
+                      <TableCell>Status</TableCell>
+                      <TableCell />
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {reports.slice(0, 20).map((rep) => (
+                      <TableRow key={rep.id}>
+                        <TableCell>{fmtTime(rep.createdAt)}</TableCell>
+                        <TableCell>
+                          <Link href="#" onClick={(event) => { event.preventDefault(); openByCode(rep.directoryCode); }}>
+                            {rep.directoryCode}{rep.residentName ? ` · ${rep.residentName}` : ''}
+                          </Link>
+                        </TableCell>
+                        <TableCell>{rep.txSummary}</TableCell>
+                        <TableCell>{rep.note || '—'}</TableCell>
+                        <TableCell>
+                          <Chip size="small" color={rep.status === 'open' ? 'error' : 'success'} label={rep.status} />
+                        </TableCell>
+                        <TableCell>
+                          {isAdmin && rep.status === 'open' && (
+                            <Button size="small" variant="outlined" onClick={() => resolveReport(rep.id)}>Resolve</Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Stack>
+          </CardContent>
+        </Card>
+      )}
+      {requests.length > 0 && (
+        <Card>
+          <CardContent>
+            <Stack spacing={1.5}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                <Typography variant="h6">Resident change requests</Typography>
+                <Chip size="small" color="warning" label={`${requests.filter((request) => request.status === 'pending').length} pending`} />
+              </Stack>
+              <TableContainer component={Paper} variant="outlined">
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Submitted</TableCell>
+                      <TableCell>Unit</TableCell>
+                      <TableCell>Request</TableCell>
+                      <TableCell>Details</TableCell>
+                      <TableCell>Status</TableCell>
+                      <TableCell />
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {requests.slice(0, 20).map((req) => (
+                      <TableRow key={req.id}>
+                        <TableCell>{fmtTime(req.createdAt)}</TableCell>
+                        <TableCell>
+                          <Link href="#" onClick={(event) => { event.preventDefault(); openByCode(req.directoryCode); }}>
+                            {req.directoryCode}{req.residentName ? ` · ${req.residentName}` : ''}
+                          </Link>
+                        </TableCell>
+                        <TableCell><Chip size="small" variant="outlined" label={req.kind} /></TableCell>
+                        <TableCell>
+                          {typeof req.payload?.phone === 'string' && req.payload.phone ? `Phone: ${req.payload.phone} ` : ''}
+                          {req.note || '—'}
+                        </TableCell>
+                        <TableCell>
+                          <Chip
+                            size="small"
+                            color={req.status === 'approved' ? 'success' : req.status === 'rejected' ? 'error' : 'warning'}
+                            label={req.status}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          {!readOnly && req.status === 'pending' && (
+                            <Stack direction="row" spacing={1}>
+                              <Button size="small" variant="outlined" color="success" onClick={() => reviewRequest(req.id, 'approved')}>Approve</Button>
+                              <Button size="small" variant="outlined" color="error" onClick={() => reviewRequest(req.id, 'rejected')}>Reject</Button>
+                            </Stack>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Stack>
+          </CardContent>
+        </Card>
+      )}
+      <Stack direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+        <Select
+          size="small"
+          value={days}
+          onChange={(event) => setDays(String(event.target.value))}
+          inputProps={{ 'aria-label': 'Audit period' }}
+        >
+          {[['30', 'Last 30 days'], ['90', 'Last 90 days'], ['180', 'Last 180 days'], ['365', 'Last 365 days']].map(([val, label]) => (
+            <MenuItem key={val} value={val}>{label}</MenuItem>
+          ))}
+        </Select>
+        <Button variant="outlined" color="inherit" onClick={load}>Refresh</Button>
+        {loading && <Typography variant="body2" color="text.secondary">Loading…</Typography>}
+      </Stack>
+      {error && <Alert severity="error">{error}</Alert>}
+      {partialWarning && <Alert severity="warning">{partialWarning}</Alert>}
 
       {audit && (
         <>
-          <Grid columns={{ initial: '2', sm: '4' }} gap="3">
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(4, minmax(0, 1fr))' }, gap: 2 }}>
             <Card>
-              <Text size="1" color="gray">Dormant credentials</Text>
-              <Heading size="6">{audit.dormant.length}</Heading>
-              <Text size="1" color="gray">Unused in {audit.days}d</Text>
+              <CardContent>
+                <Typography variant="caption" color="text.secondary">Dormant credentials</Typography>
+                <Typography variant="h4">{audit.dormant.length}</Typography>
+                <Typography variant="caption" color="text.secondary">Unused in {audit.days}d</Typography>
+              </CardContent>
             </Card>
             <Card>
-              <Text size="1" color="gray">Unknown cards</Text>
-              <Heading size="6" color={audit.unknownCards.length ? 'amber' : undefined}>{audit.unknownCards.length}</Heading>
-              <Text size="1" color="gray">Unassigned in working copy</Text>
+              <CardContent>
+                <Typography variant="caption" color="text.secondary">Unknown cards</Typography>
+                <Typography variant="h4" color={audit.unknownCards.length ? 'warning.main' : undefined}>
+                  {audit.unknownCards.length}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">Unassigned in working copy</Typography>
+              </CardContent>
             </Card>
             <Card>
-              <Text size="1" color="gray">Flagged entry codes</Text>
-              <Heading size="6" color={audit.entryCodes.some((c) => c.flagged) ? 'red' : undefined}>
-                {audit.entryCodes.filter((c) => c.flagged).length}
-              </Heading>
-              <Text size="1" color="gray">High-frequency / off-hours</Text>
+              <CardContent>
+                <Typography variant="caption" color="text.secondary">Flagged entry codes</Typography>
+                <Typography variant="h4" color={audit.entryCodes.some((code) => code.flagged) ? 'error.main' : undefined}>
+                  {audit.entryCodes.filter((code) => code.flagged).length}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">High-frequency / off-hours</Typography>
+              </CardContent>
             </Card>
             <Card>
-              <Text size="1" color="gray">Gate open cycles</Text>
-              <Heading size="6">{audit.traffic.openCycles.toLocaleString()}</Heading>
-              <Text size="1" color="gray">{audit.traffic.admits} admits · {audit.traffic.denies} denies</Text>
+              <CardContent>
+                <Typography variant="caption" color="text.secondary">Gate open cycles</Typography>
+                <Typography variant="h4">{audit.traffic.openCycles.toLocaleString()}</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {audit.traffic.admits} admits · {audit.traffic.denies} denies
+                </Typography>
+              </CardContent>
             </Card>
-          </Grid>
+          </Box>
 
-          <Tabs.Root defaultValue="dormant">
-            <Tabs.List>
-              <Tabs.Trigger value="dormant">Dormant ({audit.dormant.length})</Tabs.Trigger>
-              <Tabs.Trigger value="unknown">Unknown cards ({audit.unknownCards.length})</Tabs.Trigger>
-              <Tabs.Trigger value="codes">Entry codes ({audit.entryCodes.length})</Tabs.Trigger>
-              <Tabs.Trigger value="traffic">Traffic</Tabs.Trigger>
-            </Tabs.List>
+          <Card>
+            <CardContent>
+              <Typography variant="h6" gutterBottom>Activity by hour of day ({audit.days} days)</Typography>
+              <Stack
+                direction="row"
+                spacing={0.5}
+                sx={{
+                  alignItems: 'flex-end',
+                  height: 112,
+                  pt: 1,
+                  borderBottom: 1,
+                  borderColor: 'divider',
+                }}
+              >
+                {audit.traffic.byHour.map((count, hour) => (
+                  <Box
+                    key={hour}
+                    title={`${fmtHourFull(hour)} — ${count} event${count === 1 ? '' : 's'}`}
+                    sx={{
+                      flex: 1,
+                      minWidth: 0,
+                      height: '100%',
+                      display: 'flex',
+                      alignItems: 'flex-end',
+                    }}
+                  >
+                    <Box
+                      sx={{
+                        width: '100%',
+                        height: count > 0 ? Math.max(4, Math.round((count / maxHour) * 100)) : 2,
+                        bgcolor: count > 0 ? 'primary.main' : 'action.disabledBackground',
+                        borderRadius: '3px 3px 0 0',
+                      }}
+                    />
+                  </Box>
+                ))}
+              </Stack>
+              <Stack direction="row" spacing={0.5} sx={{ mt: 0.75 }}>
+                {audit.traffic.byHour.map((_, hour) => (
+                  <Box
+                    key={hour}
+                    sx={{
+                      flex: 1,
+                      minWidth: 0,
+                      height: 18,
+                      display: 'flex',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      overflow: 'visible',
+                    }}
+                  >
+                    {hour % 3 === 0 && (
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{ fontSize: 10, lineHeight: 1, whiteSpace: 'nowrap' }}
+                      >
+                        {fmtHourShort(hour)}
+                      </Typography>
+                    )}
+                  </Box>
+                ))}
+              </Stack>
+            </CardContent>
+          </Card>
 
-            <Tabs.Content value="dormant" style={{ paddingTop: 12 }}>
-              <Card>
-                <Text size="2" color="gray" as="p" mb="2">
-                  Active residents and vendors with cards or an entry code who have had zero recorded events in the last {audit.days} days.
-                </Text>
-                {audit.dormant.length === 0 ? <Text size="2" color="gray">No dormant credentials found.</Text> : (
-                  <Table.Root size="1">
-                    <Table.Header>
-                      <Table.Row>
-                        <Table.ColumnHeaderCell>Code</Table.ColumnHeaderCell>
-                        <Table.ColumnHeaderCell>Name</Table.ColumnHeaderCell>
-                        <Table.ColumnHeaderCell>Type</Table.ColumnHeaderCell>
-                        <Table.ColumnHeaderCell>Entry code</Table.ColumnHeaderCell>
-                        <Table.ColumnHeaderCell>Cards</Table.ColumnHeaderCell>
-                        <Table.ColumnHeaderCell>Last seen</Table.ColumnHeaderCell>
-                      </Table.Row>
-                    </Table.Header>
-                    <Table.Body>
-                      {audit.dormant.map((entry) => (
-                        <Table.Row key={entry.directoryCode}>
-                          <Table.Cell>{entry.directoryCode}</Table.Cell>
-                          <Table.Cell>
-                            <Link href="#" onClick={(event) => { event.preventDefault(); openByCode(entry.directoryCode); }}>{entry.name}</Link>
-                          </Table.Cell>
-                          <Table.Cell>{entry.type}</Table.Cell>
-                          <Table.Cell>{entry.entryCode || '—'}</Table.Cell>
-                          <Table.Cell>{entry.cards.join(', ') || '—'}</Table.Cell>
-                          <Table.Cell>{entry.lastSeen ? fmtTime(entry.lastSeen) : 'Never'}</Table.Cell>
-                        </Table.Row>
-                      ))}
-                    </Table.Body>
-                  </Table.Root>
-                )}
-              </Card>
-            </Tabs.Content>
+          <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+            <Tabs value={tab} onChange={(_, next: AuditTab) => setTab(next)} variant="scrollable" scrollButtons="auto">
+              <Tab value="dormant" label={`Dormant (${audit.dormant.length})`} />
+              <Tab value="unknown" label={`Unknown cards (${audit.unknownCards.length})`} />
+              <Tab value="codes" label={`Entry codes (${audit.entryCodes.length})`} />
+              <Tab value="traffic" label="Traffic" />
+            </Tabs>
+          </Box>
 
-            <Tabs.Content value="unknown" style={{ paddingTop: 12 }}>
-              <Card>
-                <Text size="2" color="gray" as="p" mb="2">
-                  Card numbers seen in transaction history during the last {audit.days} days that are not assigned to any resident in the working copy.
-                </Text>
-                {audit.unknownCards.length === 0 ? <Text size="2" color="gray">No unknown cards seen.</Text> : (
-                  <Table.Root size="1">
-                    <Table.Header>
-                      <Table.Row>
-                        <Table.ColumnHeaderCell>Card</Table.ColumnHeaderCell>
-                        <Table.ColumnHeaderCell>Uses</Table.ColumnHeaderCell>
-                        <Table.ColumnHeaderCell>Admits / Denies</Table.ColumnHeaderCell>
-                        <Table.ColumnHeaderCell>Last seen</Table.ColumnHeaderCell>
-                        <Table.ColumnHeaderCell>Camera</Table.ColumnHeaderCell>
-                      </Table.Row>
-                    </Table.Header>
-                    <Table.Body>
-                      {audit.unknownCards.map((card) => (
-                        <Table.Row key={card.cardNumber}>
-                          <Table.Cell><Text weight="medium">{card.cardNumber}</Text></Table.Cell>
-                          <Table.Cell>{card.uses}</Table.Cell>
-                          <Table.Cell>{card.admits} / {card.denies}</Table.Cell>
-                          <Table.Cell>{fmtTime(card.lastSeen)}</Table.Cell>
-                          <Table.Cell>
-                            {card.hasSnapshot
-                              ? <Button size="1" variant="soft" onClick={() => openMinuteSnap(card.lastMinute, card.cardNumber)}>View snapshot</Button>
-                              : <Text size="1" color="gray">—</Text>}
-                          </Table.Cell>
-                        </Table.Row>
-                      ))}
-                    </Table.Body>
-                  </Table.Root>
-                )}
-              </Card>
-            </Tabs.Content>
+          {tab === 'dormant' && (
+            <Card>
+              <CardContent>
+                <Stack spacing={1.5}>
+                  <Typography variant="body2" color="text.secondary">
+                    Active residents and vendors with cards or an entry code who have had zero recorded events in the last {audit.days} days.
+                  </Typography>
+                  {audit.dormant.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary">No dormant credentials found.</Typography>
+                  ) : (
+                    <TableContainer component={Paper} variant="outlined">
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>Code</TableCell>
+                            <TableCell>Name</TableCell>
+                            <TableCell>Type</TableCell>
+                            <TableCell>Entry code</TableCell>
+                            <TableCell>Cards</TableCell>
+                            <TableCell>Last seen</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {audit.dormant.map((entry) => (
+                            <TableRow key={entry.directoryCode}>
+                              <TableCell>{entry.directoryCode}</TableCell>
+                              <TableCell>
+                                <Link href="#" onClick={(event) => { event.preventDefault(); openByCode(entry.directoryCode); }}>{entry.name}</Link>
+                              </TableCell>
+                              <TableCell>{entry.type}</TableCell>
+                              <TableCell>{entry.entryCode || '—'}</TableCell>
+                              <TableCell>{entry.cards.join(', ') || '—'}</TableCell>
+                              <TableCell>{entry.lastSeen ? fmtTime(entry.lastSeen) : 'Never'}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+                  )}
+                </Stack>
+              </CardContent>
+            </Card>
+          )}
 
-            <Tabs.Content value="codes" style={{ paddingTop: 12 }}>
-              <Card>
-                <Text size="2" color="gray" as="p" mb="2">
-                  Admitted entry codes ranked by usage in the last {audit.days} days. High-frequency or heavy off-hours codes are flagged as potential leaks.
-                </Text>
-                {audit.entryCodes.length === 0 ? <Text size="2" color="gray">No admitted entry-code uses in this period.</Text> : (
-                  <Table.Root size="1">
-                    <Table.Header>
-                      <Table.Row>
-                        <Table.ColumnHeaderCell>Entry code</Table.ColumnHeaderCell>
-                        <Table.ColumnHeaderCell>Owner</Table.ColumnHeaderCell>
-                        <Table.ColumnHeaderCell>Uses</Table.ColumnHeaderCell>
-                        <Table.ColumnHeaderCell>Active days</Table.ColumnHeaderCell>
-                        <Table.ColumnHeaderCell>Off-hours (11p–5a)</Table.ColumnHeaderCell>
-                        <Table.ColumnHeaderCell>Status</Table.ColumnHeaderCell>
-                      </Table.Row>
-                    </Table.Header>
-                    <Table.Body>
-                      {audit.entryCodes.map((entry) => (
-                        <Table.Row key={entry.entryCode}>
-                          <Table.Cell><Text weight="medium">{entry.entryCode}</Text></Table.Cell>
-                          <Table.Cell>
-                            {entry.directoryCode
-                              ? <Link href="#" onClick={(event) => { event.preventDefault(); openByCode(entry.directoryCode); }}>{entry.name || entry.directoryCode} ({entry.directoryCode})</Link>
-                              : <Text color="gray">Unassigned</Text>}
-                          </Table.Cell>
-                          <Table.Cell>{entry.uses}</Table.Cell>
-                          <Table.Cell>{entry.distinctDays}</Table.Cell>
-                          <Table.Cell>{entry.offHoursUses}</Table.Cell>
-                          <Table.Cell>{entry.flagged ? <Badge color="red">High usage</Badge> : <Badge color="gray">Normal</Badge>}</Table.Cell>
-                        </Table.Row>
-                      ))}
-                    </Table.Body>
-                  </Table.Root>
-                )}
-              </Card>
-            </Tabs.Content>
+          {tab === 'unknown' && (
+            <Card>
+              <CardContent>
+                <Stack spacing={1.5}>
+                  <Typography variant="body2" color="text.secondary">
+                    Card numbers seen in transaction history during the last {audit.days} days that are not assigned to any resident in the working copy.
+                  </Typography>
+                  {audit.unknownCards.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary">No unknown cards seen.</Typography>
+                  ) : (
+                    <TableContainer component={Paper} variant="outlined">
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>Card</TableCell>
+                            <TableCell>Uses</TableCell>
+                            <TableCell>Admits / Denies</TableCell>
+                            <TableCell>Last seen</TableCell>
+                            <TableCell>Camera</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {audit.unknownCards.map((card) => (
+                            <TableRow key={card.cardNumber}>
+                              <TableCell><Typography variant="body2" sx={{ fontWeight: 500 }}>{card.cardNumber}</Typography></TableCell>
+                              <TableCell>{card.uses}</TableCell>
+                              <TableCell>{card.admits} / {card.denies}</TableCell>
+                              <TableCell>{fmtTime(card.lastSeen)}</TableCell>
+                              <TableCell>
+                                {card.hasSnapshot
+                                  ? <Button size="small" variant="outlined" onClick={() => openMinuteSnap(card.lastMinute, card.cardNumber)}>View snapshot</Button>
+                                  : <Typography variant="caption" color="text.secondary">—</Typography>}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+                  )}
+                </Stack>
+              </CardContent>
+            </Card>
+          )}
 
-            <Tabs.Content value="traffic" style={{ paddingTop: 12 }}>
-              <Flex direction="column" gap="3">
-                <Card>
-                  <Heading size="3" mb="2">Activity by hour of day ({audit.days} days)</Heading>
-                  <Flex align="end" gap="1" style={{ height: 120, paddingTop: 8 }}>
-                    {audit.traffic.byHour.map((count, hour) => (
-                      <Flex key={hour} direction="column" align="center" style={{ flex: 1, height: '100%', justifyContent: 'flex-end' }}
-                        title={`${hour}:00 — ${count} events`}>
-                        <div style={{
-                          width: '100%',
-                          height: `${Math.max(2, Math.round((count / maxHour) * 90))}px`,
-                          background: 'var(--accent-9)',
-                          borderRadius: '2px 2px 0 0',
-                        }} />
-                        <Text size="1" color="gray" style={{ fontSize: 10 }}>{hour % 3 === 0 ? hour : ''}</Text>
-                      </Flex>
-                    ))}
-                  </Flex>
-                </Card>
-                {audit.traffic.byDay.length > 0 && (
-                  <Card>
-                    <Heading size="3" mb="2">Recent daily volume (last 30 days)</Heading>
-                    <Table.Root size="1">
-                      <Table.Header>
-                        <Table.Row>
-                          <Table.ColumnHeaderCell>Date</Table.ColumnHeaderCell>
-                          <Table.ColumnHeaderCell>Admits</Table.ColumnHeaderCell>
-                          <Table.ColumnHeaderCell>Denies</Table.ColumnHeaderCell>
-                        </Table.Row>
-                      </Table.Header>
-                      <Table.Body>
+          {tab === 'codes' && (
+            <Card>
+              <CardContent>
+                <Stack spacing={1.5}>
+                  <Typography variant="body2" color="text.secondary">
+                    Admitted entry codes ranked by usage in the last {audit.days} days. High-frequency or heavy off-hours codes are flagged as potential leaks.
+                  </Typography>
+                  {audit.entryCodes.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary">No admitted entry-code uses in this period.</Typography>
+                  ) : (
+                    <TableContainer component={Paper} variant="outlined">
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>Entry code</TableCell>
+                            <TableCell>Owner</TableCell>
+                            <TableCell>Uses</TableCell>
+                            <TableCell>Active days</TableCell>
+                            <TableCell>Off-hours (11p–5a)</TableCell>
+                            <TableCell>Status</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {audit.entryCodes.map((entry) => (
+                            <TableRow key={entry.entryCode}>
+                              <TableCell><Typography variant="body2" sx={{ fontWeight: 500 }}>{entry.entryCode}</Typography></TableCell>
+                              <TableCell>
+                                {entry.directoryCode
+                                  ? (
+                                    <Link href="#" onClick={(event) => { event.preventDefault(); openByCode(entry.directoryCode); }}>
+                                      {entry.name || entry.directoryCode} ({entry.directoryCode})
+                                    </Link>
+                                  )
+                                  : <Typography variant="body2" color="text.secondary">Unassigned</Typography>}
+                              </TableCell>
+                              <TableCell>{entry.uses}</TableCell>
+                              <TableCell>{entry.distinctDays}</TableCell>
+                              <TableCell>{entry.offHoursUses}</TableCell>
+                              <TableCell>
+                                {entry.flagged ? <Chip size="small" color="error" label="High usage" /> : <Chip size="small" label="Normal" />}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+                  )}
+                </Stack>
+              </CardContent>
+            </Card>
+          )}
+
+          {tab === 'traffic' && (
+            <Card>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>Recent daily volume (last 30 days)</Typography>
+                {audit.traffic.byDay.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">No daily volume recorded in this period.</Typography>
+                ) : (
+                  <TableContainer component={Paper} variant="outlined">
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Date</TableCell>
+                          <TableCell>Admits</TableCell>
+                          <TableCell>Denies</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
                         {[...audit.traffic.byDay].reverse().map((day) => (
-                          <Table.Row key={day.date}>
-                            <Table.Cell>{day.date}</Table.Cell>
-                            <Table.Cell>{day.admits}</Table.Cell>
-                            <Table.Cell>{day.denies}</Table.Cell>
-                          </Table.Row>
+                          <TableRow key={day.date}>
+                            <TableCell>{day.date}</TableCell>
+                            <TableCell>{day.admits}</TableCell>
+                            <TableCell>{day.denies}</TableCell>
+                          </TableRow>
                         ))}
-                      </Table.Body>
-                    </Table.Root>
-                  </Card>
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
                 )}
-              </Flex>
-            </Tabs.Content>
-          </Tabs.Root>
+              </CardContent>
+            </Card>
+          )}
         </>
       )}
-    </Flex>
+    </Stack>
   );
 }

@@ -185,11 +185,40 @@ export async function userGates(store: Store, username: string): Promise<{ phone
  * @returns Promise resolving to `GateUser[]`.
  */
 export async function gateUsers(store: Store, phone: string): Promise<GateUser[]> {
-  return (await all<GateUserRow>(store,
+  const rows = await all<GateUserRow>(store,
     `SELECT a.username, u.email, u.pending_email, u.phone, u.password_hash = '!' AS invited, a.role, a.granted_by, a.granted_at, u.last_sign_in
-      FROM gate_access a JOIN users u ON u.username = a.username WHERE a.phone = $1 ORDER BY a.role, a.username`, [phoneDigits(phone)]))
-    .map((row) => ({ username: row.username, email: row.email || '', pendingEmail: row.pending_email || '', phone: row.phone || '', invited: row.invited, role: row.role,
-      grantedBy: row.granted_by, grantedAt: row.granted_at, lastSignIn: row.last_sign_in }));
+      FROM gate_access a JOIN users u ON u.username = a.username WHERE a.phone = $1 ORDER BY a.role, a.username`, [phoneDigits(phone)]);
+  const usernames = rows.map((row) => row.username);
+  const ssoByUser = new Map<string, string[]>();
+  if (usernames.length) {
+    const ids = await all<{ username: string; provider: string }>(store,
+      'SELECT username, provider FROM user_identities WHERE username = ANY($1::text[]) ORDER BY provider', [usernames]);
+    for (const id of ids) {
+      const list = ssoByUser.get(id.username) || [];
+      if (!list.includes(id.provider)) list.push(id.provider);
+      ssoByUser.set(id.username, list);
+    }
+  }
+  return rows.map((row) => ({
+    username: row.username, email: row.email || '', pendingEmail: row.pending_email || '', phone: row.phone || '', invited: row.invited, role: row.role,
+    grantedBy: row.granted_by, grantedAt: row.granted_at, lastSignIn: row.last_sign_in, ssoProviders: ssoByUser.get(row.username) || [],
+  }));
+}
+
+/**
+ * Gate admins who should receive Web Push gate alerts (`notify_alerts = true` and at least one push subscription).
+ *
+ * @param store - Database store handle.
+ * @param phone - Gate system phone number (digits or formatted).
+ * @returns Promise resolving to admin usernames.
+ */
+export async function pushAlertRecipients(store: Store, phone: string): Promise<string[]> {
+  const rows = await all<{ username: string }>(store,
+    `SELECT DISTINCT a.username FROM gate_access a
+      JOIN users u ON u.username = a.username
+      JOIN push_subscriptions p ON p.username = a.username
+      WHERE a.phone = $1 AND a.role = 'admin' AND u.notify_alerts`, [phoneDigits(phone)]);
+  return rows.map((row) => row.username);
 }
 
 /**
@@ -208,8 +237,12 @@ export async function grantAccess(store: Store, phone: string, username: string,
   const checkedRole = checkRole(role);
   if (!await one(store, 'SELECT 1 AS x FROM users WHERE username = $1', [name])) throw httpError(`There is no user "${name}"`, 404);
   const added = await run(store, `INSERT INTO gate_access (phone, username, role, granted_by, granted_at) VALUES ($1, $2, $3, $4, $5)
-    ON CONFLICT (phone, username) DO NOTHING`, [phoneKey, name, checkedRole, userKey(by), new Date().toISOString()]);
-  if (!added) throw httpError(`"${name}" already has access to this gate (${(await accessOf(store, phoneKey, name)) === 'admin' ? 'admin' : 'read only'})`, 409);
+    ON CONFLICT (phone, username) DO UPDATE SET role = excluded.role, granted_by = excluded.granted_by, granted_at = excluded.granted_at
+    WHERE gate_access.role = 'resident'`, [phoneKey, name, checkedRole, userKey(by), new Date().toISOString()]);
+  if (!added) {
+    const existing = await accessOf(store, phoneKey, name);
+    throw httpError(`"${name}" already has access to this gate (${existing === 'admin' ? 'admin' : existing === 'editor' ? 'editor' : 'read only'})`, 409);
+  }
 }
 
 /**
@@ -316,11 +349,27 @@ export async function migrateToLocalAccounts(store: Store): Promise<{ gates: str
 }
 
 /**
+ * True when the user has no staff role (`admin`, `editor`, or `readonly`) on any gate (i.e., resident-only account).
+ *
+ * @param store - Database store handle.
+ * @param username - Local account username.
+ * @returns Promise resolving to `boolean`.
+ */
+export async function isResidentOnlyUser(store: Store, username: string): Promise<boolean> {
+  const name = userKey(username);
+  const staff = await one(store, "SELECT 1 AS x FROM gate_access WHERE username = $1 AND role IN ('admin', 'editor', 'readonly') LIMIT 1", [name]);
+  if (staff) return false;
+  const res = await one(store, "SELECT 1 AS x FROM gate_access WHERE username = $1 AND role = 'resident' LIMIT 1", [name]);
+  return Boolean(res);
+}
+
+/**
  * Tables with rows about one gate, keyed by its phone number (see db.ts). gates is the pre-2026-11-13 per-user list.
  */
 const GATE_TABLES = ['gate_access', 'api_keys', 'managed_gates', 'gates', 'prefs', 'history', 'schedules', 'cameras', 'snapshots', 'notes',
   'tx_history', 'tx_pulls', 'gate_files', 'gate_residents', 'gate_cards', 'gate_settings', 'gate_state', 'gate_working',
-  'relay_timers', 'gate_pull_archive', 'webhook_deliveries', 'webhooks'];
+  'relay_timers', 'gate_pull_archive', 'webhook_deliveries', 'webhooks',
+  'resident_portal', 'portal_events', 'resident_code_rerolls', 'resident_requests', 'suspicious_reports'];
 
 /**
  * Deletes every row about the gate, in one transaction: the gate itself, everyone's access to it and its API keys, prefs,

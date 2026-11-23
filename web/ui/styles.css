@@ -1,318 +1,190 @@
-/* Layout pieces Radix Themes doesn't cover. Colours come from the theme's CSS variables. */
-body { margin: 0; }
-
-.app { display: flex; min-height: 100vh; }
+/* Layout, camera overlays, floating windows, and phone stacked-table rules for MUI Material UI. */
+html, body { margin: 0; }
+.app { display: flex; min-height: 100dvh; }
 .sidebar {
-  width: 190px; flex-shrink: 0; position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column;
-  border-right: 1px solid var(--gray-a5); background: var(--gray-a2); box-sizing: border-box;
-  --nav-h: 30px; --nav-gap: var(--space-1); --nav-pad: var(--space-3); --nav-action-h: var(--space-6);
-  --nav-sep: var(--space-2); --nav-section: var(--space-3); --nav-font: var(--font-size-2);
+  width: calc(220px + env(safe-area-inset-left)); flex-shrink: 0; height: 100dvh; position: sticky; top: 0;
+  box-sizing: border-box;
+  border-right: 1px solid var(--mui-palette-divider);
+  background: var(--mui-palette-background-paper);
+  display: flex; flex-direction: column;
+  padding-left: env(safe-area-inset-left);
 }
-/* Shorter windows: GateApp picks the roomiest density whose menu fits without scrolling. */
-.sidebar[data-density="1"] {
-  --nav-h: 26px; --nav-gap: 2px; --nav-action-h: 28px; --nav-sep: var(--space-1); --nav-section: var(--space-2);
-}
-.sidebar[data-density="2"] {
-  --nav-h: 22px; --nav-gap: 1px; --nav-pad: var(--space-2); --nav-action-h: 24px; --nav-sep: 2px;
-  --nav-section: var(--space-1); --nav-font: var(--font-size-1);
-}
-/* The menu scrolls only if even the tight density doesn't fit; the gate connection buttons and the user/sign-out
-   area stay pinned at the bottom. */
-.sidebar-nav { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.sidebar-nav { flex: 1; min-height: 0; overflow-y: auto; }
 .sidebar-bottom { flex-shrink: 0; }
-.sidebar .sidebar-nav, .sidebar .sidebar-bottom { gap: var(--nav-gap); padding: var(--nav-pad); }
-.sidebar .rt-Separator { margin-block: var(--nav-sep); }
-.sidebar .nav-section { margin-top: var(--nav-section); margin-bottom: 2px; }
-.sidebar .gate-switcher:has(+ .gate-status) { margin-bottom: 0; }
-.sidebar .gate-status { margin: -2px 0 var(--nav-section); }
-.sidebar .gate-switcher { margin-bottom: var(--nav-section); }
-.sidebar .nav-action { height: var(--nav-action-h); font-size: var(--nav-font); }
-.content { flex: 1; min-width: 0; padding: var(--space-5); }
-/* Menu items: the same size whether selected (soft) or not (ghost). Radix draws ghost buttons smaller and pulls them
-   outward with negative margins, which made the selected item taller and let a hovered neighbour touch it. */
-.rt-Button.nav-item {
-  justify-content: flex-start; width: 100%; box-sizing: border-box; height: var(--nav-h); font-size: var(--nav-font);
-  margin: 0; padding: 0 var(--space-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
+.content { flex: 1; min-width: 0; padding: 24px 28px 80px; }
 
-/* The working copy's state (matches the gate / changes not sent / conflicts) under the gate's name and in the phone's top bar. */
-.status-dot { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: currentColor; }
-
-/* The gate's name in the sidebar, opening the gate switcher (GateApp). */
-.gate-switcher {
-  display: flex; align-items: center; gap: var(--space-1); max-width: 100%; min-height: 32px; margin: 0 calc(-1 * var(--space-1));
-  padding: 2px var(--space-1); border: 0; border-radius: var(--radius-2); background: none; color: inherit; font: inherit;
-  text-align: left; cursor: pointer;
-}
-.gate-switcher:hover, .gate-switcher[data-state='open'] { background: var(--gray-a3); }
-.gate-switcher:focus-visible { outline: 2px solid var(--accent-8); outline-offset: 1px; }
-.gate-switcher svg { flex-shrink: 0; color: var(--gray-11); }
-@media (pointer: coarse) { .gate-switcher { min-height: 44px; } }
-
-/* "?" hover tips (HelpTip). */
-.help-tip {
-  display: inline-flex; align-items: center; margin-left: 4px; vertical-align: middle; color: var(--gray-10); cursor: help;
-  border-radius: 50%;
-}
-.help-tip:hover, .help-tip:focus-visible { color: var(--accent-11); }
-.help-tip:focus-visible { outline: 2px solid var(--accent-8); outline-offset: 1px; }
-
-/* Display message settings: fixed-width font, so the box (sized in ch) fits the gate's full message length. */
-.lcd-input, .lcd-input input { font-family: var(--code-font-family); }
+.readonly-page { border: 0; margin: 0; padding: 0; min-width: 0; }
+.note-cell { max-width: 14rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .time-input {
-  box-sizing: border-box; height: var(--space-5); padding: 0 var(--space-1); font: inherit; font-size: var(--font-size-1);
-  color: var(--gray-12); background: var(--color-surface); border: 1px solid var(--gray-a7); border-radius: var(--radius-2);
-  color-scheme: inherit;
+  height: 36px; padding: 0 8px; border: 1px solid var(--mui-palette-divider); border-radius: 8px;
+  background: var(--mui-palette-background-paper); color: inherit; font: inherit; font-size: 0.875rem;
 }
-.dark .time-input, .dark-theme .time-input { color-scheme: dark; }
-.time-input:focus { outline: 2px solid var(--accent-8); outline-offset: -1px; }
+.time-input:focus-visible { outline: 2px solid var(--mui-palette-primary-main); outline-offset: 1px; }
 
 .job-log {
-  max-height: 40vh; overflow: auto; margin: var(--space-2) 0 0; padding: var(--space-2);
-  background: var(--gray-a3); border-radius: var(--radius-2); font-size: 12px; white-space: pre-wrap;
+  margin: 0; padding: 10px 12px; border-radius: 8px;
+  background: var(--mui-palette-action-hover);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem; line-height: 1.45;
+  white-space: pre-wrap; word-break: break-word; max-height: 45vh; overflow: auto;
 }
+.dock { position: fixed; right: 16px; bottom: 16px; width: min(640px, calc(100vw - 32px)); z-index: 1250; }
+.dock .job-log { max-height: 220px; }
 
-/* Camera snapshots: thumbnails in the Transactions table and the full-size viewer */
-.snap-tile { position: relative; display: inline-block; vertical-align: middle; }
-.snap-tile > img { display: block; }
-img.snap-thumb { height: 36px; border-radius: 3px; cursor: pointer; }
+/* Camera snapshots in Transactions and the viewer modal. */
+.snap-tile { position: relative; display: inline-flex; align-items: center; line-height: 0; }
+.snap-thumb { height: 36px; width: auto; border-radius: 4px; cursor: pointer; display: block; border: 0; }
 .snap-missing {
-  display: flex; align-items: center; justify-content: center; box-sizing: border-box; width: min(640px, 90vw); aspect-ratio: 16 / 9;
-  border: 1px dashed var(--gray-8); border-radius: 4px; background: var(--gray-a3); color: var(--gray-10); font-size: 48px; font-weight: bold;
+  display: inline-flex; align-items: center; justify-content: center; height: 36px; padding: 0 8px;
+  border-radius: 4px; border: 1px dashed var(--mui-palette-divider);
+  font-size: 0.75rem; color: var(--mui-palette-text-secondary); cursor: pointer; background: transparent;
 }
-.snap-tile.thumb .snap-missing { width: 64px; height: 36px; font-size: 18px; border-radius: 3px; cursor: pointer; }
-.snap-refresh {
-  position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; cursor: pointer;
-  background: rgba(0, 0, 0, .55); color: #fff; font-size: 14px; line-height: 22px; text-align: center;
-}
-.snap-refresh:hover:not(:disabled) { background: var(--accent-9); }
-.snap-tile.thumb .snap-refresh { top: 1px; right: 1px; width: 15px; height: 15px; font-size: 10px; line-height: 15px; }
-.snap-refresh.failed { background: var(--red-9); }
-.snap-refresh.busy { animation: snap-spin 1s linear infinite; }
-@keyframes snap-spin { to { transform: rotate(360deg); } }
 .snap-play {
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none;
-  color: #fff; font-size: 14px; text-shadow: 0 0 3px #000;
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: 22px; height: 22px; border-radius: 50%; background: rgba(0, 0, 0, 0.68); color: #fff;
+  display: flex; align-items: center; justify-content: center; font-size: 10px; padding-left: 2px; pointer-events: none;
 }
 .snap-partial {
-  position: absolute; left: 2px; top: 2px; padding: 0 4px; border-radius: 3px; pointer-events: none;
-  background: var(--amber-10); color: #fff; font-size: 10px; line-height: 14px;
+  position: absolute; left: 2px; bottom: 2px; padding: 1px 4px; border-radius: 3px;
+  background: #fff3cd; color: #5c3c00; font-size: 10px; line-height: 1.2; font-weight: 700; pointer-events: none;
 }
-.snap-figure { margin: 0; font-size: 12px; color: var(--gray-11); }
-.snap-figure img { display: block; max-width: min(640px, 90vw); border-radius: 4px; }
-video.snap-video { display: block; width: min(1280px, 90vw); max-height: 80vh; aspect-ratio: 16 / 9; background: #000; border-radius: 4px; }
+.snap-full { width: 100%; height: auto; border-radius: 6px; display: block; background: #000; }
+.snap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.snap-grid.one { grid-template-columns: 1fr; }
 
-/* Live camera window */
-.live-body {
-  background: #000; min-height: 120px; margin-top: var(--space-2); border-radius: var(--radius-2);
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+/* Live camera toggle & floating picture-in-picture window. */
+.live-toggle { position: fixed; top: calc(env(safe-area-inset-top) + 10px); right: calc(env(safe-area-inset-right) + 14px); z-index: 1150; }
+.live-window { position: fixed; z-index: 1200; }
+.live-body { background: #000; border-radius: 6px; overflow: hidden; aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center; color: #d1d5db; }
+.live-body img { width: 100%; height: 100%; object-fit: contain; display: block; }
+
+/* Full-width tappable gate tile button on "Your gates". */
+.gate-tile {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  background: var(--mui-palette-background-paper); color: inherit; font: inherit;
+  border: 1px solid var(--mui-palette-divider); border-radius: 10px; padding: 14px 16px;
+  transition: background-color 120ms ease, border-color 120ms ease;
 }
-.live-body img { display: block; width: 100%; height: auto; }
-.live-body p { margin: 0; padding: 12px; text-align: center; color: #d1d5db; }
+.gate-tile:hover { background: var(--mui-palette-action-hover); border-color: var(--mui-palette-primary-main); }
+.gate-tile:focus-visible { outline: 2px solid var(--mui-palette-primary-main); outline-offset: 2px; }
 
-/* Floating windows: gate connection progress (JobDock), the camera button and window (LiveView), the update notice. */
-.dock {
-  position: fixed; right: calc(env(safe-area-inset-right) + 16px); bottom: calc(env(safe-area-inset-bottom) + 16px);
-  width: min(560px, calc(100vw - 32px)); z-index: 10;
-}
-.live-toggle { position: fixed; top: calc(env(safe-area-inset-top) + 10px); right: calc(env(safe-area-inset-right) + 16px); z-index: 11; }
-.live-window {
-  position: fixed; top: calc(env(safe-area-inset-top) + 58px); right: calc(env(safe-area-inset-right) + 16px);
-  width: min(640px, calc(100vw - 32px)); z-index: 11;
-}
-.update-notice {
-  position: fixed; top: calc(env(safe-area-inset-top) + 12px); left: 50%; transform: translateX(-50%); z-index: 20; box-shadow: var(--shadow-4);
-  max-width: calc(100vw - 24px); box-sizing: border-box;
-}
-/* The page reaches the screen edges (viewport-fit=cover): keep it clear of a notch or rounded corner at any width,
-   such as a phone turned sideways. */
-.sidebar { padding-left: env(safe-area-inset-left); }
-.content { padding-right: calc(env(safe-area-inset-right) + var(--space-5)); padding-bottom: calc(env(safe-area-inset-bottom) + var(--space-5)); }
-.rt-BaseDialogScrollPadding {
-  padding-top: max(var(--space-6), calc(env(safe-area-inset-top) + var(--space-3)));
-  padding-bottom: max(var(--space-6), 6vh, calc(env(safe-area-inset-bottom) + var(--space-3)));
-  padding-left: max(var(--space-4), env(safe-area-inset-left)); padding-right: max(var(--space-4), env(safe-area-inset-right));
+/* Portrait-only guard for phones rotated into landscape (min-width: 560px avoids false triggers from soft keyboards). */
+.portrait-lock { display: none; }
+@media (orientation: landscape) and (pointer: coarse) and (max-height: 500px) and (min-width: 560px) {
+  .portrait-lock {
+    position: fixed; inset: 0; z-index: 9999;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+    background: var(--mui-palette-background-default, #f8fafc);
+    color: var(--mui-palette-text-primary, #0f172a);
+    text-align: center;
+  }
+  .portrait-lock-card {
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    padding: 20px 28px; border-radius: 16px;
+    background: var(--mui-palette-background-paper, #ffffff);
+    border: 1px solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+  }
+  .portrait-lock-title { font-size: 1rem; font-weight: 700; }
+  .portrait-lock-sub { font-size: 0.875rem; color: var(--mui-palette-text-secondary, #64748b); }
 }
 
-/* Resident/vendor Notes column: one line, full text on hover */
-.note-cell { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-
-/* Read-only users: a gate settings page with every control disabled (GateApp). */
-fieldset.readonly-page { border: 0; margin: 0; padding: 0; min-width: 0; }
-
-/* Phones: narrow windows, and phones turned sideways (keep the query the same as PHONE in phone.ts). */
-.mobile-bar { display: none; }
+/* Phone layout (<=760px wide, or coarse-pointer landscape <=500px tall; matches phone.ts). */
 @media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
-  .app { display: block; }
-  .mobile-bar {
-    display: flex; align-items: center; gap: var(--space-3); position: sticky; top: 0; z-index: 9;
-    min-height: 44px; padding: calc(env(safe-area-inset-top) + var(--space-2)) calc(env(safe-area-inset-right) + var(--space-3)) var(--space-2)
-      calc(env(safe-area-inset-left) + var(--space-3));
-    background: var(--color-panel-solid); border-bottom: 1px solid var(--gray-a5);
-  }
-  .title-button {
-    flex: 1; min-width: 0; min-height: 44px; display: flex; flex-direction: column; justify-content: center; padding: 0;
-    border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
-  }
-  .title-button:focus-visible { outline: 2px solid var(--accent-8); outline-offset: 2px; border-radius: var(--radius-2); }
-  .mobile-bar.has-camera { padding-right: calc(env(safe-area-inset-right) + 64px); } /* room for the camera button */
-
-  /* Bottom tab bar: Residents, Vendors, Transactions, Gate, More (GateApp). */
-  .tab-bar {
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: 9; display: flex;
-    padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-    background: var(--color-panel-solid); border-top: 1px solid var(--gray-a5);
-  }
-  .tab {
-    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-height: 56px;
-    padding: 6px 0; border: 0; background: none; color: var(--gray-11); font: inherit; font-size: 11px; letter-spacing: -0.01em; cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-  }
-  .tab:focus-visible { outline: 2px solid var(--accent-8); outline-offset: -2px; }
-  .tab { min-width: 0; }
-  .tab.wide { flex-grow: 1.4; } /* "Transactions" needs more room than the others */
-  .tab-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tab-icon {
-    position: relative; display: flex; align-items: center; justify-content: center; width: 52px; height: 28px; border-radius: 14px;
-  }
-  .tab-icon svg { width: 20px; height: 20px; }
-  .tab[aria-current='page'] { color: var(--accent-11); font-weight: 600; }
-  .tab[aria-current='page'] .tab-icon { background: var(--accent-a4); }
-  .tab-dot { position: absolute; top: 3px; right: 12px; width: 8px; height: 8px; border-radius: 50%; background: var(--blue-9); }
-
-  /* The Gate tab's sheet: a dialog along the bottom edge. */
-  .rt-DialogContent.sheet {
-    position: fixed; left: 0; right: 0; bottom: 0; width: auto; max-width: none; margin: 0;
-    padding: var(--space-4) calc(env(safe-area-inset-right) + var(--space-4)) calc(env(safe-area-inset-bottom) + var(--space-4))
-      calc(env(safe-area-inset-left) + var(--space-4));
-    border-radius: var(--radius-5) var(--radius-5) 0 0; animation: sheet-in 200ms ease-out;
-  }
-  .rt-DialogContent.sheet[data-state='closed'] { animation: sheet-out 150ms ease-in; }
+  .app { flex-direction: column; }
+  .sidebar { display: none; }
   .content {
-    padding: var(--space-3) calc(env(safe-area-inset-right) + var(--space-3)) calc(env(safe-area-inset-bottom) + 56px + var(--space-9))
-      calc(env(safe-area-inset-left) + var(--space-3));
+    padding: 12px calc(env(safe-area-inset-right) + 12px) calc(env(safe-area-inset-bottom) + 76px) calc(env(safe-area-inset-left) + 12px);
   }
-
-  /* The menu is a drawer (a dialog, GateApp) at the left edge; the whole drawer scrolls, with full-size items. */
-  .rt-DialogContent.drawer {
-    position: fixed; top: 0; bottom: 0; left: 0; width: min(300px, 85vw); max-width: none; height: 100dvh; max-height: none;
-    margin: 0; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom) env(safe-area-inset-left);
-    border-radius: 0; overflow-y: auto; animation: drawer-in 200ms ease-out;
-  }
-  .rt-DialogContent.drawer[data-state='closed'] { animation: drawer-out 150ms ease-in; }
-  .drawer .sidebar, .drawer .sidebar[data-density] {
-    display: block; position: static; width: auto; height: auto; padding: 0; border: 0; background: none;
-    --nav-h: 48px; --nav-gap: 2px; --nav-pad: var(--space-3); --nav-action-h: 48px; --nav-sep: var(--space-2);
-    --nav-section: var(--space-3); --nav-font: var(--font-size-3);
-  }
-  .drawer .sidebar-nav { overflow: visible; }
-
   .dock {
     left: calc(env(safe-area-inset-left) + 8px); right: calc(env(safe-area-inset-right) + 8px); width: auto;
-    bottom: calc(env(safe-area-inset-bottom) + 56px + 8px); /* above the tab bar */
+    bottom: calc(env(safe-area-inset-bottom) + 68px);
   }
   .dock .job-log { max-height: 30vh; }
-  .update-notice { left: calc(env(safe-area-inset-left) + 12px); right: calc(env(safe-area-inset-right) + 12px); transform: none; max-width: none; }
   .live-toggle { top: calc(env(safe-area-inset-top) + 6px); right: calc(env(safe-area-inset-right) + 8px); }
   .live-window {
-    left: calc(env(safe-area-inset-left) + 8px); right: calc(env(safe-area-inset-right) + 8px); width: auto;
-    max-height: calc(100dvh - env(safe-area-inset-top) - 70px); overflow: auto;
+    left: calc(env(safe-area-inset-left) + 8px) !important; right: calc(env(safe-area-inset-right) + 8px) !important;
+    top: calc(env(safe-area-inset-top) + 56px) !important; width: auto !important; max-height: calc(100dvh - 130px); overflow: auto;
   }
 
-  /* Tables: each body row is a card, each cell a line with its column's name in front (data-label, stackTables.ts). */
-  .rt-TableRoot { width: 100% !important; max-width: 100% !important; overflow: visible; }
-  /* Radix gives the table height: 0 (it grows as a table, not as a block) and the surface variant hides overflow. */
-  .rt-TableRootTable { height: auto; overflow: visible !important; }
-  .rt-TableRoot.rt-variant-surface { border: 0; background: none; box-shadow: none; }
-  .rt-TableRootTable, .rt-TableRootTable > tbody, .rt-TableRootTable > tbody > tr,
-  .rt-TableRootTable > tbody > tr > td, .rt-TableRootTable > tbody > tr > th { display: block; width: auto !important; }
-  .rt-TableRootTable > thead { display: none; }
-  .rt-TableRootTable > tbody > tr {
-    margin-bottom: var(--space-2); padding: var(--space-2) var(--space-3); border: 1px solid var(--gray-a5); border-radius: var(--radius-3);
-    background: var(--color-panel-solid);
+  /* Every MUI Table becomes stacked cards on phones (column labels copied by stackTables.ts). */
+  .MuiTableContainer-root { overflow: visible; border: 0; background: transparent; box-shadow: none; }
+  .MuiTable-root, .MuiTableBody-root, .MuiTableRow-root, .MuiTableCell-root { display: block; width: 100%; box-sizing: border-box; }
+  .MuiTableHead-root { display: none; }
+  .MuiTableHead-root.sort-head { display: block; margin-bottom: 8px; }
+  .MuiTableHead-root.sort-head > tr {
+    display: flex; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; align-items: center; gap: 6px; padding: 0; border: 0; margin: 0; background: none;
   }
-  .rt-TableRootTable > tbody > tr > td, .rt-TableRootTable > tbody > tr > th {
-    display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--space-2); row-gap: 2px;
-    height: auto; padding: 3px 0; box-shadow: none; text-align: left;
+  .MuiTableHead-root.sort-head > tr::-webkit-scrollbar { display: none; }
+  .MuiTableHead-root.sort-head > tr::before { content: 'Sort:'; font-size: 0.75rem; color: var(--mui-palette-text-secondary); margin-right: 2px; flex-shrink: 0; }
+  .MuiTableHead-root.sort-head > tr > th {
+    display: inline-flex; align-items: center; justify-content: center; text-align: center; min-height: 40px; width: auto; white-space: nowrap; flex-shrink: 0;
+    padding: 4px 12px; border: 1px solid var(--mui-palette-divider);
+    border-radius: 999px; font-size: 0.75rem; background: var(--mui-palette-background-paper);
   }
-  .rt-TableRootTable > tbody > tr > th { font-weight: bold; padding-bottom: var(--space-1); }
-  .rt-TableRootTable > tbody > tr > td:empty, .rt-TableRootTable > tbody > tr > td:has(> .note-cell:empty) { display: none; }
-  .rt-TableRootTable > tbody > tr > td[data-label]::before {
-    content: attr(data-label); flex: 0 0 auto; min-width: 7.5rem; max-width: 45%; color: var(--gray-11); font-size: var(--font-size-1);
+  .MuiTableHead-root.sort-head > tr > th .MuiTableSortLabel-root { justify-content: center; }
+  .MuiTableHead-root.sort-head > tr > th .MuiTableSortLabel-root:not(.Mui-active) .MuiTableSortLabel-icon { display: none; }
+  .MuiTableBody-root > tr {
+    padding: 8px 12px; margin-bottom: 8px; border: 1px solid var(--mui-palette-divider);
+    border-radius: 10px; background: var(--mui-palette-background-paper);
   }
-  /* Cells holding just a checkbox (the hold-open, security and elevator grids) sit side by side. */
-  .rt-TableRootTable > tbody > tr > td:has(> .rt-CheckboxRoot:only-child) { display: inline-flex; margin-right: var(--space-3); }
-  .rt-TableRootTable > tbody > tr > td:has(> .rt-CheckboxRoot:only-child)::before { min-width: 0; max-width: none; }
-  /* Sortable tables keep their header as a row of "sort by" buttons. */
-  .rt-TableRootTable > thead.sort-head { display: block; margin-bottom: var(--space-2); }
-  .rt-TableRootTable > thead.sort-head > tr { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); }
-  .rt-TableRootTable > thead.sort-head > tr::before { content: 'Sort by'; margin-right: var(--space-1); color: var(--gray-11); font-size: var(--font-size-1); }
-  .rt-TableRootTable > thead.sort-head > tr > th {
-    display: block; height: auto; padding: 2px var(--space-2); border: 1px solid var(--gray-a6); border-radius: 999px; box-shadow: none;
-    font-size: var(--font-size-1);
+  .MuiTableBody-root > tr > td {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+    padding: 4px 0; border: 0; text-align: right; min-height: 0;
   }
+  .MuiTableBody-root > tr > td::before {
+    content: attr(data-label); color: var(--mui-palette-text-secondary); font-size: 0.75rem;
+    font-weight: 500; text-align: left; flex: 0 1 42%;
+  }
+  .MuiTableBody-root > tr > td:not([data-label]) { display: block; text-align: left; }
+  .MuiTableBody-root > tr > td:not([data-label])::before { display: none; }
+  .MuiTableBody-root > tr > td:empty { display: none; }
+  .MuiTableBody-root > tr.detail-row { margin-top: -12px; border-top: 0; border-radius: 0 0 10px 10px; }
+  .MuiTableBody-root > tr.detail-row > td { padding: 12px 4px 8px; }
+  .dir-table .MuiTableBody-root > tr.card-row[data-open] { margin-bottom: 0; border-radius: 10px 10px 0 0; }
+  .tx-table .MuiTableBody-root > tr.card-row[data-tone='green'] { background: color-mix(in srgb, var(--mui-palette-success-main) 13%, var(--mui-palette-background-paper)); }
+  .tx-table .MuiTableBody-root > tr.card-row[data-tone='amber'] { background: color-mix(in srgb, var(--mui-palette-warning-main) 16%, var(--mui-palette-background-paper)); }
+  .tx-table .MuiTableBody-root > tr.card-row[data-tone='red'] { background: color-mix(in srgb, var(--mui-palette-error-main) 14%, var(--mui-palette-background-paper)); }
   .note-cell { max-width: none; white-space: normal; }
   .lcd-input { min-width: 0 !important; max-width: 100% !important; }
-  .lcd-input { min-width: 0 !important; max-width: 100% !important; }
-  /* A cell spanning the row (a resident's details, an edit form) uses the card's full width. */
-  .rt-TableRootTable > tbody > tr > td[colspan] { display: block; }
+  .snap-grid { grid-template-columns: 1fr; }
 
-  /* Residents/vendors and transactions: the name is the card's title with a summary line under it; tapping the card
-     (data-open) shows every value. Only the list's own rows (card-row), not a table inside a resident's details. Duplicate values (marked with a title) always show. */
-  .dir-table tr.card-row, .tx-table tr.card-row {
-    display: flex; flex-wrap: wrap; align-items: baseline; cursor: pointer;
-  }
-  .dir-table tr.card-row > td, .tx-table tr.card-row > td { flex: 1 1 100%; }
-  .dir-table tr.card-row > td[data-col='name'], .tx-table tr.card-row > td[data-col='name'],
-  .tx-table tr.card-row:has(> td[data-col='name']:empty) > td[data-col='eventType'] {
-    order: -2; font-size: var(--font-size-4); font-weight: 600; padding-bottom: 0;
-  }
-  .dir-table tr.card-row > td[data-col='name']::before, .tx-table tr.card-row > td[data-col='name']::before,
-  .tx-table tr.card-row:has(> td[data-col='name']:empty) > td[data-col='eventType']::before { content: none; }
-  .dir-table tr.card-row > td[data-col='name']:empty { display: flex; }
-  .dir-table tr.card-row > td[data-col='name']:empty::after { content: 'No name'; color: var(--gray-10); font-weight: normal; }
-  .dir-table tr.card-row > td:is([data-col='directoryCode'], [data-col='phoneFull'], [data-col='hidden']),
-  .tx-table tr.card-row > td:is([data-col='date'], [data-col='time'], [data-col='access'], [data-col='snap']) {
-    order: -1; flex: 0 0 auto; margin-right: var(--space-2); color: var(--gray-11);
-  }
-  .dir-table tr.card-row > td[data-col='directoryCode']::before { content: 'Directory'; min-width: 0; max-width: none; }
-  .dir-table tr.card-row > td:is([data-col='phoneFull'], [data-col='hidden'])::before,
-  .tx-table tr.card-row > td:is([data-col='date'], [data-col='time'], [data-col='snap'])::before { content: none; }
-  .tx-table tr.card-row > td[data-col='access']::before { content: '·'; min-width: 0; max-width: none; }
-  .tx-table tr.card-row > td[data-col='snap'] { margin-left: auto; margin-right: 0; }
-  .dir-table tr.card-row:not([data-open]) > td:not([data-col='name'], [data-col='directoryCode'], [data-col='phoneFull'], [data-col='hidden'], [title]),
-  .tx-table tr.card-row:not([data-open]) > td:not([data-col='name'], [data-col='date'], [data-col='time'], [data-col='access'], [data-col='snap']) {
-    display: none;
-  }
-  .tx-table tr.card-row:not([data-open]):has(> td[data-col='name']:empty) > td[data-col='eventType'] { display: flex; }
-  /* An open resident and its details read as one card. */
-  .dir-table tr.card-row[data-open] { margin-bottom: 0; border-bottom-style: dashed; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
-  .dir-table tr.detail-row { border-top: 0; border-top-left-radius: 0; border-top-right-radius: 0; padding: 0; overflow: hidden; }
-  .dir-table tr.detail-row > td { padding: var(--space-3); }
+  /* Directory & Transactions phone cards: concise summary until tapped. */
+  .dir-table .MuiTableBody-root > tr.card-row { display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; row-gap: 4px; padding: 10px 12px; }
+  .dir-table .MuiTableBody-root > tr.card-row > td { display: none; width: auto; padding: 0; text-align: left; }
+  .dir-table .MuiTableBody-root > tr.card-row > td[data-col='name'] { display: block; order: 1; flex: 1 1 60%; font-weight: 600; font-size: 0.95rem; }
+  .dir-table .MuiTableBody-root > tr.card-row > td[data-col='directoryCode'] { display: block; order: 2; font-variant-numeric: tabular-nums; color: var(--mui-palette-text-secondary); }
+  .dir-table .MuiTableBody-root > tr.card-row > td[data-col='phoneFull'] { display: block; order: 3; font-size: 0.85rem; }
+  .dir-table .MuiTableBody-root > tr.card-row > td[data-col='entryCode'] { display: block; order: 4; font-size: 0.85rem; color: var(--mui-palette-text-secondary); }
+  .dir-table .MuiTableBody-root > tr.card-row > td[data-col='entryCode']:not(:empty)::before { content: 'Code '; margin-right: 2px; }
+  .dir-table .MuiTableBody-root > tr.card-row > td[data-col='name']::before,
+  .dir-table .MuiTableBody-root > tr.card-row > td[data-col='directoryCode']::before,
+  .dir-table .MuiTableBody-root > tr.card-row > td[data-col='phoneFull']::before { display: none; }
+  .dir-table .MuiTableBody-root > tr.card-row > td[title] { display: flex; order: 9; flex-basis: 100%; }
+  .dir-table .MuiTableBody-root > tr.card-row > td[title]::before { display: inline; }
+
+  .tx-table .MuiTableBody-root > tr.card-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 10px; row-gap: 2px; padding: 10px 12px; }
+  .tx-table .MuiTableBody-root > tr.card-row > td { display: none; width: auto; padding: 0; text-align: left; }
+  .tx-table .MuiTableBody-root > tr.card-row > td::before { display: none; }
+  .tx-table .MuiTableBody-root > tr.card-row > td[data-col='name'] { display: block; grid-column: 1; grid-row: 1; font-weight: 600; }
+  .tx-table .MuiTableBody-root > tr.card-row > td[data-col='name']:empty::after { content: 'Unknown'; color: var(--mui-palette-text-secondary); font-weight: 400; }
+  .tx-table .MuiTableBody-root > tr.card-row > td[data-col='time'] { display: block; grid-column: 2; grid-row: 1; font-size: 0.78rem; color: var(--mui-palette-text-secondary); white-space: nowrap; }
+  .tx-table .MuiTableBody-root > tr.card-row > td[data-col='eventType'] { display: block; grid-column: 1; grid-row: 2; font-size: 0.8rem; color: var(--mui-palette-text-secondary); }
+  .tx-table .MuiTableBody-root > tr.card-row > td[data-col='date'] { display: block; grid-column: 2; grid-row: 2; font-size: 0.75rem; color: var(--mui-palette-text-secondary); white-space: nowrap; }
+  .tx-table .MuiTableBody-root > tr.card-row > td[data-col='snap'] { display: flex; grid-column: 1 / -1; grid-row: 3; margin-top: 4px; gap: 8px; flex-wrap: wrap; }
+  .tx-table .MuiTableBody-root > tr.card-row[data-open] { display: block; }
+  .tx-table .MuiTableBody-root > tr.card-row[data-open] > td { display: flex; padding: 4px 0; text-align: right; }
+  .tx-table .MuiTableBody-root > tr.card-row[data-open] > td::before { display: inline; }
+  .tx-table .MuiTableBody-root > tr.card-row[data-open] > td:empty { display: none; }
 }
-@keyframes drawer-in { from { transform: translateX(-100%); } }
-@keyframes drawer-out { to { transform: translateX(-100%); } }
-@keyframes sheet-in { from { transform: translateY(100%); } }
-@keyframes sheet-out { to { transform: translateY(100%); } }
+
 @media (prefers-reduced-motion: reduce) {
-  .rt-DialogContent.drawer, .rt-DialogContent.drawer[data-state='closed'],
-  .rt-DialogContent.sheet, .rt-DialogContent.sheet[data-state='closed'] { animation-duration: 1ms; }
+  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
 }
 
-/* Touch screens: controls at least 44 px tall (small icons get a larger invisible tap area), and 16 px text in fields
-   so phones don't zoom in on them. */
 @media (pointer: coarse) {
-  .rt-Button, .rt-IconButton { min-height: 44px; }
-  .rt-IconButton { min-width: 44px; }
-  .rt-TextFieldRoot, .rt-SelectTrigger, .rt-TextAreaRoot { font-size: 16px !important; }
-  .rt-TextFieldRoot, .rt-SelectTrigger { min-height: 44px; }
-  .time-input { height: 44px; font-size: 16px; }
-  .rt-CheckboxRoot { --checkbox-size: 22px; position: relative; }
-  .rt-CheckboxRoot::after { content: ''; position: absolute; inset: -11px; }
-  .help-tip { position: relative; }
-  .help-tip::after { content: ''; position: absolute; inset: -14px; }
-  .snap-refresh::after { content: ''; position: absolute; inset: -14px; }
-  .rt-TableRootTable > thead.sort-head > tr > th { display: inline-flex; align-items: center; min-height: 44px; padding: 0 var(--space-3); }
+  .MuiButton-root, .MuiIconButton-root { min-height: 44px; }
+  .MuiIconButton-root { min-width: 44px; }
+  .MuiInputBase-input, .time-input { font-size: 16px !important; }
+  .time-input { height: 44px; }
 }

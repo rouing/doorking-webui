@@ -63,7 +63,7 @@ CREATE INDEX IF NOT EXISTS sessions_username ON sessions (username);
 CREATE TABLE IF NOT EXISTS managed_gates (phone TEXT PRIMARY KEY, master_code TEXT NOT NULL, dks_user TEXT NOT NULL,
   dks_password TEXT NOT NULL, added_by TEXT NOT NULL, added_at TIMESTAMPTZ NOT NULL);
 CREATE TABLE IF NOT EXISTS gate_access (phone TEXT NOT NULL REFERENCES managed_gates ON DELETE CASCADE,
-  username TEXT NOT NULL REFERENCES users ON DELETE CASCADE, role TEXT NOT NULL CHECK (role IN ('admin', 'editor', 'readonly')),
+  username TEXT NOT NULL REFERENCES users ON DELETE CASCADE, role TEXT NOT NULL CHECK (role IN ('admin', 'editor', 'readonly', 'resident')),
   granted_by TEXT NOT NULL, granted_at TIMESTAMPTZ NOT NULL, PRIMARY KEY (phone, username));
 CREATE INDEX IF NOT EXISTS gate_access_username ON gate_access (username);
 CREATE TABLE IF NOT EXISTS api_keys (id TEXT PRIMARY KEY, phone TEXT NOT NULL REFERENCES managed_gates ON DELETE CASCADE,
@@ -77,8 +77,41 @@ CREATE INDEX IF NOT EXISTS passkeys_username ON passkeys (username);
 -- Single sign-on: a provider identity (config.json sso.providers id + the provider's permanent subject) linked to an account.
 CREATE TABLE IF NOT EXISTS user_identities (provider TEXT NOT NULL, subject TEXT NOT NULL,
   username TEXT NOT NULL REFERENCES users ON DELETE CASCADE, email TEXT NOT NULL, linked_at TIMESTAMPTZ NOT NULL,
-  last_used_at TIMESTAMPTZ, PRIMARY KEY (provider, subject));
+  last_used_at TIMESTAMPTZ, last_claims JSONB, PRIMARY KEY (provider, subject));
 CREATE INDEX IF NOT EXISTS user_identities_username ON user_identities (username);
+CREATE TABLE IF NOT EXISTS push_subscriptions (id TEXT PRIMARY KEY, username TEXT NOT NULL REFERENCES users ON DELETE CASCADE,
+  endpoint TEXT NOT NULL UNIQUE, p256dh TEXT NOT NULL, auth TEXT NOT NULL, label TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL, last_used_at TIMESTAMPTZ);
+CREATE INDEX IF NOT EXISTS push_subscriptions_username ON push_subscriptions (username);
+CREATE TABLE IF NOT EXISTS resident_portal (phone TEXT NOT NULL, code TEXT NOT NULL, email TEXT NOT NULL DEFAULT '',
+  enabled BOOLEAN NOT NULL DEFAULT FALSE, username TEXT REFERENCES users ON DELETE SET NULL, updated_by TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMPTZ NOT NULL, PRIMARY KEY (phone, code));
+CREATE INDEX IF NOT EXISTS resident_portal_username ON resident_portal (username);
+CREATE INDEX IF NOT EXISTS resident_portal_email ON resident_portal (email);
+CREATE TABLE IF NOT EXISTS portal_events (id BIGSERIAL PRIMARY KEY, phone TEXT NOT NULL, directory_code TEXT NOT NULL,
+  username TEXT NOT NULL, relay INTEGER NOT NULL, event_type TEXT NOT NULL DEFAULT 'Portal Open',
+  access TEXT NOT NULL DEFAULT 'Admit', ts TIMESTAMPTZ NOT NULL, result TEXT NOT NULL, error TEXT);
+CREATE INDEX IF NOT EXISTS portal_events_phone_ts ON portal_events (phone, ts DESC);
+CREATE INDEX IF NOT EXISTS portal_events_unit_ts ON portal_events (phone, directory_code, ts DESC);
+CREATE TABLE IF NOT EXISTS resident_code_rerolls (id BIGSERIAL PRIMARY KEY, phone TEXT NOT NULL, directory_code TEXT NOT NULL,
+  username TEXT NOT NULL, old_code TEXT NOT NULL, new_code TEXT NOT NULL, synced_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL);
+CREATE INDEX IF NOT EXISTS resident_code_rerolls_unit ON resident_code_rerolls (phone, directory_code, created_at DESC);
+CREATE TABLE IF NOT EXISTS resident_requests (id BIGSERIAL PRIMARY KEY, phone TEXT NOT NULL, directory_code TEXT NOT NULL,
+  username TEXT NOT NULL REFERENCES users ON DELETE CASCADE, kind TEXT NOT NULL, payload JSONB NOT NULL,
+  note TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL,
+  reviewed_by TEXT, reviewed_at TIMESTAMPTZ, review_note TEXT);
+CREATE INDEX IF NOT EXISTS resident_requests_phone ON resident_requests (phone, status, created_at DESC);
+CREATE TABLE IF NOT EXISTS suspicious_reports (id BIGSERIAL PRIMARY KEY, phone TEXT NOT NULL, directory_code TEXT NOT NULL,
+  username TEXT NOT NULL, tx_source TEXT NOT NULL, tx_key TEXT NOT NULL, tx_ts TIMESTAMPTZ NOT NULL,
+  tx_summary TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open',
+  created_at TIMESTAMPTZ NOT NULL, reviewed_by TEXT, reviewed_at TIMESTAMPTZ, review_note TEXT,
+  UNIQUE (phone, directory_code, tx_source, tx_key));
+CREATE INDEX IF NOT EXISTS suspicious_reports_phone ON suspicious_reports (phone, status, created_at DESC);
+CREATE TABLE IF NOT EXISTS login_audit (id BIGSERIAL PRIMARY KEY, username TEXT, identifier TEXT NOT NULL, role TEXT,
+  method TEXT NOT NULL, outcome TEXT NOT NULL, reason TEXT, ip TEXT NOT NULL, user_agent TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL);
+CREATE INDEX IF NOT EXISTS login_audit_created ON login_audit (created_at DESC);
+CREATE INDEX IF NOT EXISTS login_audit_username ON login_audit (username, created_at DESC);
 CREATE TABLE IF NOT EXISTS email_tokens (token_hash TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('verify', 'reset', 'invite')),
   username TEXT NOT NULL REFERENCES users ON DELETE CASCADE, data TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL);
@@ -122,9 +155,10 @@ ALTER TABLE gate_working ADD COLUMN IF NOT EXISTS conflicts JSONB NOT NULL DEFAU
 ALTER TABLE gate_state ADD COLUMN IF NOT EXISTS rebuild_ok BOOLEAN;
 ALTER TABLE gate_state ADD COLUMN IF NOT EXISTS rebuild_problems JSONB;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS strong_at TIMESTAMPTZ;
+ALTER TABLE user_identities ADD COLUMN IF NOT EXISTS last_claims JSONB;
 DO $$ BEGIN
   ALTER TABLE gate_access DROP CONSTRAINT IF EXISTS gate_access_role_check;
-  ALTER TABLE gate_access ADD CONSTRAINT gate_access_role_check CHECK (role IN ('admin', 'editor', 'readonly'));
+  ALTER TABLE gate_access ADD CONSTRAINT gate_access_role_check CHECK (role IN ('admin', 'editor', 'readonly', 'resident'));
   ALTER TABLE api_keys DROP CONSTRAINT IF EXISTS api_keys_role_check;
   ALTER TABLE api_keys ADD CONSTRAINT api_keys_role_check CHECK (role IN ('admin', 'editor', 'readonly'));
 END $$;

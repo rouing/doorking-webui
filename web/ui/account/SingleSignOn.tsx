@@ -3,8 +3,10 @@
  *
  * Single sign-on: starting a provider sign-in and the account's linked sign-ins.
  */
-import { useEffect, useState } from 'react';
-import { Button, Card, Flex, Heading, Table, Text, TextField } from '@radix-ui/themes';
+import { useEffect, useState, type FormEvent } from 'react';
+import {
+  Alert, Box, Button, Card, CardContent, Paper, Stack, TextField, Typography,
+} from '@mui/material';
 import type { SsoIdentityInfo } from '../../../src/types.ts';
 import { api, errorText } from '../api.ts';
 import { useConfirm } from '../Confirm.tsx';
@@ -23,6 +25,7 @@ export async function startSso(path: string, body: Record<string, unknown>): Pro
   const { url } = await api<{ url: string }>('POST', path, body);
   window.location.assign(url);
 }
+
 interface SingleSignOnProps {
   session: SignedIn;
 }
@@ -38,55 +41,94 @@ interface SingleSignOnProps {
 export function SingleSignOn({ session }: SingleSignOnProps) {
   const [list, setList] = useState<SsoIdentityInfo[]>([]);
   const [password, setPassword] = useState('');
-  const [info, setInfo] = useState('');
+  const [feedback, setFeedback] = useState<{ severity: 'info' | 'success' | 'error'; text: string } | null>(null);
   const [dialog, confirm] = useConfirm();
-  useEffect(() => { api<{ identities: SsoIdentityInfo[] }>('GET', '/api/me/sso').then((reply) => setList(reply.identities), (err) => setInfo(errorText(err))); }, []);
+  useEffect(() => {
+    api<{ identities: SsoIdentityInfo[] }>('GET', '/api/me/sso')
+      .then((reply) => setList(reply.identities), (err) => setFeedback({ severity: 'error', text: errorText(err) }));
+  }, []);
   if (!session.sso.length && !list.length) return null;
   const linkTo = (provider: string) => {
-    setInfo('Opening the sign-in page…');
-    startSso('/api/me/sso/start', { provider, password }).catch((err) => setInfo(errorText(err)));
+    setFeedback({ severity: 'info', text: 'Opening the sign-in page…' });
+    startSso('/api/me/sso/start', { provider, password })
+      .catch((err) => setFeedback({ severity: 'error', text: errorText(err) }));
   };
-  const unlink = async (i: SsoIdentityInfo) => {
-    if (!await confirm({ title: `Unlink ${i.providerName}${i.email ? ` (${i.email})` : ''}?`, action: 'Unlink', color: 'red',
-      body: 'It will no longer sign you in to this account.' })) return;
+  const onSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    if (session.sso.length === 1) linkTo(session.sso[0].id);
+  };
+  const unlink = async (identity: SsoIdentityInfo) => {
+    if (!await confirm({
+      title: `Unlink ${identity.providerName}${identity.email ? ` (${identity.email})` : ''}?`,
+      action: 'Unlink',
+      color: 'red',
+      body: 'It will no longer sign you in to this account.',
+    })) return;
     try {
-      setList((await api<{ identities: SsoIdentityInfo[] }>('DELETE', `/api/me/sso/${encodeURIComponent(i.provider)}/${encodeURIComponent(i.subject)}`)).identities);
-      setInfo(`Unlinked ${i.providerName}.`);
-    } catch (err) { setInfo(errorText(err)); }
+      const reply = await api<{ identities: SsoIdentityInfo[] }>(
+        'DELETE',
+        `/api/me/sso/${encodeURIComponent(identity.provider)}/${encodeURIComponent(identity.subject)}`,
+      );
+      setList(reply.identities);
+      setFeedback({ severity: 'success', text: `Unlinked ${identity.providerName}.` });
+    } catch (err) {
+      setFeedback({ severity: 'error', text: errorText(err) });
+    }
   };
   return (
     <Card>
       {dialog}
-      <Flex direction="column" gap="3">
-        <Heading size="3">Single sign-on</Heading>
-        <Text size="2" color="gray">Sign in with your work account instead of a password. Link it here once; then use its button on the sign-in page.</Text>
-        {list.length > 0 && (
-          <Table.Root size="1">
-            <Table.Header>
-              <Table.Row>{['Account', 'Email', 'Linked', 'Last used', ''].map((header, i) => <Table.ColumnHeaderCell key={i}>{header}</Table.ColumnHeaderCell>)}</Table.Row>
-            </Table.Header>
-            <Table.Body>
-              {list.map((i) => (
-                <Table.Row key={`${i.provider}/${i.subject}`} align="center">
-                  <Table.Cell>{i.providerName}</Table.Cell>
-                  <Table.Cell>{i.email || '—'}</Table.Cell>
-                  <Table.Cell>{fmtTime(i.linkedAt)}</Table.Cell>
-                  <Table.Cell>{i.lastUsedAt ? fmtTime(i.lastUsedAt) : 'never'}</Table.Cell>
-                  <Table.Cell><Button size="1" variant="soft" color="red" onClick={() => unlink(i)}>Unlink</Button></Table.Cell>
-                </Table.Row>
+      <CardContent>
+        <Stack spacing={2}>
+          <Typography variant="h6" component="h2">Single sign-on</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Sign in with your work account instead of a password. Link it here once; then use its button on the sign-in page.
+          </Typography>
+          {list.length > 0 && (
+            <Stack spacing={1.25}>
+              {list.map((identity) => (
+                <Paper key={`${identity.provider}/${identity.subject}`} elevation={0} sx={{ p: 1.5, borderRadius: 2, bgcolor: 'action.hover' }}>
+                  <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }} useFlexGap>
+                    <Box sx={{ minWidth: 0, flex: '1 1 12rem' }}>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                        {identity.providerName}{identity.email ? ` · ${identity.email}` : ''}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                        Linked {fmtTime(identity.linkedAt)} · Last used {identity.lastUsedAt ? fmtTime(identity.lastUsedAt) : 'never'}
+                      </Typography>
+                    </Box>
+                    <Button size="small" color="error" variant="text" onClick={() => unlink(identity)}>
+                      Unlink
+                    </Button>
+                  </Stack>
+                </Paper>
               ))}
-            </Table.Body>
-          </Table.Root>
-        )}
-        {session.sso.length > 0 && (
-          <Flex gap="3" align="end" wrap="wrap">
-            {session.hasPassword && <Field label="Your current password"><TextField.Root type="password" value={password} autoComplete="current-password"
-              onChange={(event) => setPassword(event.target.value)} /></Field>}
-            {session.sso.map((provider) => <Button key={provider.id} variant="soft" onClick={() => linkTo(provider.id)}>Link {provider.name}</Button>)}
-          </Flex>
-        )}
-        {info && <Text size="2" color="gray">{info}</Text>}
-      </Flex>
+            </Stack>
+          )}
+          {session.sso.length > 0 && (
+            <form onSubmit={onSubmit} autoComplete="off">
+              <Stack direction="row" spacing={2} useFlexGap sx={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                {session.hasPassword && (
+                  <Field label="Your current password">
+                    <TextField type="password" size="small" value={password} autoComplete="current-password"
+                      onChange={(event) => setPassword(event.target.value)} />
+                  </Field>
+                )}
+                {session.sso.map((provider) => (
+                  <Button key={provider.id} type="button" variant="outlined" onClick={() => linkTo(provider.id)}>
+                    Link {provider.name}
+                  </Button>
+                ))}
+              </Stack>
+            </form>
+          )}
+          {feedback && (
+            <Alert severity={feedback.severity} role={feedback.severity === 'error' ? 'alert' : undefined}>
+              {feedback.text}
+            </Alert>
+          )}
+        </Stack>
+      </CardContent>
     </Card>
   );
 }

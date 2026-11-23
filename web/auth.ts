@@ -170,8 +170,13 @@ export function createAuth(deps: ContextModule) {
     pruneUserIpKeys();
     approvals.sweep();
   }
-  async function currentSession(req: FastifyRequest): Promise<Session | null> {
-    const sid = req.cookies?.sid;
+  const NATIVE_SESSION_PREFIX = 'dks_';
+  const wantsBearerSession = (req: FastifyRequest): boolean =>
+    String(req.headers['x-client-auth'] || '').trim().toLowerCase() === 'bearer';
+  const sessionTokenFor = (req: FastifyRequest, tok: string): { sessionToken?: string } =>
+    (wantsBearerSession(req) ? { sessionToken: `${NATIVE_SESSION_PREFIX}${tok}` } : {});
+
+  async function sessionFromToken(sid: string | undefined): Promise<Session | null> {
     if (!sid || !/^[a-f0-9]{64}$/.test(sid)) return null;
     const found = await dk.findSession(store, sid, IDLE_MS, MAX_AGE_MS);
     if (!found) return null;
@@ -184,6 +189,9 @@ export function createAuth(deps: ContextModule) {
       mustChangePassword = false;
     }
     return { tokenHash: found.tokenHash, user: user.username, gate: found.gate, mustChangePassword, strongAt: found.strongAt, signedInAt: found.createdAt };
+  }
+  async function currentSession(req: FastifyRequest): Promise<Session | null> {
+    return sessionFromToken(req.cookies?.sid);
   }
   /**
    * Until when the session's passkey confirmation covers the sensitive actions (ms), or null.
@@ -233,10 +241,17 @@ export function createAuth(deps: ContextModule) {
    * itself; null for any other host (such as 127.0.0.1, which WebAuthn doesn't accept).
    */
   const challenges = new dk.PasskeyChallenges(); // this server's passkey challenges
+  const androidOrigins = config.android.sha256CertFingerprints.map((fp) => dk.androidApkKeyHashOrigin(fp));
   function relyingParty(req: FastifyRequest): dk.RelyingParty | null {
     const host = (req.headers.host || '').toLowerCase();
-    if (PUBLIC_HOST && host === PUBLIC_HOST) return { rpID: PUBLIC_HOST, origin: `https://${PUBLIC_HOST}`, challenges };
-    if (host === `localhost:${PORT}`) return { rpID: 'localhost', origin: `http://localhost:${PORT}`, challenges };
+    if (PUBLIC_HOST && host === PUBLIC_HOST) {
+      const webOrigin = `https://${PUBLIC_HOST}`;
+      return { rpID: PUBLIC_HOST, origin: androidOrigins.length ? [webOrigin, ...androidOrigins] : webOrigin, challenges };
+    }
+    if (host === `localhost:${PORT}`) {
+      const webOrigin = `http://localhost:${PORT}`;
+      return { rpID: 'localhost', origin: androidOrigins.length ? [webOrigin, ...androidOrigins] : webOrigin, challenges };
+    }
     return null;
   }
   /** Single sign-on providers (config.json sso.providers; src/sso.ts). */
@@ -253,7 +268,8 @@ export function createAuth(deps: ContextModule) {
    */
   const ssoRedirect = (req: FastifyRequest, provider: dk.SsoProvider): string | null => {
     const rp = relyingParty(req);
-    return rp ? `${rp.origin}/api/sso/${provider.id}/callback` : null;
+    const webOrigin = rp ? (Array.isArray(rp.origin) ? rp.origin[0] : rp.origin) : null;
+    return webOrigin ? `${webOrigin}/api/sso/${provider.id}/callback` : null;
   };
   const NO_SSO_SITE = `Single sign-on works only at ${PUBLIC_HOST ? `https://${PUBLIC_HOST}` : 'this site\'s public name'} or http://localhost:${PORT}`;
   const isPublic = (req: FastifyRequest) => Boolean(PUBLIC_HOST) && (req.headers.host || '').toLowerCase() === PUBLIC_HOST;
@@ -302,7 +318,7 @@ export function createAuth(deps: ContextModule) {
   const ALLOWED_HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`, ...(PUBLIC_HOST ? [PUBLIC_HOST] : [])]);
   const ALLOWED_ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`,
     ...(PUBLIC_HOST ? [`https://${PUBLIC_HOST}`] : [])]);
-  return { approvals, reauthNeed, RESET_PER_ACCOUNT, PER_ADDRESS, overLimit, clientIp, newSetupCode, setupCodeMatches, endSetup, oneSetupAtATime, clearFailedSignIn, signInKeys, countTry, clearFailures, sweepSessions, currentSession, strongUntil, stepUpRefusal, reauthRefusal, meReply, relyingParty, SSO, SSO_LIST, providerOf, ssoFlows, ssoRedirect, NO_SSO_SITE, sessionCookieOpts, ssoCookieOpts, confirmOwnPassword, passwordOff, NO_PASSKEY_SITE, ALLOWED_HOSTS, ALLOWED_ORIGINS };
+  return { approvals, reauthNeed, RESET_PER_ACCOUNT, PER_ADDRESS, overLimit, clientIp, newSetupCode, setupCodeMatches, endSetup, oneSetupAtATime, clearFailedSignIn, signInKeys, countTry, clearFailures, sweepSessions, sessionFromToken, sessionTokenFor, NATIVE_SESSION_PREFIX, currentSession, strongUntil, stepUpRefusal, reauthRefusal, meReply, relyingParty, SSO, SSO_LIST, providerOf, ssoFlows, ssoRedirect, NO_SSO_SITE, sessionCookieOpts, ssoCookieOpts, confirmOwnPassword, passwordOff, NO_PASSKEY_SITE, ALLOWED_HOSTS, ALLOWED_ORIGINS };
 }
 
 export type AuthModule = ReturnType<typeof createAuth>;

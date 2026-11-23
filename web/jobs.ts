@@ -128,8 +128,8 @@ type Connections = ReturnType<typeof createConnections>;
  * @returns Operation result.
  */
 function createTransfers(deps: ContextModule & EditingModule & MailModule & SnapshotsModule & WebhooksModule, connections: Connections) {
-  const { client, defaults, emitWebhook, GATE_CONFIG_KEYS, gateAlert, logged, prefsOf, queueSnapshots, refuseDuplicates, serial, store } = deps;
-  const { jobs, accountOf, isStopping } = connections;
+  const { client, defaults, emitWebhook, GATE_CONFIG_KEYS, gateAlert, logged, notifyResidentCodeChanged, prefsOf, queueSnapshots, refuseDuplicates, serial, store } = deps;
+  const { jobs, accountBusy, accountOf, isStopping, withAccount } = connections;
   /**
    * The gate-match config lives in the gate-scoped prefs (keyed by phone number), set under System Settings.
    *
@@ -393,9 +393,24 @@ function createTransfers(deps: ContextModule & EditingModule & MailModule & Snap
         await applyResidentsPull(gate, files, log);
         throw new Error(`Check pull differs from what was sent: ${JSON.stringify(check.differentBlocks)}. What the gate doesn't hold is still unsent.`);
       }
+      const beforeCache = await dk.readCacheFiles(store, gate.phoneNumber).catch(() => null);
       const later = await serial(gate.phoneNumber, () => dk.acceptSentPull(store, gate.phoneNumber, files, prepared.files));
       const board = boardOf(files);
       if (board) await dk.archivePull(store, gate.phoneNumber, board, { actor: gate.actor }).catch(logged('gate', 'Pull archive failed'));
+      await dk.markRerollsSynced(store, gate.phoneNumber).catch(logged('gate', 'Could not mark rerolls synced'));
+      // Notify any portal-enabled resident whose entryCode changed in this send (Push hides the digits).
+      if (beforeCache) {
+        try {
+          const beforeState = dk.decodeWorking({ names: beforeCache['names.bin'].base, phone: beforeCache['phone.bin'].base, cards: beforeCache['cards.bin'].base });
+          const afterState = dk.decodeWorking({ names: prepared.files['names.bin'], phone: prepared.files['phone.bin'], cards: prepared.files['cards.bin'] });
+          const prevCodes = new Map(beforeState.residents.map((r) => [dk.noteKey(r.directoryCode), r.entryCode]));
+          for (const r of afterState.residents) {
+            if (r.entryCode !== (prevCodes.get(dk.noteKey(r.directoryCode)) || '')) {
+              await notifyResidentCodeChanged(gate.phoneNumber, r.directoryCode, { synced: true });
+            }
+          }
+        } catch (err) { logger('gate').warn`Resident code-change notice skipped: ${(err as Error).message}`; }
+      }
       const lines = later ? ['Check passed: the gate holds what was sent. Changes saved while sending:', ...pullLines(later)]
         : ['Check passed: the gate holds the working copy, which now matches the gate.'];
       for (const line of lines) log(line);
@@ -405,7 +420,77 @@ function createTransfers(deps: ContextModule & EditingModule & MailModule & Snap
         .map(([name, b]) => ({ key: name, label: name, change: 'sent' as RecordChange['change'], fields: [{ field: 'Blocks', from: '', to: b.join(', ') }] })),
     });
   }
-  return { roleText, startLoginCheck, recordGateState, startPull, residentCounts, prepareGateSend, startSend };
+  /**
+   * Computes a resident-safe live availability + progress `%` snapshot for a gate (or another gate sharing its DKS login).
+   *
+   * @param gate - Resolved gate record.
+   * @returns Availability and estimated `%` progress.
+   */
+  function progressForJob(what: string | undefined, lines: string[]): { percent: number; phase: string } {
+    const last = lines[lines.length - 1] || '';
+    if (what === 'send') {
+      if (/check passed|finished/i.test(last)) return { percent: 95, phase: 'Verifying update…' };
+      if (/pulling residents to check/i.test(last)) return { percent: 75, phase: 'Verifying gate data…' };
+      if (/sending|uploading|transferring|status/i.test(last) || lines.length >= 4) {
+        return { percent: Math.min(70, 25 + lines.length * 6), phase: 'Sending changes to gate…' };
+      }
+      return { percent: 20, phase: 'Preparing gate update…' };
+    }
+    if (what === 'residents') {
+      if (/working copy|read cards\.bin/i.test(last)) return { percent: 85, phase: 'Finishing sync…' };
+      if (/read phone\.bin/i.test(last)) return { percent: 65, phase: 'Reading directory…' };
+      if (/read names\.bin/i.test(last)) return { percent: 45, phase: 'Reading directory…' };
+      return { percent: Math.min(40, 15 + lines.length * 5), phase: 'Syncing with gate…' };
+    }
+    return { percent: Math.min(85, 20 + lines.length * 10), phase: 'Syncing gate activity…' };
+  }
+
+  function jobStatusFor(gate: Gate): { available: boolean; busyReason?: string; percent: number | null; phase?: string } {
+    const busyJob = [...jobs.values()].find((j) => j.state === 'running' && j.account === accountOf(gate.user));
+    if (!busyJob) {
+      if (accountBusy(gate)) return { available: false, busyReason: 'relay', percent: 50, phase: 'Gate command in progress…' };
+      return { available: true, percent: null };
+    }
+    const { percent, phase } = progressForJob(busyJob.what, busyJob.log);
+    return { available: false, busyReason: busyJob.what === 'send' ? 'sending' : 'pulling', percent, phase };
+  }
+
+  /**
+   * Fail-safe momentary gate pulse ("Buzz Me In"): checks `GetRelays` first (never touching an already-held relay),
+   * persists a `relay_timers` auto-release safety net, pulses `SetRelays('1')`, waits `pulseSeconds`, then sends
+   * `SetRelays('0')` and clears the timer.
+   *
+   * @param gate - Resolved gate record.
+   * @param relay - Relay index (0–18).
+   * @param pulseSeconds - Hold duration in seconds before releasing (2–15 s).
+   * @returns Promise resolving to `{ alreadyOpen: boolean }`.
+   */
+  async function pulseRelay(gate: Gate, relay: number, pulseSeconds: number): Promise<{ alreadyOpen: boolean }> {
+    const seconds = Math.min(15, Math.max(2, Math.round(pulseSeconds || 4)));
+    return withAccount(gate, async () => {
+      const current = await dk.checkRelays(client(), gate);
+      if (current[relay]?.code === '1') return { alreadyOpen: true };
+      const safetyRelease = new Date(Date.now() + Math.max(seconds + 20, 30) * 1000);
+      await dk.setRelayTimer(store, gate.phoneNumber, relay, safetyRelease, gate.actor);
+      try {
+        await dk.controlRelays(client(), gate, { [relay]: true });
+      } catch (err) {
+        await dk.clearRelayTimer(store, gate.phoneNumber, relay).catch(() => {});
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+      try {
+        await dk.controlRelays(client(), gate, { [relay]: false });
+        await dk.clearRelayTimer(store, gate.phoneNumber, relay);
+      } catch (err) {
+        logger('gate').warn`Gate ${gate.phoneNumber}: Buzz Me In release failed (safety timer stays armed): ${(err as Error).message}`;
+        throw err;
+      }
+      return { alreadyOpen: false };
+    });
+  }
+
+  return { roleText, startLoginCheck, recordGateState, startPull, residentCounts, prepareGateSend, startSend, jobStatusFor, pulseRelay };
 }
 type Transfers = ReturnType<typeof createTransfers>;
 
@@ -449,11 +534,11 @@ function createScheduler(deps: ContextModule & SnapshotsModule & MailModule, con
    * @returns True when the condition holds.
    */
   const jobsIdle = (): boolean => connectionsIdle() && !runningSchedules.size;
-  async function queueSchedule(sch: Schedule, now = false): Promise<boolean> {
-    if (isStopping() || isScheduleQueued(sch.id)) return false;
-    const rec = await dk.getGate(store, sch.phoneNumber);
-    if (isStopping() || isScheduleQueued(sch.id)) return false; // queued while the gate was read
-    scheduleQueue.push({ schedule: sch, account: accountOf(rec && rec.dksUser), now });
+  async function queueSchedule(schedule: Schedule, now = false): Promise<boolean> {
+    if (isStopping() || isScheduleQueued(schedule.id)) return false;
+    const rec = await dk.getGate(store, schedule.phoneNumber);
+    if (isStopping() || isScheduleQueued(schedule.id)) return false;
+    scheduleQueue.push({ schedule, account: accountOf(rec && rec.dksUser), now });
     for (const { account } of scheduleQueue) if (!runningSchedules.has(account)) runAccountQueue(account);
     return true;
   }
@@ -605,10 +690,10 @@ export function createJobs(deps: ContextModule & EditingModule & MailModule & Sn
   const transfers = createTransfers(deps, connections);
   const scheduler = createScheduler(deps, connections, transfers);
   const { accountBusy, addingJobOf, busy, currentJob, forgetJob, runningJobs, stopNewJobs, withAccount } = connections;
-  const { prepareGateSend, recordGateState, residentCounts, roleText, startLoginCheck, startPull, startSend } = transfers;
+  const { prepareGateSend, recordGateState, residentCounts, roleText, startLoginCheck, startPull, startSend, jobStatusFor, pulseRelay } = transfers;
   return {
     accountBusy, addingJobOf, busy, currentJob, forgetJob, runningJobs, stopNewJobs, withAccount,
-    prepareGateSend, recordGateState, residentCounts, roleText, startLoginCheck, startPull, startSend, ...scheduler,
+    prepareGateSend, recordGateState, residentCounts, roleText, startLoginCheck, startPull, startSend, jobStatusFor, pulseRelay, ...scheduler,
   };
 }
 

@@ -1,5 +1,15 @@
 import { useEffect, useState } from 'react';
-import { Button, Card, Flex, Heading, Table, Text, TextField } from '@radix-ui/themes';
+import {
+  Alert,
+  Button,
+  Card,
+  CardContent,
+  Chip,
+  Paper,
+  Stack,
+  TextField,
+  Typography,
+} from '@mui/material';
 import type { DeviceRange, GatePrefs } from '../../../src/types.ts';
 import { errorText, type GateApi } from '../api.ts';
 import { DEFAULT_DEVICE_ASSOCIATION } from '../../../src/shared.ts';
@@ -27,24 +37,47 @@ export function RelayNameBox({ relay, prefs, gapi, onSaved }: RelayNameBoxProps)
   const k = String(relay);
   const saved = (prefs.relayLabels && prefs.relayLabels[k]) || `Relay ${k}`;
   const [value, setValue] = useState(saved);
-  const [info, setInfo] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
   useEffect(() => { setValue(saved); }, [saved]);
   const save = async () => {
     const next = value.trim() || `Relay ${k}`;
     setValue(next);
-    if (next === saved) return;
-    setInfo('Saving…');
+    if (next === saved) { setError(''); return; }
+    setSaving(true);
+    setError('');
     try {
       await gapi('PUT', '/prefs', { relayLabels: { [k]: next } });
-      setInfo('');
       await onSaved();
-    } catch (err) { setInfo(`Not saved: ${errorText(err)}`); }
+    } catch (err) {
+      setError(`Not saved: ${errorText(err)}`);
+    } finally {
+      setSaving(false);
+    }
   };
   return (
-    <TextField.Root size="1" maxLength={24} value={value} color={info.startsWith('Not') ? 'red' : undefined} style={{ width: '16ch' }}
-      title={info || 'Relay name, saved when you leave the box. Shared by every account that manages this gate; not sent to the gate.'}
-      onChange={(event) => setValue(event.target.value)} onBlur={save}
-      onKeyDown={(event) => { if (event.key === 'Enter') (event.target as HTMLInputElement).blur(); }} />
+    <TextField
+      size="small"
+      value={value}
+      error={Boolean(error)}
+      helperText={error || (saving ? 'Saving…' : undefined)}
+      slotProps={{
+        htmlInput: {
+          maxLength: 24,
+          'aria-label': `Relay ${relay} name`,
+          'aria-invalid': Boolean(error) || undefined,
+        },
+      }}
+      title={error || 'Relay name, saved when you leave the box. Shared by every account that manages this gate; not sent to the gate.'}
+      sx={{
+        width: '16ch',
+        '& .MuiInputBase-input': { py: 0.5, px: 1, fontSize: '0.85rem' },
+        '& .MuiFormHelperText-root': { mx: 0 },
+      }}
+      onChange={(event) => { setValue(event.target.value); if (error) setError(''); }}
+      onBlur={save}
+      onKeyDown={(event) => { if (event.key === 'Enter') (event.target as HTMLInputElement).blur(); }}
+    />
   );
 }
 
@@ -68,41 +101,89 @@ export function DeviceAssociation({ prefs, gapi, onSaved }: DeviceAssociationPro
   const fill = (list: DeviceRange[]) => Array.from({ length: 10 }, (_, i) => ({ ...(list[i] || { name: '', from: '', to: '' }) }));
   const [rows, setRows] = useState(() => fill(prefs.deviceAssociation || DEFAULT_DEVICE_ASSOCIATION));
   const [info, setInfo] = useState('');
+  const [error, setError] = useState('');
   const set = (i: number, key: keyof DeviceRange, value: string) => setRows(rows.map((row, j) => (j === i ? { ...row, [key]: value } : row)));
   const save = async () => {
+    setError('');
     setInfo('Saving…');
     try {
       const reply = await gapi<GatePrefs>('PUT', '/prefs', { deviceAssociation: rows.map((row) => ({ name: row.name.trim(), from: row.from.trim(), to: row.to.trim() })) });
       setRows(fill(reply.deviceAssociation || []));
       setInfo('Saved.');
       await onSaved(); // card transactions take their Event Type from these ranges
-    } catch (err) { setInfo(`Save failed: ${errorText(err)}`); }
+    } catch (err) {
+      setInfo('');
+      setError(`Save failed: ${errorText(err)}`);
+    }
   };
   return (
     <Card>
-      <Flex direction="column" gap="3">
-        <Heading size="3">Device association<HelpTip of="deviceAssociation" /></Heading>
-        <Text size="2" color="gray">
-          Names (up to 12 characters) for ranges of device codes (00001–65407), like DoorKing32's <em>Dev Enable</em> window. Up to 10 rows; ranges may not
-          overlap. Stored locally and <strong>shared by every account that manages this gate</strong>. Not sent to the gate.
-        </Text>
-        <Table.Root size="1" style={{ width: 'fit-content' }}>
-          <Table.Header>
-            <Table.Row>{['#', 'Device Name', 'From', 'To'].map((header) => <Table.ColumnHeaderCell key={header}>{header}</Table.ColumnHeaderCell>)}</Table.Row>
-          </Table.Header>
-          <Table.Body>
-            {rows.map((row, i) => (
-              <Table.Row key={i}>
-                <Table.Cell>{i + 1}</Table.Cell>
-                <Table.Cell><TextField.Root size="1" maxLength={12} value={row.name} onChange={(event) => set(i, 'name', event.target.value)} /></Table.Cell>
-                <Table.Cell><TextField.Root size="1" maxLength={5} inputMode="numeric" value={row.from} onChange={(event) => set(i, 'from', event.target.value)} style={{ width: '8ch' }} /></Table.Cell>
-                <Table.Cell><TextField.Root size="1" maxLength={5} inputMode="numeric" value={row.to} onChange={(event) => set(i, 'to', event.target.value)} style={{ width: '8ch' }} /></Table.Cell>
-              </Table.Row>
-            ))}
-          </Table.Body>
-        </Table.Root>
-        <Flex gap="3" align="center" wrap="wrap"><Button onClick={save}>Save</Button><Text size="2" color="gray">{info}</Text></Flex>
-      </Flex>
+      <CardContent>
+        <Stack spacing={2}>
+          <Typography variant="h6" component="h2" sx={{ display: 'flex', alignItems: 'center' }}>
+            Device association<HelpTip of="deviceAssociation" />
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Names (up to 12 characters) for ranges of device codes (00001–65407), like DoorKing32&apos;s <em>Dev Enable</em> window. Up to 10 rows; ranges may not
+            overlap. Stored locally and <strong>shared by every account that manages this gate</strong>. Not sent to the gate.
+          </Typography>
+          <Stack spacing={1} sx={{ width: '100%', maxWidth: 640 }}>
+            {rows.map((row, i) => {
+              const active = Boolean(row.name.trim() || row.from.trim() || row.to.trim());
+              return (
+                <Paper key={i} variant="outlined" sx={{ px: 1.5, py: 0.75, width: '100%', boxSizing: 'border-box' }}>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: 'center', width: '100%' }}>
+                    <Chip
+                      size="small"
+                      color={active ? 'primary' : 'default'}
+                      label={`#${i + 1}`}
+                      sx={{ minWidth: 36, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}
+                    />
+                    <TextField
+                      size="small"
+                      placeholder="Device name"
+                      value={row.name}
+                      slotProps={{ htmlInput: { maxLength: 12, 'aria-label': `Row ${i + 1} device name` } }}
+                      sx={{ flex: '1 1 auto', minWidth: 0, '& .MuiInputBase-input': { py: 0.5, px: 1, fontSize: '0.85rem' } }}
+                      onChange={(event) => set(i, 'name', event.target.value)}
+                    />
+                    <TextField
+                      size="small"
+                      placeholder="From"
+                      value={row.from}
+                      slotProps={{ htmlInput: { maxLength: 5, inputMode: 'numeric', 'aria-label': `Row ${i + 1} from` } }}
+                      sx={{
+                        width: '7.5ch',
+                        flexShrink: 0,
+                        '& .MuiInputBase-input': { py: 0.5, px: 0.75, fontSize: '0.85rem', textAlign: 'center', fontVariantNumeric: 'tabular-nums' },
+                      }}
+                      onChange={(event) => set(i, 'from', event.target.value)}
+                    />
+                    <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>–</Typography>
+                    <TextField
+                      size="small"
+                      placeholder="To"
+                      value={row.to}
+                      slotProps={{ htmlInput: { maxLength: 5, inputMode: 'numeric', 'aria-label': `Row ${i + 1} to` } }}
+                      sx={{
+                        width: '7.5ch',
+                        flexShrink: 0,
+                        '& .MuiInputBase-input': { py: 0.5, px: 0.75, fontSize: '0.85rem', textAlign: 'center', fontVariantNumeric: 'tabular-nums' },
+                      }}
+                      onChange={(event) => set(i, 'to', event.target.value)}
+                    />
+                  </Stack>
+                </Paper>
+              );
+            })}
+          </Stack>
+          <Stack direction="row" spacing={2} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+            <Button variant="contained" onClick={save}>Save</Button>
+            {info && <Typography variant="body2" color="text.secondary">{info}</Typography>}
+          </Stack>
+          {error && <Alert severity="error">{error}</Alert>}
+        </Stack>
+      </CardContent>
     </Card>
   );
 }

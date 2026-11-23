@@ -29,12 +29,31 @@ export interface GateFeatures { floors: boolean; elevators: boolean }
  */
 export interface GateTracker { enabled: boolean; tracker1: boolean; tracker2: boolean; prevTime1?: string; prevTime2?: string }
 
+/** Per-gate configuration for the Resident Self-Service Portal & "Buzz Me In" PWA. */
+export interface ResidentPortalPrefs {
+  enabled: boolean;
+  buzzEnabled: boolean;
+  buzzRelays: number[];
+  pulseSeconds: number;
+  maxRerollsPerDay: number;
+  autoSendReroll: boolean;
+  showSnapshots: boolean;
+  allowRequests: boolean;
+  requirePasskeyForBuzz: boolean;
+}
+
 export interface GatePrefs {
   relayLabels?: Partial<Record<string, string>>; // '0'-'18'
   deviceAssociation?: DeviceRange[];
   gateConfig?: Partial<GateConfig>;
   features?: Partial<GateFeatures>;
   tracker?: Partial<GateTracker>;
+  /** Building manager / HOA phone number pre-filled on resident instructions PDF and welcome messages. */
+  adminPhone?: string;
+  /** When true, every admin action on this gate requires a recent passkey or MFA SSO confirmation. */
+  requireStrongAdmin?: boolean;
+  /** Opt-in Resident Self-Service Portal settings for this gate. */
+  residentPortal?: Partial<ResidentPortalPrefs>;
 }
 
 /**
@@ -56,6 +75,14 @@ export interface ResidentRow {
   entryOffset: number | null;
   recordOffset: number | null;
   note?: string; // GET G/residents: the local note (never on the gate)
+  /** Local resident email (stored in `resident_portal`, never on the gate). */
+  email?: string;
+  /** Whether Resident Portal access is enabled for this unit. */
+  portalEnabled?: boolean;
+  /** True when the resident's portal account is still waiting to accept its email invite. */
+  portalInvited?: boolean;
+  /** Linked portal username (when enabled). */
+  portalUsername?: string;
 }
 
 /** A transaction from rcv_out.bin, newest first. minute: the snapshot folder (YYYYMMDD-HHMM). */
@@ -74,6 +101,14 @@ export interface TransactionRow {
   directoryCode: string;
   camera: boolean; // camera footage can apply (never for gate data transfers, hold-open events or other gate commands)
   raw: string;
+  /** Synthetic transaction source (`'portal'` for Buzz Me In opens; omitted/`'gate'` for hardware `tx_history`). */
+  source?: 'gate' | 'portal';
+  /** Stable key for deduplicating suspicious reports. */
+  txKey?: string;
+  /** True when this resident already reported this event as suspicious. */
+  reported?: boolean;
+  /** Saved snapshot/video filenames for this event's minute (populated for Resident Portal activity). */
+  snapshotFiles?: string[];
 }
 
 /**
@@ -101,6 +136,8 @@ export interface ResidentsReply {
   saved: string;
   /** Directory codes, entry codes and cards held by more than one entry; a send is refused while any exist. */
   duplicates: { kind: 'directoryCode' | 'entryCode' | 'card'; value: string; holders: string[]; text: string }[];
+  /** Configured Relay 0 Touch-Tone momentary open digit (usually '9'). */
+  grantAccessDigit?: string;
 }
 
 /**
@@ -137,7 +174,7 @@ export interface SendPreview {
  * GET /api/gates (master codes are never sent). siteName is '' until the user has connected to the gate.
  * admin: everything including sends, relays, users and DKS login; editor: working-copy edits only; readonly: view, pull and cameras.
  */
-export type GateRole = 'admin' | 'editor' | 'readonly';
+export type GateRole = 'admin' | 'editor' | 'readonly' | 'resident';
 export interface GateInfo { phoneNumber: string; siteName: string; addedAt: string; role: GateRole }
 /**
  * Someone with access to a gate (G/users, History).
@@ -145,6 +182,7 @@ export interface GateInfo { phoneNumber: string; siteName: string; addedAt: stri
  */
 export interface GateUser {
   username: string; email: string; pendingEmail: string; phone: string; invited: boolean; role: GateRole; grantedBy: string; grantedAt: string; lastSignIn: string | null;
+  ssoProviders?: string[];
 }
 /** G/api-keys: an API key of the gate (never the key itself, which is shown once when created). */
 export interface ApiKeyInfo {
@@ -184,6 +222,10 @@ export type SessionReply =
     hasPasskey: boolean;
     stepUpMinutes: number; // how long a passkey confirmation covers the sensitive actions
     strongUntil: string | null; // until when this session's passkey confirmation covers them (ISO), or null
+    /** True when the user has only resident portal access (no staff role on any gate). */
+    isResidentOnly?: boolean;
+    /** True when the user also owns an enabled Resident Portal unit on the currently open gate. */
+    hasPortalUnit?: boolean;
     gate: GateInfo | null;
     defaults: GateConfig;
     holidayList: { name: string; month: number; day: number }[];
@@ -380,10 +422,7 @@ export type WebhookEvent =
   | 'send.completed'
   | 'send.failed'
   | 'relay.changed'
-  | 'snapshot.saved'
-  | 'transaction.admit'
-  | 'transaction.deny'
-  | 'gate.hold';
+  | 'suspicious.reported';
 
 /** Configured outbound webhook (signing secret never returned after creation). */
 export interface WebhookInfo {
@@ -394,6 +433,110 @@ export interface WebhookInfo {
   enabled: boolean;
   createdBy: string;
   createdAt: string;
+}
+
+/** One subscribed Web Push device for a user. */
+export interface PushSubscriptionInfo {
+  id: string;
+  label: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+/** One synthetic "Portal Open" transaction recorded when a resident uses Buzz Me In. */
+export interface PortalEvent {
+  id: number;
+  phone: string;
+  directoryCode: string;
+  username: string;
+  relay: number;
+  eventType: string;
+  access: string;
+  ts: string;
+  result: string;
+  error: string | null;
+}
+
+/** One resident self-service change request. */
+export interface ResidentRequest {
+  id: number;
+  phone: string;
+  directoryCode: string;
+  residentName?: string;
+  username: string;
+  kind: 'phone' | 'hidden' | 'cardIssue' | 'other';
+  payload: Record<string, unknown>;
+  note: string;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: string;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  reviewNote: string | null;
+}
+
+/** One suspicious-activity report filed by a resident on their own transaction. */
+export interface SuspiciousReport {
+  id: number;
+  phone: string;
+  directoryCode: string;
+  residentName?: string;
+  username: string;
+  txSource: 'gate' | 'portal';
+  txKey: string;
+  txTs: string;
+  txSummary: string;
+  note: string;
+  status: 'open' | 'resolved';
+  createdAt: string;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  reviewNote: string | null;
+}
+
+/** One login audit event shown to gate admins. */
+export interface LoginAuditEntry {
+  id: number;
+  username: string | null;
+  identifier: string;
+  role: string | null;
+  method: string;
+  outcome: string;
+  reason: string | null;
+  ip: string;
+  userAgent: string;
+  createdAt: string;
+}
+
+/** GET /api/portal/gates/:phone/me response. */
+export interface PortalMeReply {
+  gate: { phoneNumber: string; siteName: string; adminPhone: string; grantAccessDigit: string };
+  units: { directoryCode: string; name: string }[];
+  unit: {
+    directoryCode: string;
+    name: string;
+    phone: string;
+    entryCode: string;
+    hidden: boolean;
+    cards: { number: string; device: string }[];
+    email: string;
+  };
+  portal: ResidentPortalPrefs & { buzzRelayLabels: { relay: number; name: string }[] };
+  reroll: { usedToday: number; maxPerDay: number; remainingToday: number; pendingSend: boolean; nextScheduledSend: string | null };
+}
+
+/** GET /api/portal/gates/:phone/status response. */
+export interface PortalStatusReply {
+  available: boolean;
+  busyReason?: string;
+  percent: number | null;
+  phase?: string;
+  cooldownSeconds: number;
+}
+
+/** GET /api/portal/gates/:phone/activity response. */
+export interface PortalActivityReply {
+  rows: TransactionRow[];
+  showSnapshots: boolean;
 }
 
 /** One outbound webhook delivery log entry. */

@@ -1,8 +1,9 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import { Box, Button, Callout, Flex, Text, TextField } from '@radix-ui/themes';
+import { Alert, Box, Stack, TextField, Typography } from '@mui/material';
 import type { GateSettingRow } from '../../../src/types.ts';
-import { errorText, type GateApi } from '../api.ts';
+import { errorText, useDraftActions, type GateApi } from '../api.ts';
 import { ConflictList } from '../panes/WorkingCopyBar.tsx';
+import { INVALID_BG, PENDING_BG, UNSAVED_BG } from './GroupPage.tsx';
 import { gsShow, type GateSettings } from './useGateSettings.ts';
 
 const HINTS: [string, string][] = [['holiday', 'MM/DD'], ['Tone', '1-9'], ['EntryCodeRange', '0000'], ['outsideLineDigit', '0-9']];
@@ -15,7 +16,7 @@ const HINTS: [string, string][] = [['holiday', 'MM/DD'], ['Tone', '1-9'], ['Entr
  * @returns Operation result.
  */
 export function settingTone(settings: GateSettings, setting: GateSettingRow) {
-  return setting.key in settings.edits ? 'var(--blue-a4)' : setting.value !== setting.gate ? 'var(--green-a4)' : undefined;
+  return setting.key in settings.edits ? UNSAVED_BG : setting.value !== setting.gate ? PENDING_BG : undefined;
 }
 
 /**
@@ -69,7 +70,7 @@ interface SettingInputProps {
 /**
  * One input for a gate setting, coloured and with hover text as above. Text settings (display messages) are wide
  * enough for the most characters the gate accepts (in a fixed-width font, like the gate's LCD) and stop at it.
- * invalid: a reason the value can't be saved (red, and shown first in the hover text).
+ * invalid: a reason the value can't be saved (red, shown visibly below the field and in the hover text).
  *
  * @param props - Component props.
  * @param props.settings - Settings map or configuration.
@@ -81,16 +82,43 @@ export function SettingInput({ settings, setting, invalid }: SettingInputProps) 
   const max = setting.maxLength;
   const ref = useRef<HTMLInputElement>(null);
   const fit = useFitWidth(ref, max);
-  const width = fit ? `${fit}px` : max ? `calc(${max}ch + var(--space-4))`
-    : setting.editable ? '9ch' : `calc(${Math.max(9, settings.current(setting).length)}ch + var(--space-4))`;
+  const width = fit ? `${fit}px` : max ? `calc(${max}ch + 24px)`
+    : setting.editable ? '9ch' : `calc(${Math.max(9, settings.current(setting).length)}ch + 24px)`;
+  const bg = invalid ? INVALID_BG : settingTone(settings, setting);
   return (
-    <TextField.Root ref={ref} size="1" value={settings.current(setting)} readOnly={!setting.editable}
-      title={invalid ? `${invalid}\n${settingTitle(settings, setting)}` : settingTitle(settings, setting)} color={invalid ? 'red' : undefined}
-      placeholder={HINTS.find(([k]) => setting.key.includes(k))?.[1] || ''} className={max ? 'lcd-input' : undefined}
-      maxLength={max ?? undefined}
-      style={{ width, minWidth: width, flexShrink: 0, background: invalid ? 'var(--red-a5)' : settingTone(settings, setting),
-        opacity: setting.editable ? undefined : 0.7 }}
-      onChange={(event) => settings.edit(setting, event.target.value)} />
+    <TextField
+      inputRef={ref}
+      size="small"
+      value={settings.current(setting)}
+      error={Boolean(invalid)}
+      helperText={invalid}
+      title={invalid ? `${invalid}\n${settingTitle(settings, setting)}` : settingTitle(settings, setting)}
+      placeholder={HINTS.find(([k]) => setting.key.includes(k))?.[1] || ''}
+      className={max ? 'lcd-input' : undefined}
+      slotProps={{
+        htmlInput: {
+          readOnly: !setting.editable,
+          maxLength: max ?? undefined,
+          'aria-label': setting.name,
+          'aria-invalid': Boolean(invalid) || undefined,
+        },
+      }}
+      sx={{
+        width,
+        minWidth: width,
+        flexShrink: 0,
+        opacity: setting.editable ? undefined : 0.7,
+        '& .MuiInputBase-root': { backgroundColor: bg },
+        '& .MuiInputBase-input': {
+          py: 0.5,
+          px: 1,
+          fontSize: '0.85rem',
+          ...(max ? { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' } : {}),
+        },
+        '& .MuiFormHelperText-root': { mx: 0 },
+      }}
+      onChange={(event) => settings.edit(setting, event.target.value)}
+    />
   );
 }
 
@@ -127,8 +155,10 @@ export function SettingsBar({ settings, gapi, onReload, blocked }: SettingsBarPr
         lines: saved.changed.map((change) => `${change.name}: "${change.from}" → "${change.to}"`), color: 'blue' });
     } catch (err) { setResult({ title: 'Save failed', lines: [errorText(err)], color: 'red' }); }
   };
+  const discard = () => { settings.discard(); setResult(null); };
+  useDraftActions(loaded ? { unsaved, blocked, save, discard } : null);
 
-  const status = !loaded ? settings.error : [
+  const status = !loaded ? '' : [
     unsaved ? `${unsaved} unsaved change(s)` : 'No unsaved changes',
     settings.pending.length ? `${settings.pending.length} setting(s) saved, not sent (block(s) ${settings.blocks.join(', ')})` : '',
     `gate pulled ${new Date(settings.reply!.pulled).toLocaleString()}`,
@@ -136,22 +166,24 @@ export function SettingsBar({ settings, gapi, onReload, blocked }: SettingsBarPr
   ].filter(Boolean).join(' · ');
 
   return (
-    <Flex direction="column" gap="2">
-      <Text size="2" color="gray">
-        Edits go to the working copy (blue = unsaved, green = saved but not sent to the gate). Hover a value to see the gate's value.
-      </Text>
-      <Flex gap="2" wrap="wrap" align="center">
-        <Button onClick={save} disabled={!loaded || !unsaved || Boolean(blocked)} title={blocked}>Save to working copy</Button>
-        <Button variant="soft" color="gray" onClick={() => { settings.discard(); setResult(null); }} disabled={!loaded || !unsaved}>Discard unsaved</Button>
-      </Flex>
-      <Text size="2" color="gray">{status}</Text>
+    <Stack spacing={1.5}>
+      <Typography variant="body2" color="text.secondary">
+        Edits go to the working copy (use <strong>Gate → Save to working copy</strong> to keep changes).
+      </Typography>
+      {blocked && <Alert severity="error">{blocked}</Alert>}
+      {!loaded && settings.error && <Alert severity="error">{settings.error}</Alert>}
+      {status && <Typography variant="body2" color="text.secondary">{status}</Typography>}
       <ConflictList conflicts={settings.conflicts} gapi={gapi} onDecided={async () => { await settings.load(); await onReload(); }} />
       {result && (
-        <Callout.Root color={result.color}>
-          <Callout.Text><strong>{result.title}</strong></Callout.Text>
-          {result.lines.length > 0 && <Box asChild><ul style={{ margin: 0 }}>{result.lines.map((line, i) => <li key={i}>{line}</li>)}</ul></Box>}
-        </Callout.Root>
+        <Alert severity={result.color === 'red' ? 'error' : 'info'}>
+          <Box component="strong">{result.title}</Box>
+          {result.lines.length > 0 && (
+            <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+              {result.lines.map((line, i) => <li key={i}>{line}</li>)}
+            </Box>
+          )}
+        </Alert>
       )}
-    </Flex>
+    </Stack>
   );
 }

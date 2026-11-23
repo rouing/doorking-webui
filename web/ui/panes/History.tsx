@@ -1,13 +1,46 @@
-import { Fragment, useCallback, useEffect, useState } from 'react';
-import { Badge, Box, Button, Card, Dialog, Flex, Heading, IconButton, Table, Text } from '@radix-ui/themes';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
+  Alert,
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  IconButton,
+  Paper,
+  Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Typography,
+} from '@mui/material';
+import { alpha } from '@mui/material/styles';
+import CloseIcon from '@mui/icons-material/Close';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import type { HistoryEvent, HistoryReply, PullArchiveEntry, SendChange } from '../../../src/types.ts';
 import { errorText, useReadOnly, type GateApi } from '../api.ts';
+import { useBackLayer } from '../back.ts';
 import { useConfirm } from '../Confirm.tsx';
 import { fmtTime } from '../format.ts';
 import { roleLabel } from '../Gates.tsx';
 
-export const ACTIONS: Record<string, string> = { change: 'Change', revert: 'Revert', pull: 'Pull', send: 'Send', relay: 'Relay', camera: 'Camera',
-  access: 'Users', login: 'Gate login', apikey: 'API key', webhook: 'Webhook', note: 'Note' };
+export const ACTIONS: Record<string, string> = {
+  change: 'Change', revert: 'Revert', pull: 'Pull', send: 'Send', relay: 'Relay', camera: 'Camera',
+  access: 'Users', login: 'Gate login', apikey: 'API key', webhook: 'Webhook', note: 'Note',
+};
+
+const EVENTS_PAGE = 20;
 
 interface HistoryProps {
   gapi: GateApi;
@@ -15,12 +48,10 @@ interface HistoryProps {
 }
 
 /**
- * The gate's users with their last sign-in, then this gate's events (newest first). Rows with details expand on click, one at a
- * time; Revert undoes that change in the working copy only.
+ * The gate's users, events (newest first), and archived pulls rendered as compact pill-driven bubble cards.
+ * Events with change details expand inline on click; Revert sits on the right and undoes in the working copy only.
  *
  * @param props - Component props.
- * @param props.gapi - Gate-scoped API fetch helper.
- * @param props.onReverted - On reverted.
  * @returns Rendered React element.
  */
 export function History({ gapi, onReverted }: HistoryProps) {
@@ -29,11 +60,16 @@ export function History({ gapi, onReverted }: HistoryProps) {
   const [pulls, setPulls] = useState<PullArchiveEntry[]>([]);
   const [diffView, setDiffView] = useState<{ pull: PullArchiveEntry; changes: SendChange[] } | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+  const [shown, setShown] = useState(EVENTS_PAGE);
   const [info, setInfo] = useState('Loading…');
+  const [error, setError] = useState('');
   const [dialog, confirm] = useConfirm();
+
+  useBackLayer(diffView !== null, () => setDiffView(null));
 
   const load = useCallback(async () => {
     setInfo('Loading…');
+    setError('');
     try {
       const [reply, archive] = await Promise.all([
         gapi<HistoryReply>('GET', '/history'),
@@ -41,214 +77,309 @@ export function History({ gapi, onReverted }: HistoryProps) {
       ]);
       setHistory(reply);
       setPulls(archive.pulls);
-      setInfo(`${reply.events.length} events, most recent first`);
-    } catch (err) { setInfo(errorText(err)); }
+      setShown(EVENTS_PAGE);
+      setInfo(`${reply.events.length} event${reply.events.length === 1 ? '' : 's'}, most recent first`);
+    } catch (err) {
+      setInfo('');
+      setError(errorText(err));
+    }
   }, [gapi]);
   useEffect(() => { load(); }, [load]);
 
   async function previewPull(pull: PullArchiveEntry) {
+    setError('');
     try {
       const reply = await gapi<{ pull: PullArchiveEntry; changes: SendChange[] }>('GET', `/pull-archive/${pull.id}/diff`);
       setDiffView(reply);
-    } catch (err) { setInfo(errorText(err)); }
+    } catch (err) { setError(errorText(err)); }
   }
 
   async function restorePull(pull: PullArchiveEntry) {
-    if (!await confirm({ title: `Restore pull from ${fmtTime(pull.pulledAt)}?`, action: 'Restore to working copy', color: 'red',
-      body: 'This replaces the working copy with this archived pull. The physical gate is not changed until you Send to gate, and this restore can be reverted in History.' })) return;
+    if (!await confirm({
+      title: `Restore pull from ${fmtTime(pull.pulledAt)}?`, action: 'Restore to working copy', color: 'red',
+      body: 'This replaces the working copy with this archived pull. The physical gate is not changed until you Send to gate, and this restore can be reverted in History.',
+    })) return;
+    setError('');
     try {
       await gapi('POST', `/pull-archive/${pull.id}/restore`, {});
       setDiffView(null);
       await load();
       setInfo(`Restored pull #${pull.id} into the working copy. Review it, then Send to gate.`);
       onReverted();
-    } catch (err) { setInfo(errorText(err)); }
+    } catch (err) { setError(errorText(err)); }
   }
 
   async function revert(event: HistoryEvent) {
-    if (!await confirm({ title: `Revert "${event.summary}"?`, action: 'Revert',
-      body: 'This undoes the change in the working copy. The gate is not changed until you Send to gate.' })) return;
+    if (!await confirm({
+      title: `Revert "${event.summary}"?`, action: 'Revert',
+      body: 'This undoes the change in the working copy. The gate is not changed until you Send to gate.',
+    })) return;
+    setError('');
     try {
       await gapi('POST', `/history/${encodeURIComponent(event.id)}/revert`, {});
       await load();
       setInfo('Reverted in the working copy. Review it, then Send to gate.');
       onReverted();
-    } catch (err) { setInfo(errorText(err)); }
+    } catch (err) { setError(errorText(err)); }
   }
 
+  const users = history?.users || [];
+  const events = history?.events || [];
+  const visibleEvents = events.slice(0, shown);
+
   return (
-    <Flex direction="column" gap="3">
+    <Stack spacing={2}>
       {dialog}
-      <Heading>History</Heading>
-      <Text size="2" color="gray">
-        Pulls, sends, live relay changes and working-copy changes for this gate. Click a change to see what changed.{' '}
-        <strong>Revert</strong> undoes a change in the working copy only; review it, then use Send to gate. Revert is
-        refused if a later change touched the same data.
-      </Text>
-      <Card>
-        <Heading size="3" mb="2">Gate users</Heading>
-        <Table.Root size="1">
-          <Table.Header>
-            <Table.Row><Table.ColumnHeaderCell>User</Table.ColumnHeaderCell><Table.ColumnHeaderCell>Role</Table.ColumnHeaderCell>
-              <Table.ColumnHeaderCell>Last sign-in</Table.ColumnHeaderCell></Table.Row>
-          </Table.Header>
-          <Table.Body>
-            {(history?.users || []).map((user) => (
-              <Table.Row key={user.username}><Table.Cell>{user.username}</Table.Cell><Table.Cell>{roleLabel(user.role)}</Table.Cell>
-                <Table.Cell>{user.lastSignIn ? fmtTime(user.lastSignIn) : 'never'}</Table.Cell></Table.Row>
-            ))}
-          </Table.Body>
-        </Table.Root>
-      </Card>
-      <Card>
-        <Heading size="3" mb="2">Events</Heading>
-        <Flex gap="3" align="center" wrap="wrap" mb="2">
-          <Button variant="soft" color="gray" onClick={load}>Refresh</Button>
-          <Text size="2" color="gray">{info}</Text>
-        </Flex>
-        <Table.Root size="1">
-          <Table.Header>
-            <Table.Row>
-              {['Time', 'User', 'Action', 'Summary', 'Result', ''].map((header, i) => <Table.ColumnHeaderCell key={i}>{header}</Table.ColumnHeaderCell>)}
-            </Table.Row>
-          </Table.Header>
-          <Table.Body>
-            {(history?.events || []).map((entry) => {
-              const details = entry.details || [];
-              const result = entry.result === 'failed' ? `Failed: ${entry.error || ''}` : entry.result === 'done' ? 'OK' : '';
-              return (
-                <Fragment key={entry.id}>
-                  <Table.Row onClick={details.length ? () => setOpen(open === entry.id ? null : entry.id) : undefined}
-                    style={{ cursor: details.length ? 'pointer' : undefined, background: entry.result === 'failed' ? 'var(--red-a3)' : undefined,
-                      color: entry.revertedBy ? 'var(--gray-10)' : undefined }}>
-                    <Table.Cell style={{ whiteSpace: 'nowrap' }}>{fmtTime(entry.time)}</Table.Cell>
-                    <Table.Cell>{entry.user || ''}</Table.Cell>
-                    <Table.Cell>{ACTIONS[entry.action] || entry.action}</Table.Cell>
-                    <Table.Cell>{entry.summary || ''}</Table.Cell>
-                    <Table.Cell>{result}</Table.Cell>
-                    <Table.Cell>
-                      {entry.revertedBy ? `Reverted by ${entry.revertedBy.user} ${fmtTime(entry.revertedBy.time)}`
-                        : entry.revertible && !readOnly ? <Button size="1" variant="soft" color="gray"
-                          onClick={(event) => { event.stopPropagation(); revert(entry); }}>Revert</Button> : ''}
-                    </Table.Cell>
-                  </Table.Row>
-                  {open === entry.id && details.length > 0 && (
-                    <Table.Row>
-                      <Table.Cell colSpan={6} style={{ background: 'var(--gray-a2)' }}>
-                        <Flex direction="column" gap="2">
-                          {details.map((detail) => (
-                            <Flex key={detail.key + detail.label} direction="column" gap="1">
-                              <Text size="2" weight="bold">{detail.label}{detail.change && detail.change !== 'changed' ? ` — ${detail.change}` : ''}</Text>
-                              {detail.fields.length > 0 && (
-                                <Table.Root size="1">
-                                  <Table.Header>
-                                    <Table.Row><Table.ColumnHeaderCell>Field</Table.ColumnHeaderCell><Table.ColumnHeaderCell>From</Table.ColumnHeaderCell>
-                                      <Table.ColumnHeaderCell>To</Table.ColumnHeaderCell></Table.Row>
-                                  </Table.Header>
-                                  <Table.Body>
-                                    {detail.fields.map((field, i) => (
-                                      <Table.Row key={i}><Table.Cell>{field.field}</Table.Cell><Table.Cell>{field.from}</Table.Cell><Table.Cell>{field.to}</Table.Cell></Table.Row>
-                                    ))}
-                                  </Table.Body>
-                                </Table.Root>
-                              )}
-                            </Flex>
-                          ))}
-                        </Flex>
-                      </Table.Cell>
-                    </Table.Row>
-                  )}
-                </Fragment>
-              );
-            })}
-          </Table.Body>
-        </Table.Root>
-      </Card>
-      {pulls.length > 0 && (
-        <Card>
-          <Heading size="3" mb="2">Past pulls (point-in-time rollback)</Heading>
-          <Text size="2" color="gray" as="p" mb="2">
-            Up to 50 distinct residents pulls are archived per gate. Compare any past pull against your current working
-            copy, or restore it to the working copy (nothing touches the gate until Send to gate).
-          </Text>
-          <Table.Root size="1">
-            <Table.Header>
-              <Table.Row>
-                <Table.ColumnHeaderCell>Pulled</Table.ColumnHeaderCell>
-                <Table.ColumnHeaderCell>By</Table.ColumnHeaderCell>
-                <Table.ColumnHeaderCell>Entries</Table.ColumnHeaderCell>
-                <Table.ColumnHeaderCell>Cards</Table.ColumnHeaderCell>
-                <Table.ColumnHeaderCell />
-              </Table.Row>
-            </Table.Header>
-            <Table.Body>
-              {pulls.map((pull) => (
-                <Table.Row key={pull.id}>
-                  <Table.Cell style={{ whiteSpace: 'nowrap' }}>{fmtTime(pull.pulledAt)}</Table.Cell>
-                  <Table.Cell>{pull.actor}</Table.Cell>
-                  <Table.Cell>{pull.residentsCount}</Table.Cell>
-                  <Table.Cell>{pull.cardsCount}</Table.Cell>
-                  <Table.Cell>
-                    <Flex gap="2">
-                      <Button size="1" variant="soft" color="gray" onClick={() => previewPull(pull)}>Compare</Button>
-                      {!readOnly && <Button size="1" variant="soft" onClick={() => restorePull(pull)}>Restore</Button>}
-                    </Flex>
-                  </Table.Cell>
-                </Table.Row>
-              ))}
-            </Table.Body>
-          </Table.Root>
-        </Card>
-      )}
-      <Dialog.Root open={diffView !== null} onOpenChange={(isOpen) => { if (!isOpen) setDiffView(null); }}>
-        <Dialog.Content maxWidth="720px" aria-describedby={undefined}>
-          <Flex align="center" mb="3">
-            <Dialog.Title mb="0">
-              {diffView ? `Changes to restore pull from ${fmtTime(diffView.pull.pulledAt)}` : ''}
-            </Dialog.Title>
-            <Flex flexGrow="1" />
-            <Dialog.Close><IconButton variant="ghost" color="gray" title="Close">✕</IconButton></Dialog.Close>
-          </Flex>
-          {diffView && (diffView.changes.length === 0 ? (
-            <Text size="2" color="gray">The working copy already matches this pull.</Text>
+      <Typography variant="h5" component="h1">History</Typography>
+      <Typography variant="body2" color="text.secondary">
+        Pulls, sends, live relay changes and working-copy changes for this gate. Tap an event with changes to inspect
+        details. <strong>Revert</strong> undoes a change in the working copy only; review it, then use Send to gate.
+      </Typography>
+      {error && <Alert severity="error">{error}</Alert>}
+
+      <Accordion variant="outlined" disableGutters>
+        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+          <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap', pr: 1 }}>
+            <Typography variant="h6" component="h2">Gate users</Typography>
+            <Chip size="small" label={`${users.length}`} />
+          </Stack>
+        </AccordionSummary>
+        <AccordionDetails sx={{ pt: 0 }}>
+          {!users.length ? (
+            <Typography variant="body2" color="text.secondary">No gate users.</Typography>
           ) : (
-            <Box style={{ maxHeight: 380, overflowY: 'auto' }}>
-              <Table.Root size="1">
-                <Table.Header>
-                  <Table.Row>
-                    <Table.ColumnHeaderCell>Item</Table.ColumnHeaderCell>
-                    <Table.ColumnHeaderCell>Field</Table.ColumnHeaderCell>
-                    <Table.ColumnHeaderCell>Current</Table.ColumnHeaderCell>
-                    <Table.ColumnHeaderCell>Archived</Table.ColumnHeaderCell>
-                  </Table.Row>
-                </Table.Header>
-                <Table.Body>
-                  {diffView.changes.flatMap((item) => (item.fields.length ? item.fields : [{ field: '', from: '', to: '' }]).map((field, index) => (
-                    <Table.Row key={`${item.key}-${field.field}-${index}`}>
-                      <Table.Cell>
-                        {index === 0 && (
-                          <Flex align="center" gap="1" wrap="wrap">
-                            <Text weight="medium">{item.label}</Text>
-                            {item.change !== 'changed' && <Badge size="1" color={item.change === 'added' ? 'green' : 'red'}>{item.change}</Badge>}
-                          </Flex>
-                        )}
-                      </Table.Cell>
-                      <Table.Cell>{field.field}</Table.Cell>
-                      <Table.Cell><Text color="gray">{field.from || '—'}</Text></Table.Cell>
-                      <Table.Cell>{field.to || '—'}</Table.Cell>
-                    </Table.Row>
-                  )))}
-                </Table.Body>
-              </Table.Root>
-            </Box>
-          ))}
-          {diffView && !readOnly && diffView.changes.length > 0 && (
-            <Flex justify="end" gap="2" mt="3">
-              <Button color="red" onClick={() => restorePull(diffView.pull)}>Restore to working copy</Button>
-            </Flex>
+            <Stack spacing={1}>
+              {users.map((user) => (
+                <Paper key={user.username} elevation={0} sx={{ p: 1.25, borderRadius: 2, bgcolor: 'action.hover' }}>
+                  <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+                    <Stack direction="row" spacing={0.75} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>{user.username}</Typography>
+                      <Chip
+                        size="small"
+                        label={roleLabel(user.role)}
+                        color={user.role === 'admin' ? 'primary' : user.role === 'editor' ? 'warning' : user.role === 'resident' ? 'success' : 'default'}
+                      />
+                    </Stack>
+                    <Chip size="small" label={`Last sign-in: ${user.lastSignIn ? fmtTime(user.lastSignIn) : 'never'}`} />
+                  </Stack>
+                </Paper>
+              ))}
+            </Stack>
           )}
-        </Dialog.Content>
-      </Dialog.Root>
-    </Flex>
+        </AccordionDetails>
+      </Accordion>
+
+      <Card>
+        <CardContent>
+          <Stack spacing={1.5}>
+            <Stack direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                <Typography variant="h6" component="h2">Events</Typography>
+                {info && <Chip size="small" label={info} />}
+              </Stack>
+              <Button size="small" variant="outlined" color="inherit" onClick={load}>Refresh</Button>
+            </Stack>
+            {!events.length ? (
+              <Typography variant="body2" color="text.secondary">No history events yet.</Typography>
+            ) : (
+              <Stack spacing={1}>
+                {visibleEvents.map((entry) => {
+                  const details = entry.details || [];
+                  const expanded = open === entry.id && details.length > 0;
+                  const failed = entry.result === 'failed';
+                  return (
+                    <Paper
+                      key={entry.id}
+                      elevation={0}
+                      onClick={details.length ? () => setOpen(expanded ? null : entry.id) : undefined}
+                      sx={(theme) => ({
+                        p: 1.5,
+                        borderRadius: 2,
+                        cursor: details.length ? 'pointer' : 'default',
+                        bgcolor: failed ? alpha(theme.palette.error.main, 0.14) : theme.palette.action.hover,
+                        opacity: entry.revertedBy ? 0.72 : 1,
+                      })}
+                    >
+                      <Stack spacing={1}>
+                        <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+                          <Stack spacing={0.75} sx={{ flex: 1, minWidth: 0 }}>
+                            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                              {entry.summary || ACTIONS[entry.action] || entry.action}
+                            </Typography>
+                            <Stack direction="row" spacing={0.75} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                              <Chip size="small" color="primary" label={ACTIONS[entry.action] || entry.action} />
+                              {entry.user && <Chip size="small" label={entry.user} />}
+                              <Chip size="small" label={fmtTime(entry.time)} />
+                              {entry.result === 'done' && <Chip size="small" color="success" label="OK" />}
+                              {failed && <Chip size="small" color="error" label="Failed" />}
+                              {entry.revertedBy && (
+                                <Chip
+                                  size="small"
+                                  color="warning"
+                                  label={`Reverted by ${entry.revertedBy.user}`}
+                                  title={`${entry.revertedBy.user} · ${fmtTime(entry.revertedBy.time)}`}
+                                />
+                              )}
+                              {details.length > 0 && (
+                                <Chip size="small" label={expanded ? 'Hide changes' : `${details.length} detail${details.length === 1 ? '' : 's'}`} />
+                              )}
+                            </Stack>
+                            {failed && entry.error && (
+                              <Typography variant="caption" color="error.main">{entry.error}</Typography>
+                            )}
+                          </Stack>
+                          {!entry.revertedBy && entry.revertible && !readOnly && (
+                            <Box sx={{ flexShrink: 0, ml: 'auto' }}>
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                onClick={(event) => { event.stopPropagation(); revert(entry); }}
+                              >
+                                Revert
+                              </Button>
+                            </Box>
+                          )}
+                        </Stack>
+                        {expanded && (
+                          <>
+                            <Divider />
+                            <Stack spacing={1}>
+                              {details.map((detail) => (
+                                <Paper key={detail.key + detail.label} elevation={0} sx={{ p: 1.25, borderRadius: 1.5, bgcolor: 'background.paper' }}>
+                                  <Stack spacing={0.75}>
+                                    <Stack direction="row" spacing={0.75} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                                      <Typography variant="body2" sx={{ fontWeight: 600 }}>{detail.label}</Typography>
+                                      {detail.change && detail.change !== 'changed' && (
+                                        <Chip size="small" color={detail.change === 'added' ? 'success' : 'error'} label={detail.change} />
+                                      )}
+                                    </Stack>
+                                    {detail.fields.length > 0 && (
+                                      <Stack spacing={0.5}>
+                                        {detail.fields.map((field, i) => (
+                                          <Typography key={i} variant="caption" color="text.secondary">
+                                            <strong>{field.field}:</strong> {field.from || '—'} → <strong>{field.to || '—'}</strong>
+                                          </Typography>
+                                        ))}
+                                      </Stack>
+                                    )}
+                                  </Stack>
+                                </Paper>
+                              ))}
+                            </Stack>
+                          </>
+                        )}
+                      </Stack>
+                    </Paper>
+                  );
+                })}
+                {events.length > shown && (
+                  <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', pt: 0.5 }}>
+                    <Button size="small" variant="outlined" onClick={() => setShown((n) => n + EVENTS_PAGE)}>
+                      Show {Math.min(EVENTS_PAGE, events.length - shown)} more
+                    </Button>
+                    <Typography variant="caption" color="text.secondary">
+                      Showing {shown} of {events.length}
+                    </Typography>
+                  </Stack>
+                )}
+              </Stack>
+            )}
+          </Stack>
+        </CardContent>
+      </Card>
+
+      {pulls.length > 0 && (
+        <Accordion variant="outlined" disableGutters>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap', pr: 1 }}>
+              <Typography variant="h6" component="h2">Past pulls (point-in-time rollback)</Typography>
+              <Chip size="small" label={`${pulls.length}`} />
+            </Stack>
+          </AccordionSummary>
+          <AccordionDetails sx={{ pt: 0 }}>
+            <Stack spacing={1.5}>
+              <Typography variant="body2" color="text.secondary">
+                Up to 50 distinct residents pulls are archived per gate. Compare any past pull against your current working
+                copy, or restore it to the working copy (nothing touches the gate until Send to gate).
+              </Typography>
+              <Stack spacing={1}>
+                {pulls.map((pull) => (
+                  <Paper key={pull.id} elevation={0} sx={{ p: 1.25, borderRadius: 2, bgcolor: 'action.hover' }}>
+                    <Stack direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+                      <Stack direction="row" spacing={0.75} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                        <Chip size="small" label={fmtTime(pull.pulledAt)} />
+                        <Chip size="small" label={pull.actor} />
+                        <Chip size="small" label={`${pull.residentsCount} entries`} />
+                        <Chip size="small" label={`${pull.cardsCount} cards`} />
+                      </Stack>
+                      <Stack direction="row" spacing={1} sx={{ flexShrink: 0, ml: 'auto' }}>
+                        <Button size="small" variant="outlined" color="inherit" onClick={() => previewPull(pull)}>Compare</Button>
+                        {!readOnly && <Button size="small" variant="outlined" onClick={() => restorePull(pull)}>Restore</Button>}
+                      </Stack>
+                    </Stack>
+                  </Paper>
+                ))}
+              </Stack>
+            </Stack>
+          </AccordionDetails>
+        </Accordion>
+      )}
+
+      <Dialog open={diffView !== null} onClose={() => setDiffView(null)} maxWidth="md" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+          <span>{diffView ? `Changes to restore pull from ${fmtTime(diffView.pull.pulledAt)}` : ''}</span>
+          <IconButton size="small" aria-label="Close" onClick={() => setDiffView(null)}>
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent dividers>
+          {diffView && (diffView.changes.length === 0 ? (
+            <Typography variant="body2" color="text.secondary">The working copy already matches this pull.</Typography>
+          ) : (
+            <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 380 }}>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Item</TableCell>
+                    <TableCell>Field</TableCell>
+                    <TableCell>Current</TableCell>
+                    <TableCell>Archived</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {diffView.changes.flatMap((item) => (item.fields.length ? item.fields : [{ field: '', from: '', to: '' }]).map((field, index) => (
+                    <TableRow key={`${item.key}-${field.field}-${index}`}>
+                      <TableCell>
+                        {index === 0 && (
+                          <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                            <Typography variant="body2" sx={{ fontWeight: 500 }}>{item.label}</Typography>
+                            {item.change !== 'changed' && (
+                              <Chip size="small" color={item.change === 'added' ? 'success' : 'error'} label={item.change} />
+                            )}
+                          </Stack>
+                        )}
+                      </TableCell>
+                      <TableCell>{field.field}</TableCell>
+                      <TableCell>
+                        <Typography variant="body2" color="text.secondary">{field.from || '—'}</Typography>
+                      </TableCell>
+                      <TableCell>{field.to || '—'}</TableCell>
+                    </TableRow>
+                  )))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          ))}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 1.5 }}>
+          <Button color="inherit" onClick={() => setDiffView(null)}>Close</Button>
+          {diffView && !readOnly && diffView.changes.length > 0 && (
+            <Button variant="contained" color="error" onClick={() => restorePull(diffView.pull)}>
+              Restore to working copy
+            </Button>
+          )}
+        </DialogActions>
+      </Dialog>
+    </Stack>
   );
 }

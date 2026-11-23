@@ -47,6 +47,24 @@ function findTag(node: unknown, tag: string): string | undefined {
 /** Operations polled while a session runs; only their failures are logged. */
 const POLLED = new Set(['GetSessionStatus']);
 
+export interface DksCloudClientOptions {
+  url?: string;
+  timeoutMs?: number;
+  log?: (message: string) => void;
+}
+
+export interface SendResidentDataOptions {
+  files: Partial<Record<ResidentFile, Uint8Array>>;
+  maps?: Partial<Record<ResidentFile, Uint8Array>>;
+  oldSendStamp?: string;
+}
+
+export interface WaitSessionOptions {
+  intervalMs?: number;
+  maxMs?: number;
+  onStatus?: (status: string) => void;
+}
+
 export class DksCloudClient {
   private readonly url: string;
   private readonly timeoutMs: number;
@@ -60,8 +78,7 @@ export class DksCloudClient {
    * @param [options.timeoutMs] - Timeout in milliseconds.
    * @param [options.log] - Callback receiving progress or diagnostic messages.
    */
-  constructor({ url = DEFAULT_URL, timeoutMs = 60000, log = () => {} }:
-    { url?: string; timeoutMs?: number; log?: (message: string) => void } = {}) {
+  constructor({ url = DEFAULT_URL, timeoutMs = 60000, log = () => {} }: DksCloudClientOptions = {}) {
     this.url = url;
     this.timeoutMs = timeoutMs;
     this.log = log;
@@ -198,12 +215,7 @@ export class DksCloudClient {
    * @param [options.oldSendStamp] - Old send stamp.
    * @returns Promise resolving to `string`.
    */
-  sendResidentData(
-    sessionId: Param,
-    { files, maps = {}, oldSendStamp = '' }: {
-      files: Partial<Record<ResidentFile, Uint8Array>>; maps?: Partial<Record<ResidentFile, Uint8Array>>; oldSendStamp?: string;
-    },
-  ): Promise<string> {
+  sendResidentData(sessionId: Param, { files, maps = {}, oldSendStamp = '' }: SendResidentDataOptions): Promise<string> {
     const hex = (bytes: Uint8Array | undefined) => (bytes ? encodeFileText(bytes) : '');
     return this.call('SendResidentData', {
       SessionID: sessionId,

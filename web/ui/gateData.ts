@@ -3,7 +3,7 @@
  *
  * The open gate's data and connection, and the sidebar's spacing, for GateApp.
  */
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { CameraSettings, DataReply, GatePrefs, Job, ResidentsReply } from '../../src/types.ts';
 import { ApiError, errorText, type GateApi } from './api.ts';
 
@@ -107,32 +107,4 @@ export function useGateJob(gapi: GateApi, events: GateJobEvents) {
   const stop = useCallback(() => { pollGen.current++; clearTimeout(timer.current); }, []);
   const started = () => { running.current = true; refresh(); };
   return { job, start, stop, started };
-}
-
-/**
- * Sidebar spacing: the roomiest density (0 normal, 1 compact, 2 tight) whose menu fits without scrolling. Rechecked
- * after every render (items and the job badge come and go) and on window resize. Not on phones: the drawer scrolls
- * and keeps its items full size. Returns the ref for the sidebar element.
- *
- * @param phone - Gate system phone number (digits or formatted).
- * @returns Operation result.
- */
-export function useSidebarDensity(phone: boolean) {
-  const sidebar = useRef<HTMLElement>(null);
-  useLayoutEffect(() => {
-    const fit = () => {
-      const el = sidebar.current;
-      if (phone) return;
-      const menu = el?.querySelector<HTMLElement>('.sidebar-nav');
-      if (!el || !menu) return;
-      for (let density = 0; density <= 2; density++) {
-        el.dataset.density = String(density);
-        if (menu.scrollHeight <= menu.clientHeight) break;
-      }
-    };
-    fit();
-    window.addEventListener('resize', fit);
-    return () => window.removeEventListener('resize', fit);
-  });
-  return sidebar;
 }

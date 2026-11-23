@@ -1,5 +1,19 @@
-import type { MouseEvent } from 'react';
-import { Button, Dialog, Flex, IconButton, Progress, Text } from '@radix-ui/themes';
+import {
+  Alert,
+  Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  IconButton,
+  LinearProgress,
+  Paper,
+  Stack,
+  Typography,
+} from '@mui/material';
+import CloseIcon from '@mui/icons-material/Close';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import type { TransactionRow } from '../../../src/types.ts';
 import { useBackLayer } from '../back.ts';
 import { fileChannel, frameCaption, isVideo, posterOf, shiftedTime, snapFiles, type Snaps } from './snapshots.ts';
@@ -13,8 +27,9 @@ interface SnapTileProps {
 }
 
 /**
- * One saved picture (or video), or a "?" box when it is missing, with a ↻ button that fetches it again.
- * thumb: the small Transactions-table version; clicking it opens the viewer.
+ * One saved picture (or video), or a "?" box when it is missing.
+ * `thumb`: the small Transactions-table version wrapped in an accessible button; clicking it opens the viewer.
+ * Inside `SnapViewer` (`!thumb`), renders full-size media with a per-frame refresh button.
  *
  * @param props - Component props.
  * @param props.transaction - Transaction record or row.
@@ -33,26 +48,88 @@ function SnapTile({ transaction, file, thumb, snaps, onOpen }: SnapTileProps) {
   const partial = saved && snapshot.short ? snapshot.short[file] : 0;
   const shift = saved && snapshot.shifts ? snapshot.shifts[file] : 0;
   const title = `${label}${saved ? '' : ` · no ${video ? 'video' : 'picture'}${snapshot.error ? ` (${snapshot.error})` : ''}`}`
-    + `${partial ? ` · partial video: ${partial} s of 2 minutes (click ↻ to get it again)` : ''}`
+    + `${partial ? ` · partial video: ${partial} s of 2 minutes` : ''}`
     + `${shift ? ` · taken at ${shiftedTime(transaction.minute, file, shift)} (${shift > 0 ? '+' : ''}${shift} s, no recording at the planned time)` : ''}`
     + `${thumb ? ` · click to see ${video ? 'the videos' : 'every frame'}` : ''}`;
-  const open = thumb ? (event: MouseEvent) => { event.stopPropagation(); onOpen?.(); } : undefined;
+
+  if (thumb) {
+    return (
+      <button
+        type="button"
+        className="snap-tile"
+        aria-label={title}
+        title={title}
+        onClick={(event) => { event.stopPropagation(); onOpen?.(); }}
+        style={{ padding: 0, border: 0, background: 'transparent', cursor: 'pointer' }}
+      >
+        {!saved ? (
+          <span className="snap-missing" aria-hidden="true">?</span>
+        ) : (
+          <img
+            className="snap-thumb"
+            src={snaps.src(transaction.minute, file, video ? posterOf(file) : file)}
+            loading="lazy"
+            alt={label}
+          />
+        )}
+        {video && saved && <span className="snap-play" aria-hidden="true">▶</span>}
+        {partial ? <span className="snap-partial">Partial</span> : null}
+      </button>
+    );
+  }
+
   const busy = Boolean(snaps.refreshing[key]);
   const failed = snaps.errors[key];
+  const refreshTitle = busy ? `Getting this ${video ? 'video' : 'picture'} again…`
+    : failed ? `Not refreshed: ${failed}. Click to try again.`
+      : `Get ${label} again from the recorder`;
+
   return (
-    <span className={`snap-tile${thumb ? ' thumb' : ''}`}>
-      {!saved ? <span className="snap-missing" title={title} onClick={open}>?</span>
-        : video && !thumb ? <video className="snap-video" controls preload="none" title={title}
-          poster={snaps.src(transaction.minute, file, posterOf(file))} src={snaps.src(transaction.minute, file)} />
-          : <img className={thumb ? 'snap-thumb' : ''} src={snaps.src(transaction.minute, file, video ? posterOf(file) : file)} loading="lazy" alt={label}
-            title={title} onClick={open} />}
-      {video && thumb && saved && <span className="snap-play">▶</span>}
-      {partial ? <span className="snap-partial">Partial</span> : null}
-      <button type="button" className={`snap-refresh${busy ? ' busy' : ''}${failed ? ' failed' : ''}`} disabled={busy}
-        title={busy ? `Getting this ${video ? 'video' : 'picture'} again…` : failed ? `Not refreshed: ${failed}. Click to try again.`
-          : `Get ${label} again from the recorder`}
-        onClick={(event) => { event.stopPropagation(); snaps.refresh(transaction.minute, file); }}>↻</button>
-    </span>
+    <Paper variant="outlined" sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+      <Box sx={{ position: 'relative' }}>
+        {!saved ? (
+          <Box
+            className="snap-missing"
+            title={title}
+            sx={{ width: '100%', height: 180, boxSizing: 'border-box', cursor: 'default' }}
+          >
+            No {video ? 'video' : 'picture'}
+          </Box>
+        ) : video ? (
+          <video
+            className="snap-full"
+            controls
+            preload="none"
+            title={title}
+            poster={snaps.src(transaction.minute, file, posterOf(file))}
+            src={snaps.src(transaction.minute, file)}
+          />
+        ) : (
+          <img
+            className="snap-full"
+            src={snaps.src(transaction.minute, file)}
+            loading="lazy"
+            alt={label}
+            title={title}
+          />
+        )}
+        {partial ? <span className="snap-partial">Partial ({partial} s)</span> : null}
+      </Box>
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+        <Typography variant="caption" color="text.secondary">{label}</Typography>
+        <IconButton
+          size="small"
+          disabled={busy}
+          color={failed ? 'error' : 'default'}
+          aria-label={refreshTitle}
+          title={refreshTitle}
+          onClick={(event) => { event.stopPropagation(); snaps.refresh(transaction.minute, file); }}
+        >
+          <RefreshIcon fontSize="small" />
+        </IconButton>
+      </Stack>
+      {failed && <Alert severity="error" sx={{ py: 0 }}>Not refreshed: {failed}</Alert>}
+    </Paper>
   );
 }
 
@@ -73,11 +150,15 @@ function SnapBar({ minute, snaps }: SnapBarProps) {
   const counts = snaps.byMinute[minute];
   const now = minute === snaps.current;
   return (
-    <Flex display="inline-flex" align="center" gap="1" title={now ? `Downloading ${snaps.noun}: ${counts.done} of ${counts.frames}`
-      : 'Waiting for its turn in the snapshot run'}>
-      <Progress size="1" value={(counts.done / (counts.frames || 1)) * 100} style={{ width: 60 }} />
-      <Text size="1" color="gray">{now ? `${counts.done} of ${counts.frames}` : 'Waiting'}</Text>
-    </Flex>
+    <Stack
+      direction="row"
+      spacing={1}
+      sx={{ display: 'inline-flex', alignItems: 'center' }}
+      title={now ? `Downloading ${snaps.noun}: ${counts.done} of ${counts.frames}` : 'Waiting for its turn in the snapshot run'}
+    >
+      <LinearProgress variant="determinate" value={(counts.done / (counts.frames || 1)) * 100} sx={{ width: 60 }} />
+      <Typography variant="caption" color="text.secondary">{now ? `${counts.done} of ${counts.frames}` : 'Waiting'}</Typography>
+    </Stack>
   );
 }
 
@@ -98,33 +179,50 @@ interface SnapCellProps {
  * @returns Rendered React element.
  */
 export function SnapCell({ transaction, snaps, onOpen }: SnapCellProps) {
-  if (!transaction.camera) return <Text size="1" color="gray" title="Gate data transfers, hold-open events and other gate commands don't get camera footage">—</Text>;
+  if (!transaction.camera) {
+    return (
+      <Typography variant="caption" color="text.secondary" title="Gate data transfers, hold-open events and other gate commands don't get camera footage">
+        —
+      </Typography>
+    );
+  }
   const snapshot = snaps.snapshots[transaction.minute];
   const bar = snaps.byMinute[transaction.minute] ? <SnapBar minute={transaction.minute} snaps={snaps} /> : null;
   const getButton = (title: string) => (
-    <Button size="1" variant="soft" disabled={snaps.running} style={{ whiteSpace: 'nowrap' }}
+    <Button
+      size="small"
+      variant="outlined"
+      disabled={snaps.running}
+      sx={{ whiteSpace: 'nowrap' }}
       title={snaps.running ? 'Wait for the snapshot run to finish' : title}
-      onClick={(event) => { event.stopPropagation(); snaps.runMinute(transaction.minute); }}>{snaps.video ? 'Get video' : 'Get pictures'}</Button>
+      onClick={(event) => { event.stopPropagation(); snaps.runMinute(transaction.minute); }}
+    >
+      {snaps.video ? 'Get video' : 'Get pictures'}
+    </Button>
   );
   if (snapshot && snapshot.status === 'removed') {
     return bar || (
-      <Flex gap="2" align="center" wrap="nowrap">
-        <Text size="1" color="gray" title={snapshot.error || ''}>Removed</Text>
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+        <Typography variant="caption" color="text.secondary" title={snapshot.error || ''}>Removed</Typography>
         {getButton(`${snapshot.error ? `${snapshot.error}. ` : ''}Get the camera ${snaps.noun} again from the recorder (it works while the recorder still has this footage)`)}
-      </Flex>
+      </Stack>
     );
   }
-  if (!snapshot || (snaps.video && snapshot.files.length && !snapshot.files.some(isVideo))) return bar || getButton(`Get the camera ${snaps.noun} for this minute only`);
+  if (!snapshot || (snaps.video && snapshot.files.length && !snapshot.files.some(isVideo))) {
+    return bar || getButton(`Get the camera ${snaps.noun} for this minute only`);
+  }
   const firsts = new Map<number, string>(); // channel -> its first saved frame, or its first frame when none is saved
   for (const file of snapFiles(snaps.settings, snapshot)) {
     const channel = fileChannel(file);
     if (!firsts.has(channel) || (!snapshot.files.includes(firsts.get(channel)!) && snapshot.files.includes(file))) firsts.set(channel, file);
   }
   return (
-    <Flex gap="1" align="center" wrap="nowrap">
-      {[...firsts.values()].map((file) => <SnapTile key={file} transaction={transaction} file={file} thumb snaps={snaps} onOpen={() => onOpen(transaction)} />)}
+    <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+      {[...firsts.values()].map((file) => (
+        <SnapTile key={file} transaction={transaction} file={file} thumb snaps={snaps} onOpen={() => onOpen(transaction)} />
+      ))}
       {bar}
-    </Flex>
+    </Stack>
   );
 }
 
@@ -146,29 +244,31 @@ interface SnapViewerProps {
 export function SnapViewer({ transaction, snaps, onClose }: SnapViewerProps) {
   const snapshot = transaction && snaps.snapshots[transaction.minute];
   const byChannel = new Map<number, string[]>();
-  if (snapshot) for (const f of snapFiles(snaps.settings, snapshot)) byChannel.set(fileChannel(f), [...(byChannel.get(fileChannel(f)) || []), f]);
-  useBackLayer(Boolean(transaction && snapshot), onClose);
+  if (snapshot) for (const file of snapFiles(snaps.settings, snapshot)) byChannel.set(fileChannel(file), [...(byChannel.get(fileChannel(file)) || []), file]);
+  const isOpen = Boolean(transaction && snapshot);
+  useBackLayer(isOpen, onClose);
   return (
-    <Dialog.Root open={Boolean(transaction && snapshot)} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <Dialog.Content width="fit-content" maxWidth="96vw" aria-describedby={undefined}>
-        <Flex align="center" mb="3">
-          <Dialog.Title mb="0">{transaction && `${transaction.date} ${transaction.time} · ${transaction.name || transaction.eventType || ''}`}</Dialog.Title>
-          <Flex flexGrow="1" />
-          <Dialog.Close><IconButton variant="ghost" color="gray" title="Close">✕</IconButton></Dialog.Close>
-        </Flex>
-        <Flex direction="column" gap="3" className="snap-viewer">
+    <Dialog open={isOpen} onClose={onClose} maxWidth="lg" fullWidth>
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+        <span>{transaction ? `${transaction.date} ${transaction.time} · ${transaction.name || transaction.eventType || ''}` : ''}</span>
+        <IconButton size="small" aria-label="Close" onClick={onClose}>
+          <CloseIcon fontSize="small" />
+        </IconButton>
+      </DialogTitle>
+      <DialogContent dividers>
+        <Stack spacing={2}>
           {transaction && [...byChannel].sort((a, b) => a[0] - b[0]).map(([ch, files]) => (
-            <Flex key={ch} gap="2" wrap="wrap" align="start" justify="center">
+            <Box key={ch} className={files.length === 1 ? 'snap-grid one' : 'snap-grid'}>
               {files.map((file) => (
-                <figure key={file} className="snap-figure">
-                  <SnapTile transaction={transaction} file={file} thumb={false} snaps={snaps} />
-                  <figcaption>{snaps.channelName(ch)} · {frameCaption(file)}</figcaption>
-                </figure>
+                <SnapTile key={file} transaction={transaction} file={file} thumb={false} snaps={snaps} />
               ))}
-            </Flex>
+            </Box>
           ))}
-        </Flex>
-      </Dialog.Content>
-    </Dialog.Root>
+        </Stack>
+      </DialogContent>
+      <DialogActions sx={{ px: 3, py: 1.5 }}>
+        <Button color="inherit" onClick={onClose}>Close</Button>
+      </DialogActions>
+    </Dialog>
   );
 }

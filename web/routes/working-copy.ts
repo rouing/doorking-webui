@@ -59,9 +59,10 @@ export function workingCopyRoutes(modules: Modules): Route[] {
       return out;
     })),
 
-    // History: this gate's events (newest first) and the gate's users with their last sign-in.
+    // History: this gate's events (newest first) and minimal user summaries (never exposing private emails/phones to read-only callers).
     route('GET', `${G}/history`, 'gate', async ({ gate }) => [200, {
-      events: await dk.listHistory(store, gate.phoneNumber), users: await dk.gateUsers(store, gate.phoneNumber),
+      events: await dk.listHistory(store, gate.phoneNumber),
+      users: (await dk.gateUsers(store, gate.phoneNumber)).map(({ username, role, lastSignIn }) => ({ username, role, lastSignIn })),
     }]),
     route('POST', `${G}/history/:id/revert`, 'gate-editor', ({ session, gate, params }) => serial(gate.phoneNumber, () => revertEvent(session, gate, params.id))),
 

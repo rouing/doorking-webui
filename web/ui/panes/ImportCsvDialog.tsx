@@ -4,8 +4,29 @@
  * CSV import dialog for Residents/Vendors with server-side dry-run preview (`POST /residents/import`).
  */
 import { useState, type ChangeEvent } from 'react';
-import { Badge, Box, Button, Callout, Dialog, Flex, IconButton, Table, Text, TextArea } from '@radix-ui/themes';
+import {
+  Alert,
+  Button,
+  Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  IconButton,
+  Paper,
+  Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  TextField,
+  Typography,
+} from '@mui/material';
+import CloseIcon from '@mui/icons-material/Close';
 import type { SendChange } from '../../../src/types.ts';
+import { parseNanpPhone } from '../../../src/shared.ts';
 import { errorText, type GateApi } from '../api.ts';
 import { useBackLayer } from '../back.ts';
 
@@ -59,42 +80,47 @@ export function parseImportCsv(text: string, defaultVendor: boolean): ImportRow[
   const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
   if (lines.length < 2) return [];
   const headers = splitCsvLine(lines[0]).map((h) => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
-  const col = (...names: string[]) => headers.findIndex((h) => names.includes(h));
-  const iCode = col('directorycode', 'dir', 'code');
-  const iName = col('name', 'resident');
-  const iAac = col('areacode', 'aac');
-  const iPhone = col('phone', 'phonenumber');
-  const iEntry = col('entrycode', 'ent');
-  const iSec = col('securitylevel', 'security', 'sl');
-  const iVendor = col('vendor');
-  const iNote = col('note', 'notes', 'residentnotes');
-  const iCards = headers.map((h, idx) => (/^(cards?|device\d*)$/.test(h) ? idx : -1)).filter((idx) => idx >= 0);
+  const col = (...names: string[]) => {
+    for (const candidate of names) {
+      const idx = headers.indexOf(candidate);
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
+  const codeCol = col('directorycode', 'dir', 'code');
+  const nameCol = col('name', 'resident');
+  const areaCodeCol = col('areacode', 'aac');
+  const phoneCol = col('phone', 'phonenumber');
+  const entryCol = col('entrycode', 'ent');
+  const securityCol = col('securitylevel', 'security', 'sl');
+  const vendorCol = col('vendor');
+  const noteCol = col('residentnotes', 'note', 'notes');
+  const cardCols = headers.map((h, idx) => (/^(cards?|device\d*)$/.test(h) ? idx : -1)).filter((idx) => idx >= 0);
 
   const out: ImportRow[] = [];
   for (const line of lines.slice(1)) {
     const cells = splitCsvLine(line);
-    const directoryCode = iCode >= 0 ? cells[iCode] || '' : '';
-    const name = iName >= 0 ? cells[iName] || '' : '';
+    const directoryCode = codeCol >= 0 ? cells[codeCol] || '' : '';
+    const name = nameCol >= 0 ? cells[nameCol] || '' : '';
     if (!directoryCode && !name) continue;
-    const rawPhone = (iPhone >= 0 ? cells[iPhone] || '' : '').replace(/\D/g, '');
-    const rawAac = (iAac >= 0 ? cells[iAac] || '' : '').replace(/\D/g, '');
-    let areaCode = rawAac;
-    let phone = rawPhone;
-    if (!areaCode && rawPhone.length === 10) { areaCode = rawPhone.slice(0, 3); phone = rawPhone.slice(3); }
-    else if (!areaCode && rawPhone.length === 11 && rawPhone.startsWith('1')) { areaCode = rawPhone.slice(0, 4); phone = rawPhone.slice(4); }
-    const cards = iCards.flatMap((idx) => (cells[idx] || '').split(/[\s;]+/).map((c) => c.trim()).filter(Boolean));
-    const secText = iSec >= 0 ? cells[iSec] || '' : '';
-    const vendorText = iVendor >= 0 ? (cells[iVendor] || '').toLowerCase() : '';
+    const rawPhone = (phoneCol >= 0 ? cells[phoneCol] || '' : '').replace(/\D/g, '');
+    const rawArea = (areaCodeCol >= 0 ? cells[areaCodeCol] || '' : '').replace(/\D/g, '');
+    const parsed = !rawArea ? parseNanpPhone(rawPhone, { keepLeadingOne: true }) : null;
+    const areaCode = rawArea || parsed?.areaCode || '';
+    const phone = parsed ? parsed.phone : rawPhone;
+    const cards = cardCols.flatMap((idx) => (cells[idx] || '').split(/[\s;]+/).map((c) => c.trim()).filter(Boolean));
+    const secText = securityCol >= 0 ? cells[securityCol] || '' : '';
+    const vendorText = vendorCol >= 0 ? (cells[vendorCol] || '').toLowerCase() : '';
     out.push({
       directoryCode,
       name,
-      vendor: iVendor >= 0 ? (vendorText === 'y' || vendorText === 'yes' || vendorText === 'true') : defaultVendor,
+      vendor: vendorCol >= 0 ? (vendorText === 'y' || vendorText === 'yes' || vendorText === 'true') : defaultVendor,
       ...(areaCode && { areaCode }),
       ...(phone && { phone }),
-      ...(iEntry >= 0 && cells[iEntry] && { entryCode: cells[iEntry] }),
+      ...(entryCol >= 0 && cells[entryCol] && { entryCode: cells[entryCol] }),
       ...(secText !== '' && !Number.isNaN(Number(secText)) && { securityLevel: Number(secText) }),
       ...(cards.length > 0 && { cards }),
-      ...(iNote >= 0 && cells[iNote] && { note: cells[iNote] }),
+      ...(noteCol >= 0 && cells[noteCol] && { note: cells[noteCol] }),
     });
   }
   return out;
@@ -155,73 +181,95 @@ export function ImportCsvDialog({ open, onOpenChange, vendor, gapi, onImported }
   }
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Content maxWidth="720px" aria-describedby={undefined}>
-        <Flex align="center" mb="2">
-          <Dialog.Title mb="0">Import CSV to working copy</Dialog.Title>
-          <Flex flexGrow="1" />
-          <Dialog.Close><IconButton variant="ghost" color="gray" title="Close">✕</IconButton></Dialog.Close>
-        </Flex>
-        <Flex direction="column" gap="3">
-          <Text size="2" color="gray">
+    <Dialog open={open} onClose={() => onOpenChange(false)} maxWidth="md" fullWidth>
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+        <span>Import CSV to working copy</span>
+        <IconButton size="small" aria-label="Close" onClick={() => onOpenChange(false)}>
+          <CloseIcon fontSize="small" />
+        </IconButton>
+      </DialogTitle>
+      <DialogContent dividers>
+        <Stack spacing={2}>
+          <Typography variant="body2" color="text.secondary">
             Accepts simple headers (<code>directoryCode,name,phone,entryCode,securityLevel,cards,note</code>) or
-            DoorKing's <code>ResidentsExport.csv</code>. Preview shows the exact working-copy diff before saving.
-          </Text>
-          <input type="file" accept=".csv,text/csv" onChange={onFile} />
-          <TextArea rows={6} placeholder="directoryCode,name,phone,entryCode,cards&#10;101,Smith J,2145550101,4821,10234"
-            value={csvText} onChange={(e) => { setCsvText(e.target.value); setPreview(null); }} />
-          {error && <Callout.Root color="red"><Callout.Text>{error}</Callout.Text></Callout.Root>}
-          <Flex gap="2">
-            <Button variant="soft" disabled={busy || !csvText.trim()} onClick={() => runImport(true)}>Preview diff</Button>
+            DoorKing&apos;s <code>ResidentsExport.csv</code>. Preview shows the exact working-copy diff before saving.
+          </Typography>
+          <input type="file" accept=".csv,text/csv" aria-label="Upload CSV file" onChange={onFile} />
+          <TextField
+            multiline
+            minRows={6}
+            fullWidth
+            placeholder={'directoryCode,name,phone,entryCode,cards\n101,Smith J,2145550101,4821,10234'}
+            slotProps={{ htmlInput: { 'aria-label': 'CSV rows' } }}
+            value={csvText}
+            onChange={(event) => { setCsvText(event.target.value); setPreview(null); }}
+          />
+          {error && <Alert severity="error">{error}</Alert>}
+          <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: 'wrap' }}>
+            <Button variant="outlined" disabled={busy || !csvText.trim()} onClick={() => runImport(true)}>Preview diff</Button>
             {preview && preview.errors.length === 0 && (
-              <Button disabled={busy} onClick={() => runImport(false)}>
+              <Button variant="contained" disabled={busy} onClick={() => runImport(false)}>
                 Apply import ({preview.added} added, {preview.updated} updated)
               </Button>
             )}
-          </Flex>
+          </Stack>
           {preview && (
-            <Flex direction="column" gap="2">
-              <Text size="2">
+            <Stack spacing={1.5}>
+              <Typography variant="body2">
                 Preview: <strong>{preview.added}</strong> added, <strong>{preview.updated}</strong> updated
                 {preview.errors.length > 0 ? `, ${preview.errors.length} error(s)` : ''}.
-              </Text>
+              </Typography>
               {preview.errors.length > 0 && (
-                <Callout.Root color="red">
-                  <Flex direction="column" gap="1">
-                    {preview.errors.slice(0, 10).map((e) => (
-                      <Text key={`${e.row}-${e.directoryCode}`} size="1">Row {e.row} ({e.directoryCode || 'no code'}): {e.error}</Text>
+                <Alert severity="error">
+                  <Stack spacing={0.5}>
+                    {preview.errors.slice(0, 10).map((item) => (
+                      <Typography key={`${item.row}-${item.directoryCode}`} variant="caption">
+                        Row {item.row} ({item.directoryCode || 'no code'}): {item.error}
+                      </Typography>
                     ))}
-                  </Flex>
-                </Callout.Root>
+                  </Stack>
+                </Alert>
               )}
               {preview.changes.length > 0 && (
-                <Box style={{ maxHeight: 240, overflowY: 'auto', border: '1px solid var(--gray-a5)', borderRadius: 'var(--radius-2)' }}>
-                  <Table.Root size="1">
-                    <Table.Header>
-                      <Table.Row>
-                        <Table.ColumnHeaderCell>Item</Table.ColumnHeaderCell>
-                        <Table.ColumnHeaderCell>Field</Table.ColumnHeaderCell>
-                        <Table.ColumnHeaderCell>Before</Table.ColumnHeaderCell>
-                        <Table.ColumnHeaderCell>After</Table.ColumnHeaderCell>
-                      </Table.Row>
-                    </Table.Header>
-                    <Table.Body>
+                <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 240 }}>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Item</TableCell>
+                        <TableCell>Field</TableCell>
+                        <TableCell>Before</TableCell>
+                        <TableCell>After</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
                       {preview.changes.slice(0, 40).flatMap((item) => item.fields.map((field, idx) => (
-                        <Table.Row key={`${item.key}-${field.field}-${idx}`}>
-                          <Table.Cell>{idx === 0 && <Flex gap="1" align="center"><Text weight="medium">{item.label}</Text><Badge size="1" color={item.change === 'added' ? 'green' : 'blue'}>{item.change}</Badge></Flex>}</Table.Cell>
-                          <Table.Cell>{field.field}</Table.Cell>
-                          <Table.Cell><Text color="gray">{field.from || '—'}</Text></Table.Cell>
-                          <Table.Cell>{field.to || '—'}</Table.Cell>
-                        </Table.Row>
+                        <TableRow key={`${item.key}-${field.field}-${idx}`}>
+                          <TableCell>
+                            {idx === 0 && (
+                              <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                                <Typography variant="body2" sx={{ fontWeight: 500 }}>{item.label}</Typography>
+                                <Chip size="small" label={item.change} color={item.change === 'added' ? 'success' : 'primary'} />
+                              </Stack>
+                            )}
+                          </TableCell>
+                          <TableCell>{field.field}</TableCell>
+                          <TableCell>
+                            <Typography variant="body2" color="text.secondary">{field.from || '—'}</Typography>
+                          </TableCell>
+                          <TableCell>{field.to || '—'}</TableCell>
+                        </TableRow>
                       )))}
-                    </Table.Body>
-                  </Table.Root>
-                </Box>
+                    </TableBody>
+                  </Table>
+                </TableContainer>
               )}
-            </Flex>
+            </Stack>
           )}
-        </Flex>
-      </Dialog.Content>
-    </Dialog.Root>
+        </Stack>
+      </DialogContent>
+      <DialogActions sx={{ px: 3, py: 1.5 }}>
+        <Button color="inherit" onClick={() => onOpenChange(false)}>Close</Button>
+      </DialogActions>
+    </Dialog>
   );
 }

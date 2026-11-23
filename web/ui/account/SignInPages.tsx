@@ -4,13 +4,22 @@
  * Pages shown before a normal sign-in: email links, forgotten password, first setup, forced password change.
  */
 import { useEffect, useState, type FormEvent } from 'react';
-import { Button, Callout, Card, Container, Flex, Heading, Text, TextField } from '@radix-ui/themes';
+import {
+  Alert, Button, Card, CardContent, CircularProgress, Container, Stack, TextField, Typography,
+} from '@mui/material';
 import type { SsoProviderInfo } from '../../../src/types.ts';
 import { api, errorText } from '../api.ts';
 import { Field } from '../panes/fields.tsx';
 import { startSso } from './SingleSignOn.tsx';
 import { PasswordForm, passwordProblem } from './passwords.tsx';
 import { PASSWORD_MIN } from '../../../src/shared.ts';
+
+const authContainerSx = {
+  pt: 'calc(env(safe-area-inset-top) + 32px)',
+  pb: 'calc(env(safe-area-inset-bottom) + 32px)',
+  pl: 'calc(env(safe-area-inset-left) + 16px)',
+  pr: 'calc(env(safe-area-inset-right) + 16px)',
+};
 
 interface EmailLinkProps {
   kind: 'verify' | 'reset' | 'invite';
@@ -28,23 +37,28 @@ interface EmailLinkProps {
  * @param props.kind - Item or operation kind.
  * @param props.token - One-time link token or session token.
  * @param props.onDone - Callback invoked when the action completes.
- * @param [props.sso] - Per-server SSO flow and discovery cache.
+ * @param [props.sso] - Per-server SSO providers.
  * @returns Rendered React element.
  */
 export function EmailLink({ kind, token, onDone, sso = [] }: EmailLinkProps) {
   const [password, setPassword] = useState('');
   const [again, setAgain] = useState('');
   const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
+  const [isResident, setIsResident] = useState(false);
   const [state, setState] = useState<{ ok?: string; error?: string }>({});
   const [busy, setBusy] = useState(kind !== 'reset');
   useEffect(() => {
     if (kind === 'verify') {
       api<{ email: string }>('POST', '/api/email/verify', { token })
-        .then((reply) => setState({ ok: `Your email ${reply.email} is confirmed.` }), (err) => setState({ error: errorText(err) })).finally(() => setBusy(false));
+        .then((reply) => setState({ ok: `Your email ${reply.email} is confirmed.` }), (err) => setState({ error: errorText(err) }))
+        .finally(() => setBusy(false));
       return;
     }
     if (kind === 'invite') {
-      api<{ username: string }>('POST', '/api/invite/check', { token }).then((reply) => setUsername(reply.username), (err) => setState({ error: errorText(err) }))
+      api<{ username: string; email?: string; isResident?: boolean }>('POST', '/api/invite/check', { token })
+        .then((reply) => { setUsername(reply.username); setEmail(reply.email || ''); setIsResident(Boolean(reply.isResident)); },
+          (err) => setState({ error: errorText(err) }))
         .finally(() => setBusy(false));
     }
   }, [kind, token]);
@@ -63,40 +77,58 @@ export function EmailLink({ kind, token, onDone, sso = [] }: EmailLinkProps) {
   const title = kind === 'verify' ? 'Confirm your email' : kind === 'reset' ? 'Choose a new password' : 'Welcome';
   const asksPassword = !state.ok && (kind === 'reset' || (kind === 'invite' && username));
   return (
-    <Container size="1" p={{ initial: '3', sm: '6' }} pt={{ initial: '5', sm: '6' }}>
-      <Card size={{ initial: '2', sm: '3' }}>
-        <form onSubmit={submit} autoComplete="off">
-          <Flex direction="column" gap="3">
-            <Heading>{title}</Heading>
-            {kind === 'invite' && username && !state.ok && <Text color="gray">Your username is <strong>{username}</strong>. Choose a password to finish setting up your account.</Text>}
-            {asksPassword && (
-              <>
-                <Field label={`New password (at least ${PASSWORD_MIN} characters)`}>
-                  <TextField.Root type="password" value={password} onChange={(event) => setPassword(event.target.value)} required autoComplete="new-password" />
-                </Field>
-                <Field label="New password again">
-                  <TextField.Root type="password" value={again} onChange={(event) => setAgain(event.target.value)} required autoComplete="new-password" />
-                </Field>
-                <Button type="submit" loading={busy}>{kind === 'invite' ? 'Save and sign in' : 'Save new password'}</Button>
-                {kind === 'invite' && sso.length > 0 && (
-                  <>
-                    <Text size="2" color="gray">Or skip the password and sign in with your work account:</Text>
-                    {sso.map((provider) => (
-                      <Button key={provider.id} type="button" variant="soft" disabled={busy}
-                        onClick={() => startSso('/api/sso/start', { provider: provider.id, invite: token }).catch((err) => setState({ error: errorText(err) }))}>
-                        Accept with {provider.name}
-                      </Button>
-                    ))}
-                  </>
-                )}
-              </>
-            )}
-            {busy && kind !== 'reset' && !username && <Text color="gray">Checking the link…</Text>}
-            {state.ok && <Callout.Root color="green"><Callout.Text>{state.ok}</Callout.Text></Callout.Root>}
-            {state.error && <Callout.Root color="red"><Callout.Text>{state.error}</Callout.Text></Callout.Root>}
-            {(state.ok || state.error) && <Flex><Button type="button" variant="soft" onClick={onDone}>Continue</Button></Flex>}
-          </Flex>
-        </form>
+    <Container maxWidth="xs" sx={authContainerSx}>
+      <Card>
+        <CardContent sx={{ p: { xs: 2.5, sm: 3.5 } }}>
+          <form onSubmit={submit} autoComplete="off">
+            <Stack spacing={2}>
+              <Typography variant="h5" component="h1">{title}</Typography>
+              {kind === 'invite' && username && !state.ok && (
+                isResident
+                  ? <Typography variant="body2" color="text.secondary">Welcome! You will sign in with <strong>{email || username}</strong>. Choose a password to activate your Resident Portal.</Typography>
+                  : <Typography variant="body2" color="text.secondary">Your username is <strong>{username}</strong>. Choose a password to finish setting up your account.</Typography>
+              )}
+              {asksPassword && (
+                <>
+                  <Field label={`New password (at least ${PASSWORD_MIN} characters)`}>
+                    <TextField type="password" size="small" fullWidth value={password} onChange={(event) => setPassword(event.target.value)} required autoComplete="new-password" />
+                  </Field>
+                  <Field label="New password again">
+                    <TextField type="password" size="small" fullWidth value={again} onChange={(event) => setAgain(event.target.value)} required autoComplete="new-password" />
+                  </Field>
+                  <Button type="submit" variant="contained" fullWidth disabled={busy}
+                    startIcon={busy ? <CircularProgress size={16} color="inherit" /> : undefined}>
+                    {kind === 'invite' ? 'Save and sign in' : 'Save new password'}
+                  </Button>
+                  {kind === 'invite' && !isResident && sso.length > 0 && (
+                    <>
+                      <Typography variant="body2" color="text.secondary">Or skip the password and sign in with your work account:</Typography>
+                      {sso.map((provider) => (
+                        <Button key={provider.id} type="button" variant="outlined" fullWidth disabled={busy}
+                          onClick={() => startSso('/api/sso/start', { provider: provider.id, invite: token }).catch((err) => setState({ error: errorText(err) }))}>
+                          Accept with {provider.name}
+                        </Button>
+                      ))}
+                    </>
+                  )}
+                </>
+              )}
+              {busy && kind !== 'reset' && !username && (
+                <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
+                  <CircularProgress size={18} />
+                  <Typography variant="body2" color="text.secondary">Checking the link…</Typography>
+                </Stack>
+              )}
+              {state.ok && <Alert severity="success">{state.ok}</Alert>}
+              {state.error && <Alert severity="error" role="alert">{state.error}</Alert>}
+              {(state.ok || state.error) && (
+                <Stack direction="row">
+                  <Button type="button" variant="outlined" onClick={onDone}>Continue</Button>
+                </Stack>
+              )}
+            </Stack>
+          </form>
+        </CardContent>
       </Card>
     </Container>
   );
@@ -111,27 +143,45 @@ interface ForgotPasswordProps {
  * account exists.
  *
  * @param props - Component props.
- * @param props.onBack - On back.
+ * @param props.onBack - Callback to return to sign-in.
  * @returns Rendered React element.
  */
 export function ForgotPassword({ onBack }: ForgotPasswordProps) {
   const [id, setId] = useState('');
-  const [info, setInfo] = useState('');
+  const [feedback, setFeedback] = useState<{ severity: 'info' | 'error'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   async function submit(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
-    try { setInfo((await api<{ message: string }>('POST', '/api/password-reset/request', { identifier: id })).message); } catch (err) { setInfo(errorText(err)); }
+    setFeedback(null);
+    try {
+      const reply = await api<{ message: string }>('POST', '/api/password-reset/request', { identifier: id });
+      setFeedback({ severity: 'info', text: reply.message });
+    } catch (err) {
+      setFeedback({ severity: 'error', text: errorText(err) });
+    }
     setBusy(false);
   }
   return (
     <form onSubmit={submit} autoComplete="off">
-      <Flex direction="column" gap="3">
-        <Text color="gray">Enter your username or confirmed email. We'll email you a link to choose a new password.</Text>
-        <TextField.Root value={id} onChange={(event) => setId(event.target.value)} required placeholder="Username or email" />
-        <Flex gap="3"><Button type="submit" loading={busy}>Send reset link</Button><Button type="button" variant="soft" color="gray" onClick={onBack}>Back to sign in</Button></Flex>
-        {info && <Callout.Root><Callout.Text>{info}</Callout.Text></Callout.Root>}
-      </Flex>
+      <Stack spacing={2}>
+        <Typography variant="body2" color="text.secondary">
+          Enter your username or confirmed email. We&apos;ll email you a link to choose a new password.
+        </Typography>
+        <TextField size="small" fullWidth value={id} onChange={(event) => setId(event.target.value)} required placeholder="Username or email" />
+        <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: 'wrap' }}>
+          <Button type="submit" variant="contained" disabled={busy}
+            startIcon={busy ? <CircularProgress size={16} color="inherit" /> : undefined}>
+            Send reset link
+          </Button>
+          <Button type="button" variant="outlined" color="inherit" onClick={onBack}>Back to sign in</Button>
+        </Stack>
+        {feedback && (
+          <Alert severity={feedback.severity} role={feedback.severity === 'error' ? 'alert' : undefined}>
+            {feedback.text}
+          </Alert>
+        )}
+      </Stack>
     </form>
   );
 }
@@ -165,34 +215,44 @@ export function FirstSetup({ onDone }: FirstSetupProps) {
     setBusy(false);
   }
   return (
-    <Container size="1" p={{ initial: '3', sm: '6' }} pt={{ initial: '5', sm: '6' }}>
-      <Card size={{ initial: '2', sm: '3' }}>
-        <form onSubmit={submit} autoComplete="off">
-          <Flex direction="column" gap="3">
-            <Heading>Create the first account</Heading>
-            <Text color="gray">
-              No account exists on this server yet. This first account becomes the admin of every gate already here. After that,
-              gate admins create accounts for the people who use their gates.
-            </Text>
-            <Field label="Setup code (printed in the server's log when it starts)">
-              <TextField.Root value={setupCode} onChange={(event) => setSetupCode(event.target.value)} required autoComplete="off" />
-            </Field>
-            <Field label="Username"><TextField.Root value={username} onChange={(event) => setUsername(event.target.value)} required autoComplete="username" /></Field>
-            <Field label="Email (optional)"><TextField.Root type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></Field>
-            <Field label={`Password (at least ${PASSWORD_MIN} characters)`}>
-              <TextField.Root type="password" value={password} onChange={(event) => setPassword(event.target.value)} required autoComplete="new-password" />
-            </Field>
-            <Field label="Password again">
-              <TextField.Root type="password" value={again} onChange={(event) => setAgain(event.target.value)} required autoComplete="new-password" />
-            </Field>
-            <Button type="submit" loading={busy}>Create account</Button>
-            {error && <Callout.Root color="red"><Callout.Text>{error}</Callout.Text></Callout.Root>}
-          </Flex>
-        </form>
+    <Container maxWidth="xs" sx={authContainerSx}>
+      <Card>
+        <CardContent sx={{ p: { xs: 2.5, sm: 3.5 } }}>
+          <form onSubmit={submit} autoComplete="off">
+            <Stack spacing={2}>
+              <Typography variant="h5" component="h1">Create the first account</Typography>
+              <Typography variant="body2" color="text.secondary">
+                No account exists on this server yet. This first account becomes the admin of every gate already here. After that,
+                gate admins create accounts for the people who use their gates.
+              </Typography>
+              <Field label="Setup code (printed in the server's log when it starts)">
+                <TextField size="small" fullWidth value={setupCode} onChange={(event) => setSetupCode(event.target.value)} required autoComplete="off" />
+              </Field>
+              <Field label="Username">
+                <TextField size="small" fullWidth value={username} onChange={(event) => setUsername(event.target.value)} required autoComplete="username" />
+              </Field>
+              <Field label="Email (optional)">
+                <TextField type="email" size="small" fullWidth value={email} onChange={(event) => setEmail(event.target.value)} />
+              </Field>
+              <Field label={`Password (at least ${PASSWORD_MIN} characters)`}>
+                <TextField type="password" size="small" fullWidth value={password} onChange={(event) => setPassword(event.target.value)} required autoComplete="new-password" />
+              </Field>
+              <Field label="Password again">
+                <TextField type="password" size="small" fullWidth value={again} onChange={(event) => setAgain(event.target.value)} required autoComplete="new-password" />
+              </Field>
+              <Button type="submit" variant="contained" fullWidth disabled={busy}
+                startIcon={busy ? <CircularProgress size={16} color="inherit" /> : undefined}>
+                Create account
+              </Button>
+              {error && <Alert severity="error" role="alert">{error}</Alert>}
+            </Stack>
+          </form>
+        </CardContent>
       </Card>
     </Container>
   );
 }
+
 interface ForcedPasswordChangeProps {
   user: string;
   onDone: () => void;
@@ -202,23 +262,27 @@ interface ForcedPasswordChangeProps {
  * After a gate admin (or the server's operator) set this account's password: the user picks their own first.
  *
  * @param props - Component props.
- * @param props.user - Local account username (or actor name for audit logs).
+ * @param props.user - Local account username.
  * @param props.onDone - Callback invoked when the action completes.
  * @returns Rendered React element.
  */
 export function ForcedPasswordChange({ user, onDone }: ForcedPasswordChangeProps) {
   const signOut = async () => { await api('DELETE', '/api/session').catch(() => {}); onDone(); };
   return (
-    <Container size="1" p={{ initial: '3', sm: '6' }} pt={{ initial: '5', sm: '6' }}>
-      <Card size={{ initial: '2', sm: '3' }}>
-        <Flex direction="column" gap="3">
-          <Heading>Choose your password</Heading>
-          <Text color="gray">
-            Signed in as <strong>{user}</strong> with a password someone else set. Choose your own to continue. Nobody else can see or change it.
-          </Text>
-          <PasswordForm submitLabel="Save my password" onChanged={onDone} />
-          <Flex><Button variant="ghost" color="gray" onClick={signOut}>Sign out</Button></Flex>
-        </Flex>
+    <Container maxWidth="xs" sx={authContainerSx}>
+      <Card>
+        <CardContent sx={{ p: { xs: 2.5, sm: 3.5 } }}>
+          <Stack spacing={2}>
+            <Typography variant="h5" component="h1">Choose your password</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Signed in as <strong>{user}</strong> with a password someone else set. Choose your own to continue. Nobody else can see or change it.
+            </Typography>
+            <PasswordForm submitLabel="Save my password" onChanged={onDone} />
+            <Stack direction="row">
+              <Button variant="text" color="inherit" onClick={signOut}>Sign out</Button>
+            </Stack>
+          </Stack>
+        </CardContent>
       </Card>
     </Container>
   );

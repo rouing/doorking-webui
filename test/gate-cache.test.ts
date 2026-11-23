@@ -1969,21 +1969,21 @@ function withServer(fn) {
     console.log = () => {}; // the start-up lines
     try { await app.start(); } finally { console.log = logLines; }
     const store = app.db();
-    const call = (method, route, { body, cookie, key, host } = {}) => new Promise((resolve, reject) => {
+    const call = (method, route, { body, cookie, key, host, headers: extra } = {}) => new Promise((resolve, reject) => {
       const headers = { ...(body !== undefined && { 'Content-Type': 'application/json' }), ...(cookie && { Cookie: cookie }),
-        ...(key && { Authorization: `Bearer ${key}` }), ...(host && { Host: host }) };
+        ...(key && { Authorization: `Bearer ${key}` }), ...(host && { Host: host }), ...extra };
       const req = http.request({ host: '127.0.0.1', port, path: route, method, headers }, (res) => {
         let text = '';
         res.setEncoding('utf8');
         res.on('data', (chunk) => { text += chunk; });
-        res.on('end', () => resolve({ status: res.statusCode, body: text.startsWith('{') ? JSON.parse(text) : text,
+        res.on('end', () => resolve({ status: res.statusCode, body: (text.startsWith('{') || text.startsWith('[')) ? JSON.parse(text) : text,
           cookie: String((res.headers['set-cookie'] || [''])[0]).split(';')[0] }));
       });
       req.on('error', reject);
       req.end(body === undefined ? undefined : JSON.stringify(body));
     });
     try {
-      await fn({ app, store, call, media: path.join(dir, 'media'), dks: { hold: (ms) => { dks.holdMs = ms; }, relays: () => dks.relays, setRelaysCalls: dks.setRelaysCalls } });
+      await fn({ app, config, store, call, media: path.join(dir, 'media'), dks: { hold: (ms) => { dks.holdMs = ms; }, relays: () => dks.relays, setRelaysCalls: dks.setRelaysCalls } });
     } finally {
       await app.stop('test');
       await dropStore(await dk.openStore(storeOptions));
@@ -2616,8 +2616,9 @@ test('single sign-on flow: state, browser binding, PKCE and nonce are checked ag
 
     const s2 = await dk.startSso(sso, p, { mode: 'invite', redirectUri, inviteToken: 'tok' });
     const r = await dk.finishSso(sso, p, idp.authorize(s2.url, { sub: 'u-1', email: 'Jane@Example.com', email_verified: true, name: 'Jane' }), s2.binding);
-    assert.deepStrictEqual(r, { mode: 'invite', username: undefined, inviteToken: 'tok',
-      identity: { subject: 'u-1', email: 'jane@example.com', emailVerified: true, name: 'Jane', hd: '' } });
+    assert.deepStrictEqual(r, { mode: 'invite', username: undefined, inviteToken: 'tok', strong: false,
+      identity: { subject: 'u-1', email: 'jane@example.com', emailVerified: true, name: 'Jane', hd: '',
+        auth: { amr: [], acr: '', authTime: null }, groups: [] } });
 
     const s3 = await dk.startSso(sso, p, { mode: 'signin', redirectUri });
     await assert.rejects(dk.finishSso(sso, p, idp.authorize(s3.url, { sub: 'u-1' }, { nonce: 'forged' }), s3.binding), (e) => /nonce/.test(e.cause.message));
@@ -2744,4 +2745,452 @@ test('single sign-on invitations by link, password rules and unlinking', withSto
   await dk.completeSso(store, other, ssoResult({ sub: 'd3', email: 'dee@home.net' }, { mode: 'link', username: 'dee' }));
   await dk.unlinkIdentity(store, 'dee', { provider: 'work', subject: 'd' }, [p, other]);
   assert.deepStrictEqual((await dk.listIdentities(store, 'dee', [p, other])).map((i) => i.providerName), ['Other']);
+}));
+
+test('web push: auto-generated VAPID keys, subscription validation, delivery and 410 pruning', withStore(async (store) => {
+  await dk.createUser(store, { username: 'alice', ['pass' + 'word']: PW, createdBy: 't', mustChangePassword: false });
+  const v1 = await dk.ensureVapidKeys(store, {});
+  const v2 = await dk.ensureVapidKeys(store, {});
+  assert.strictEqual(v1.publicKey, v2.publicKey, 'reuses stored VAPID keypair');
+  assert.strictEqual(v1.privateKey, v2.privateKey);
+  const explicit = await dk.ensureVapidKeys(store, { vapidPublicKey: 'pub-explicit', vapidPrivateKey: 'priv-explicit', subject: 'mailto:ops@example.com' });
+  assert.deepStrictEqual(explicit, { publicKey: 'pub-explicit', privateKey: 'priv-explicit', subject: 'mailto:ops@example.com' });
+
+  await assert.rejects(dk.savePushSubscription(store, 'alice', { endpoint: 'http://insecure.test/p', keys: { p256dh: 'A'.repeat(40), auth: 'B'.repeat(20) } }), /https/);
+  const sub1 = await dk.savePushSubscription(store, 'alice', { endpoint: 'https://push.example.com/ok', keys: { p256dh: 'A'.repeat(40), auth: 'B'.repeat(20) }, label: 'iPhone' });
+  const sub2 = await dk.savePushSubscription(store, 'alice', { endpoint: 'https://push.example.com/gone', keys: { p256dh: 'C'.repeat(40), auth: 'D'.repeat(20) }, label: 'Old Chrome' });
+  assert.strictEqual((await dk.listPushSubscriptions(store, 'alice')).length, 2);
+
+  const delivered = [];
+  const res = await dk.sendPushToUsers(store, v1, ['alice'], { title: 'Gate alert', body: 'Send failed' }, {
+    sendFn: async (sub, data) => {
+      if (sub.endpoint.endsWith('/gone')) throw Object.assign(new Error('Gone'), { statusCode: 410 });
+      delivered.push({ endpoint: sub.endpoint, payload: JSON.parse(data) });
+    },
+  });
+  assert.deepStrictEqual(res, { sent: 1, failed: 0, removed: 1 });
+  assert.strictEqual(delivered.length, 1);
+  assert.strictEqual(delivered[0].payload.title, 'Gate alert');
+  assert.deepStrictEqual((await dk.listPushSubscriptions(store, 'alice')).map((s) => s.id), [sub1.id]);
+  assert.strictEqual(await dk.deletePushSubscription(store, 'alice', sub1.id), true);
+  assert.strictEqual((await dk.listPushSubscriptions(store, 'alice')).length, 0);
+  assert.ok(sub2.id);
+}));
+
+test('single sign-on enhancements: strong MFA step-up detection, group role mapping, SSO badge, and per-gate requireStrongAdmin', withServer(async ({ store, call }) => {
+  const now = Date.now();
+  const nowSec = Math.floor(now / 1000);
+  const p = provider({
+    strongAcrs: ['urn:mace:incommon:iap:silver'],
+    roleMap: { claim: 'groups', map: { 'gate-admins': { [GATE_A.phoneNumber]: 'admin' }, 'gate-editors': { '*': 'editor' } } },
+  });
+  assert.strictEqual(dk.isStrongSso(p, { amr: ['pwd', 'mfa'], acr: '', authTime: nowSec - 60 }, now), true);
+  assert.strictEqual(dk.isStrongSso(p, { amr: ['hwk'], acr: '', authTime: nowSec - 60 }, now), true);
+  assert.strictEqual(dk.isStrongSso(p, { amr: ['pwd'], acr: 'urn:mace:incommon:iap:silver', authTime: nowSec - 60 }, now), true);
+  assert.strictEqual(dk.isStrongSso(p, { amr: ['pwd'], acr: '', authTime: nowSec - 60 }, now), false, 'password-only is not strong');
+  assert.strictEqual(dk.isStrongSso(p, { amr: ['mfa'], acr: '', authTime: null }, now), false, 'missing auth_time is not strong');
+  assert.strictEqual(dk.isStrongSso(p, { amr: ['mfa'], acr: '', authTime: nowSec - 4 * 3600 }, now), false, 'stale auth_time is not strong');
+
+  await dk.createUser(store, { username: 'owner', ['pass' + 'word']: PW, email: 'owner@example.com', createdBy: 't', mustChangePassword: false });
+  await dk.registerGate(store, GATE_A, 'owner');
+  await dk.createUser(store, { username: 'ssoadmin', ['pass' + 'word']: PW, email: 'ssoadmin@example.com', createdBy: 't', mustChangePassword: false });
+  await dk.confirmEmail(store, 'ssoadmin', 'ssoadmin@example.com');
+  const claims = dk.claimsOf({ sub: 's-1', email: 'ssoadmin@example.com', email_verified: true, amr: ['pwd', 'mfa'], auth_time: nowSec, groups: ['gate-admins'] }, 'groups');
+  await dk.completeSso(store, p, { mode: 'signin', identity: claims, strong: true });
+  assert.strictEqual(await dk.accessOf(store, GATE_A.phoneNumber, 'ssoadmin'), 'admin', 'roleMap granted admin access');
+  const users = await dk.gateUsers(store, GATE_A.phoneNumber);
+  assert.deepStrictEqual(users.find((u) => u.username === 'ssoadmin')?.ssoProviders, ['work']);
+
+  const cookie = await signIn(call, 'owner', PW);
+  // Push routes
+  const pushGet = await call('GET', '/api/me/push', { cookie });
+  assert.strictEqual(pushGet.status, 200);
+  assert.ok(pushGet.body.publicKey.length > 20);
+  const pushSave = await call('POST', '/api/me/push', {
+    cookie,
+    body: { endpoint: 'https://push.example.com/device1', keys: { p256dh: 'E'.repeat(40), auth: 'F'.repeat(20) }, label: 'Test Phone' },
+  });
+  assert.strictEqual(pushSave.status, 200);
+  assert.strictEqual(pushSave.body.subscriptions.length, 1);
+  const pushDel = await call('DELETE', `/api/me/push/${pushSave.body.subscriptions[0].id}`, { cookie });
+  assert.strictEqual(pushDel.status, 200);
+  assert.strictEqual(pushDel.body.subscriptions.length, 0);
+
+  // Per-gate requireStrongAdmin: turn on, then non-strong session is refused on gate-admin routes!
+  const enable = await call('PUT', `/api/gates/${GATE_A.phoneNumber}/prefs`, { cookie, body: { requireStrongAdmin: true } });
+  assert.strictEqual(enable.status, 200);
+  assert.strictEqual(enable.body.requireStrongAdmin, true);
+  const refused = await call('PUT', `/api/gates/${GATE_A.phoneNumber}/prefs`, { cookie, body: { relayLabels: { '0': 'Front' } } });
+  assert.strictEqual(refused.status, 403);
+  assert.strictEqual(refused.body.stepUp, true);
+  // With a strong session (e.g. passkey or MFA SSO), the same admin route succeeds.
+  const strongSid = await dk.createSession(store, 'owner', { strong: true });
+  const allowed = await call('PUT', `/api/gates/${GATE_A.phoneNumber}/prefs`, { cookie: `sid=${strongSid}`, body: { relayLabels: { '0': 'Front' } } });
+  assert.strictEqual(allowed.status, 200);
+  assert.strictEqual(allowed.body.relayLabels['0'], 'Front');
+}));
+
+test('safe entry code generator, welcome message, and filled ResidentInstructions.pdf download', withServer(async ({ app, store, call }) => {
+  // Weak-code filter & collision avoidance
+  for (const bad of ['0000', '1111', '1234', '4321', '1212', '1122', '1221', '2026', '2580']) {
+    assert.strictEqual(dk.isWeakEntryCode(bad), true, `${bad} should be rejected`);
+  }
+  const taken = ['4827', '7391'];
+  for (let i = 0; i < 20; i++) {
+    const code = dk.generateSafeEntryCode(taken);
+    assert.match(code, /^\d{4}$/);
+    assert.strictEqual(dk.isWeakEntryCode(code), false);
+    assert.ok(!taken.includes(code));
+  }
+  // Welcome message formatting
+  const msg = dk.buildWelcomeMessage({
+    siteName: 'Oakridge Estates', residentName: 'Smith, Jane', directoryCode: '101', entryCode: '4827',
+    grantAccessDigit: '9', adminPhone: '2145550199', hidden: false, cards: ['504'],
+  });
+  assert.match(msg, /Oakridge Estates/);
+  assert.match(msg, /Directory Code: 101/);
+  assert.match(msg, /#4827/);
+  assert.match(msg, /Press 9 to open/);
+  assert.match(msg, /\(214\) 555-0199/);
+  assert.match(msg, /504/);
+
+  // Filled ResidentInstructions.pdf bytes & HTTP route
+  await dk.createUser(store, { username: 'alice', ['pass' + 'word']: PW, createdBy: 'test', mustChangePassword: false });
+  await dk.registerGate(store, GATE_A, 'alice');
+  await pullInto(store);
+  await dk.ensureCache(store, GATE_A.phoneNumber);
+  const cookie = await signIn(call, 'alice', PW);
+
+  const resList = await call('GET', `/api/gates/${GATE_A.phoneNumber}/residents`, { cookie });
+  assert.strictEqual(resList.status, 200);
+  assert.ok(resList.body.grantAccessDigit, 'residents reply exposes grantAccessDigit');
+
+  const pdfRes = await fetch(`http://127.0.0.1:${app.port()}/api/gates/${GATE_A.phoneNumber}/residents/instructions.pdf`, {
+    method: 'POST',
+    headers: { cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      residentName: 'Smith, Jane', directoryCode: '101', entryCode: '4827', adminPhone: '2145550199', saveAdminPhone: true,
+    }),
+  });
+  assert.strictEqual(pdfRes.status, 200);
+  assert.strictEqual(pdfRes.headers.get('content-type'), 'application/pdf');
+  assert.match(pdfRes.headers.get('content-disposition') || '', /ResidentInstructions-101-Smith_Jane\.pdf/);
+  const buf = Buffer.from(await pdfRes.arrayBuffer());
+  assert.strictEqual(buf.subarray(0, 5).toString('ascii'), '%PDF-');
+  assert.ok(buf.length > 20000);
+  assert.strictEqual((await dk.getPrefs(store, GATE_A.phoneNumber)).adminPhone, '2145550199');
+}));
+
+test('resident portal lifecycle: email binding across gates, turnover wipe (passkeys/sessions/password), and SSO block', withStore(async (store) => {
+  const GATE_B = { ...GATE_A, phoneNumber: '5550101' };
+  await dk.createUser(store, { username: 'admin', ['pass' + 'word']: PW, email: 'admin@example.com', createdBy: 't', mustChangePassword: false });
+  await dk.registerGate(store, GATE_A, 'admin');
+  await dk.registerGate(store, GATE_B, 'admin');
+
+  // 1. Enabling portal on Gate A with a brand-new email creates an invited resident account.
+  const first = await dk.syncResidentPortal(store, { phone: GATE_A.phoneNumber, code: '101', email: 'jane@unit.test', enabled: true, actor: 'admin' });
+  assert.strictEqual(first.action, 'invited');
+  assert.ok(first.inviteUsername);
+  const resUser = first.inviteUsername;
+  assert.strictEqual(await dk.accessOf(store, GATE_A.phoneNumber, resUser), 'resident');
+  assert.strictEqual(await dk.isResidentOnlyUser(store, resUser), true);
+
+  // Resident accepts invite, gets a passkey, push subscription, and session.
+  await dk.acceptInvite(store, resUser, PW);
+  assert.strictEqual((await dk.authenticate(store, 'jane@unit.test', PW))?.username, resUser, 'resident signs in with email');
+  await dk.createSession(store, resUser);
+  await store.db.query("INSERT INTO passkeys (id, username, rp_id, name, public_key, counter, device_type, backed_up, created_at) VALUES ('rp-k1', $1, 'localhost', 'iPhone', '\\x00', 0, 'singleDevice', false, now())", [resUser]);
+  await dk.savePushSubscription(store, resUser, { endpoint: 'https://push.example.com/res1', keys: { p256dh: 'A'.repeat(40), auth: 'B'.repeat(20) }, label: 'iPhone' });
+
+  // SSO is blocked for resident-only accounts.
+  const ssoProv = provider({ allowedDomains: ['unit.test'] });
+  await assert.rejects(dk.completeSso(store, ssoProv, ssoResult({ sub: 'j-sso', email: 'jane@unit.test' })), (e) => e.status === 403 && /Resident Portal/.test(e.message));
+
+  // 2. Enabling portal on Gate B with the SAME email binds directly to the existing user (no re-signup).
+  const bound = await dk.syncResidentPortal(store, { phone: GATE_B.phoneNumber, code: '205', email: 'jane@unit.test', enabled: true, actor: 'admin' });
+  assert.strictEqual(bound.action, 'bound');
+  assert.strictEqual(bound.boundUsername, resUser);
+  assert.strictEqual(await dk.accessOf(store, GATE_B.phoneNumber, resUser), 'resident');
+
+  // 3. Disabling Gate A keeps Jane's account & passkey intact because she still has Gate B.
+  const disableA = await dk.syncResidentPortal(store, { phone: GATE_A.phoneNumber, code: '101', enabled: false, actor: 'admin' });
+  assert.strictEqual(disableA.action, 'revoked');
+  assert.strictEqual(disableA.wipedPrevious, false);
+  assert.strictEqual(await dk.accessOf(store, GATE_A.phoneNumber, resUser), null);
+  assert.ok(await dk.getUser(store, resUser), 'account survives while Gate B access remains');
+
+  // 4. Removing email on Gate B automatically turns off portal access AND wipes user, passkeys, sessions, push subs!
+  const clearB = await dk.syncResidentPortal(store, { phone: GATE_B.phoneNumber, code: '205', email: '', enabled: true, actor: 'admin' });
+  assert.strictEqual(clearB.wipedPrevious, true);
+  assert.strictEqual(await dk.getUser(store, resUser), null, 'user completely wiped');
+  assert.strictEqual((await dk.listPasskeys(store, resUser)).length, 0, 'passkeys wiped');
+  assert.strictEqual((await dk.listPushSubscriptions(store, resUser)).length, 0, 'push subscriptions wiped');
+
+  // 5. Replacing email while enabled wipes old resident and invites the new email from scratch.
+  const bob = await dk.syncResidentPortal(store, { phone: GATE_A.phoneNumber, code: '101', email: 'bob@unit.test', enabled: true, actor: 'admin' });
+  const replaced = await dk.syncResidentPortal(store, { phone: GATE_A.phoneNumber, code: '101', email: 'carol@unit.test', enabled: true, actor: 'admin' });
+  assert.strictEqual(replaced.action, 'replaced');
+  assert.strictEqual(replaced.wipedPrevious, true);
+  assert.strictEqual(await dk.getUser(store, bob.inviteUsername), null, 'previous resident wiped');
+  assert.ok(replaced.inviteUsername && await dk.getUser(store, replaced.inviteUsername), 'new resident invited');
+}));
+
+test('resident portal E2E: strict isolation, Buzz Me In Portal Open (tx_history safe), reroll cap + schedule ETA, suspicious report, change request, and login audit', withServer(async ({ store, call, dks }) => {
+  await dk.createUser(store, { username: 'admin', ['pass' + 'word']: PW, email: 'admin@example.com', createdBy: 'test', mustChangePassword: false });
+  await dk.registerGate(store, GATE_A, 'admin');
+  await pullInto(store);
+  await dk.ensureCache(store, GATE_A.phoneNumber);
+  const adminCookie = await signIn(call, 'admin', PW);
+
+  // Enable Resident Portal + Buzz Me In (2s pulse, max 1 reroll/day) + schedule a daily Send.
+  const prefsRes = await call('PUT', `/api/gates/${GATE_A.phoneNumber}/prefs`, {
+    cookie: adminCookie,
+    body: {
+      residentPortal: { enabled: true, buzzEnabled: true, buzzRelays: [0], pulseSeconds: 2, maxRerollsPerDay: 1, autoSendReroll: false, allowRequests: true },
+    },
+  });
+  assert.strictEqual(prefsRes.status, 200);
+  await dk.saveSchedule(store, GATE_A.phoneNumber, 'admin', { days: [0, 1, 2, 3, 4, 5, 6], time: '02:00', actions: ['send'], enabled: true });
+
+  // Enable portal for unit 101 via PUT /residents/101.
+  const editRes = await call('PUT', `/api/gates/${GATE_A.phoneNumber}/residents/101`, {
+    cookie: adminCookie,
+    body: { email: 'smith@unit.test', portalEnabled: true },
+  });
+  assert.strictEqual(editRes.status, 200);
+  const resUsername = editRes.body.portal.inviteUsername;
+  assert.ok(resUsername);
+  await dk.acceptInvite(store, resUsername, PW);
+
+  // Resident signs in using their EMAIL (plus one intentional wrong password for login audit).
+  assert.strictEqual((await call('POST', '/api/session', { body: { user: 'smith@unit.test', ['pass' + 'word']: 'WrongPassword123!' } })).status, 401);
+  const resSignIn = await call('POST', '/api/session', { body: { user: 'smith@unit.test', ['pass' + 'word']: PW } });
+  assert.strictEqual(resSignIn.status, 200);
+  const resCookie = resSignIn.cookie;
+
+  // Strict route isolation: resident CANNOT hit any staff gate routes or SSO.
+  for (const forbidden of [
+    ['GET', `/api/gates/${GATE_A.phoneNumber}/residents`],
+    ['GET', `/api/gates/${GATE_A.phoneNumber}/data`],
+    ['GET', `/api/gates/${GATE_A.phoneNumber}/relays`],
+    ['GET', `/api/gates/${GATE_A.phoneNumber}/login-audit`],
+    ['GET', `/api/gates/${GATE_A.phoneNumber}/users`],
+  ]) {
+    assert.strictEqual((await call(forbidden[0], forbidden[1], { cookie: resCookie })).status, 403, `resident blocked from ${forbidden[1]}`);
+  }
+
+  // Portal /me and /status work cleanly.
+  const me = await call('GET', `/api/portal/gates/${GATE_A.phoneNumber}/me`, { cookie: resCookie });
+  assert.strictEqual(me.status, 200);
+  assert.strictEqual(me.body.unit.directoryCode, '101');
+  assert.ok(me.body.reroll.nextScheduledSend, 'includes next scheduled send ETA');
+  const st = await call('GET', `/api/portal/gates/${GATE_A.phoneNumber}/status`, { cookie: resCookie });
+  assert.strictEqual(st.status, 200);
+  assert.strictEqual(st.body.available, true);
+
+  // Buzz Me In pulses relay 0 ('1' then '0') and records a Portal Open event visible in portal + admin transactions
+  // without inserting anything into tx_history!
+  const buzz = await call('POST', `/api/portal/gates/${GATE_A.phoneNumber}/buzz`, { cookie: resCookie, body: { relay: 0 } });
+  assert.strictEqual(buzz.status, 200);
+  assert.strictEqual(buzz.body.ok, true);
+  assert.ok(dks.setRelaysCalls.length >= 2, 'pulsed on then off');
+  const txHistoryCount = (await store.db.query('SELECT COUNT(*)::int AS c FROM tx_history WHERE phone = $1', [GATE_A.phoneNumber])).rows[0].c;
+  assert.strictEqual(txHistoryCount, 0, 'tx_history stays pure hardware truth');
+
+  const act = await call('GET', `/api/portal/gates/${GATE_A.phoneNumber}/activity`, { cookie: resCookie });
+  assert.strictEqual(act.status, 200);
+  assert.strictEqual(act.body.rows.length, 1);
+  assert.strictEqual(act.body.rows[0].eventType, 'Portal Open');
+  assert.strictEqual(act.body.rows[0].source, 'portal');
+
+  const adminData = await call('GET', `/api/gates/${GATE_A.phoneNumber}/data`, { cookie: adminCookie });
+  assert.strictEqual(adminData.status, 200);
+  assert.ok(adminData.body.transactions.rows.some((r) => r.eventType === 'Portal Open'), 'Portal Open merged into admin Transactions');
+
+  // Report as suspicious -> admin sees and resolves it.
+  const rep = await call('POST', `/api/portal/gates/${GATE_A.phoneNumber}/activity/report`, {
+    cookie: resCookie,
+    body: { txSource: 'portal', txKey: act.body.rows[0].txKey, note: 'Not me!' },
+  });
+  assert.strictEqual(rep.status, 201);
+  const adminReps = await call('GET', `/api/gates/${GATE_A.phoneNumber}/suspicious-reports`, { cookie: adminCookie });
+  assert.strictEqual(adminReps.body.reports.length, 1);
+  assert.strictEqual((await call('POST', `/api/gates/${GATE_A.phoneNumber}/suspicious-reports/${adminReps.body.reports[0].id}/resolve`, { cookie: adminCookie, body: { reviewNote: 'Checked camera' } })).status, 200);
+
+  // Reroll gate code: 1st succeeds with scheduled send ETA; 2nd within 24h returns 429.
+  const reroll1 = await call('POST', `/api/portal/gates/${GATE_A.phoneNumber}/reroll-code`, { cookie: resCookie, body: {} });
+  assert.strictEqual(reroll1.status, 200);
+  assert.match(reroll1.body.entryCode, /^\d{4}$/);
+  assert.strictEqual(reroll1.body.remainingToday, 0);
+  assert.ok(reroll1.body.nextScheduledSend);
+  const reroll2 = await call('POST', `/api/portal/gates/${GATE_A.phoneNumber}/reroll-code`, { cookie: resCookie, body: {} });
+  assert.strictEqual(reroll2.status, 429);
+
+  // Self-service phone change request -> admin approves & applies to working copy.
+  const reqPost = await call('POST', `/api/portal/gates/${GATE_A.phoneNumber}/requests`, {
+    cookie: resCookie,
+    body: { kind: 'phone', payload: { phone: '2145550177' }, note: 'New cell' },
+  });
+  assert.strictEqual(reqPost.status, 201);
+  const rev = await call('POST', `/api/gates/${GATE_A.phoneNumber}/resident-requests/${reqPost.body.request.id}/review`, {
+    cookie: adminCookie, body: { decision: 'approved', apply: true },
+  });
+  assert.strictEqual(rev.status, 200);
+  const updated101 = await call('GET', `/api/gates/${GATE_A.phoneNumber}/residents/101`, { cookie: adminCookie });
+  assert.strictEqual(updated101.body.phone, '555-0177');
+
+  // Account phone self-service: GET /api/me falls back to unit's call-box phone, and PUT /api/me syncs directly to the unit.
+  const meBefore = await call('GET', '/api/me', { cookie: resCookie });
+  assert.strictEqual(meBefore.status, 200);
+  assert.strictEqual(meBefore.body.phone, '+12145550177');
+  const mePhonePut = await call('PUT', '/api/me', { cookie: resCookie, body: { phone: '(469) 555-0199' } });
+  assert.strictEqual(mePhonePut.status, 200);
+  assert.strictEqual(mePhonePut.body.phone, '+14695550199');
+  assert.deepStrictEqual(mePhonePut.body.gatePhoneSync?.updatedUnits, ['101']);
+  const updated101Self = await call('GET', `/api/gates/${GATE_A.phoneNumber}/residents/101`, { cookie: adminCookie });
+  assert.strictEqual(updated101Self.body.areaCode, '469');
+  assert.strictEqual(updated101Self.body.phone, '555-0199');
+
+  // Login audit log records both failed and successful sign-ins for admin review.
+  const auditAll = await call('GET', `/api/gates/${GATE_A.phoneNumber}/login-audit`, { cookie: adminCookie });
+  assert.strictEqual(auditAll.status, 200);
+  assert.ok(auditAll.body.entries.some((e) => e.username === resUsername && e.outcome === 'failed'));
+  assert.ok(auditAll.body.entries.some((e) => e.username === resUsername && e.outcome === 'success'));
+}));
+
+test('android native sessions: Bearer dks_ works across webOnly routes, enforces step-up, revokes on sign-out, and assetlinks/config validate', withServer(async ({ store, call, config }) => {
+  await dk.createUser(store, { username: 'alice', password: 'correct-horse-battery', createdBy: 'test', mustChangePassword: false });
+  await dk.registerGate(store, GATE_A, 'alice');
+
+  // Browser sign-in (without X-Client-Auth: bearer) omits sessionToken.
+  const webLogin = await call('POST', '/api/session', { body: { user: 'alice', password: 'correct-horse-battery' } });
+  assert.strictEqual(webLogin.status, 200);
+  assert.strictEqual(webLogin.body.sessionToken, undefined);
+
+  // Native sign-in (X-Client-Auth: bearer) returns dks_<64-hex> sessionToken.
+  const nativeLogin = await call('POST', '/api/session', {
+    body: { user: 'alice', password: 'correct-horse-battery' },
+    headers: { 'X-Client-Auth': 'bearer' },
+  });
+  assert.strictEqual(nativeLogin.status, 200);
+  assert.match(nativeLogin.body.sessionToken, /^dks_[a-f0-9]{64}$/);
+  const tok = nativeLogin.body.sessionToken;
+
+  // Bearer dks_ authenticates user-scoped and webOnly routes (unlike per-gate dkg_ API keys).
+  const me = await call('GET', '/api/session', { key: tok });
+  assert.strictEqual(me.status, 200);
+  assert.strictEqual(me.body.loggedIn, true);
+  assert.strictEqual(me.body.user, 'alice');
+
+  const gates = await call('GET', '/api/gates', { key: tok });
+  assert.strictEqual(gates.status, 200);
+  assert.strictEqual(gates.body.gates.length, 1);
+
+  const users = await call('GET', `/api/gates/${GATE_A.phoneNumber}/users`, { key: tok });
+  assert.strictEqual(users.status, 200, 'webOnly gate-admin route accessible to native user session');
+
+  // Step-up routes still enforce passkey confirmation for native user sessions.
+  const keyCreate = await call('POST', `/api/gates/${GATE_A.phoneNumber}/api-keys`, {
+    key: tok,
+    body: { name: 'CI', role: 'readonly' },
+  });
+  assert.strictEqual(keyCreate.status, 403);
+  assert.strictEqual(keyCreate.body.stepUp, true);
+
+  // Unknown dks_ token returns 401 (and public GET /api/session treats it as logged out).
+  const badTok = `dks_${'0'.repeat(64)}`;
+  assert.strictEqual((await call('GET', '/api/gates', { key: badTok })).status, 401);
+  const pubBad = await call('GET', '/api/session', { key: badTok });
+  assert.strictEqual(pubBad.status, 200);
+  assert.strictEqual(pubBad.body.loggedIn, false);
+
+  // Sign-out via Bearer dks_ revokes the session immediately.
+  assert.strictEqual((await call('DELETE', '/api/session', { key: tok })).status, 200);
+  assert.strictEqual((await call('GET', '/api/gates', { key: tok })).status, 401);
+
+  // Digital Asset Links returns [] when unconfigured, and androidApkKeyHashOrigin encodes SHA-256 hex to base64url.
+  const emptyLinks = await call('GET', '/.well-known/assetlinks.json');
+  assert.strictEqual(emptyLinks.status, 200);
+  assert.deepStrictEqual(emptyLinks.body, []);
+
+  const fp = 'AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99';
+  config.android.packageName = 'com.doorking.gate';
+  config.android.sha256CertFingerprints = [fp];
+  const links = await call('GET', '/.well-known/assetlinks.json');
+  assert.strictEqual(links.status, 200);
+  assert.strictEqual(links.body.length, 1);
+  assert.strictEqual(links.body[0].target.package_name, 'com.doorking.gate');
+  assert.deepStrictEqual(links.body[0].target.sha256_cert_fingerprints, [fp]);
+  assert.strictEqual(
+    dk.androidApkKeyHashOrigin(fp),
+    `android:apk-key-hash:${Buffer.from(fp.replace(/:/g, ''), 'hex').toString('base64url')}`,
+  );
+}));
+
+test('audit security fixes: unverified email cannot hijack portal, unknown logins redacted, history strips PII, bulk delete revokes portal, SSRF hardened, ISO portal dates', withServer(async ({ store, call }) => {
+  await dk.createUser(store, { username: 'admin', password: 'admin-password-123', email: 'admin@example.com', createdBy: 'test', mustChangePassword: false });
+  await dk.createUser(store, { username: 'attacker', password: 'attacker-password-1', createdBy: 'test', mustChangePassword: false });
+  await dk.createUser(store, { username: 'viewer', password: 'viewer-password-123', createdBy: 'test', mustChangePassword: false });
+  await dk.registerGate(store, GATE_A, 'admin');
+  await dk.grantAccess(store, GATE_A.phoneNumber, 'viewer', 'readonly', 'admin');
+  await pullInto(store);
+  await dk.ensureCache(store, GATE_A.phoneNumber);
+
+  const adminCookie = (await call('POST', '/api/session', { body: { user: 'admin', password: 'admin-password-123' } })).cookie;
+  const attackerCookie = (await call('POST', '/api/session', { body: { user: 'attacker', password: 'attacker-password-1' } })).cookie;
+  const viewerCookie = (await call('POST', '/api/session', { body: { user: 'viewer', password: 'viewer-password-123' } })).cookie;
+
+  // 1. Unverified pending_email on an active account must NOT bind when admin enables portal for that neighbor's email.
+  const setPending = await call('PUT', '/api/me', {
+    cookie: attackerCookie,
+    body: { email: 'neighbor@example.com', password: 'attacker-password-1' },
+  });
+  assert.strictEqual(setPending.status, 200);
+  const synced = await dk.syncResidentPortal(store, {
+    phone: GATE_A.phoneNumber, code: '101', email: 'neighbor@example.com', enabled: true, actor: 'admin',
+  });
+  assert.notStrictEqual(synced.record?.username, 'attacker', 'unverified pending_email must not hijack unit');
+  assert.strictEqual(synced.action, 'invited');
+
+  // 2. Failed login with an unknown username (e.g. mistyped password) must be redacted as "unknown" in login_audit.
+  await call('POST', '/api/session', { body: { user: 'MySecretPassword99!', password: 'wrong' } });
+  const auditRes = await call('GET', `/api/gates/${GATE_A.phoneNumber}/login-audit`, { cookie: adminCookie });
+  assert.strictEqual(auditRes.status, 200);
+  assert.ok(!auditRes.body.entries.some((e: { identifier: string }) => e.identifier.includes('MySecretPassword99!')));
+  assert.ok(auditRes.body.entries.some((e: { identifier: string; username: string | null }) => e.username === null && e.identifier === 'unknown'));
+
+  // 3. GET /history must not expose private email/phone to read-only viewers.
+  await dk.updateUserSettings(store, 'admin', { phone: '+12145550101' });
+  const hist = await call('GET', `/api/gates/${GATE_A.phoneNumber}/history`, { cookie: viewerCookie });
+  assert.strictEqual(hist.status, 200);
+  const adminEntry = hist.body.users.find((u: { username: string }) => u.username === 'admin');
+  assert.ok(adminEntry);
+  assert.strictEqual(adminEntry.email, undefined);
+  assert.strictEqual(adminEntry.phone, undefined);
+
+  // 4. Bulk delete must revoke Resident Portal access for deleted units.
+  const bulkDel = await call('POST', `/api/gates/${GATE_A.phoneNumber}/residents/bulk`, {
+    cookie: adminCookie,
+    body: { action: 'delete', codes: ['101'] },
+  });
+  assert.strictEqual(bulkDel.status, 200);
+  assert.strictEqual(await dk.getResidentPortal(store, GATE_A.phoneNumber, '101'), null);
+
+  // 5. SSRF checks block private LAN & IPv4-mapped IPv6 on webhooks and push subscriptions.
+  for (const badUrl of ['https://10.0.0.1/hook', 'https://192.168.1.5/hook', 'https://172.16.0.1/hook', 'https://[::ffff:127.0.0.1]/hook']) {
+    assert.throws(() => dk.checkWebhookUrl(badUrl), /loopback, private network/i);
+    await assert.rejects(() => dk.savePushSubscription(store, 'viewer', {
+      endpoint: badUrl,
+      keys: { p256dh: 'a'.repeat(40), auth: 'b'.repeat(20) },
+    }), /loopback, private network/i);
+  }
+
+  // 6. Portal Open transactions use ISO YYYY-MM-DD dates matching hardware tx_history.
+  const ev = await dk.recordPortalEvent(store, {
+    phone: GATE_A.phoneNumber, directoryCode: '101', username: 'admin', relay: 0, result: 'done',
+    ts: new Date(2026, 10, 23, 9, 5, 0),
+  });
+  const row = dk.portalEventToTxRow(ev, new Map([['101', 'Test']]));
+  assert.strictEqual(row.date, '2026-11-23');
+  assert.strictEqual(row.time, '9:05 AM');
 }));

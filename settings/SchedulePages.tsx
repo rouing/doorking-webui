@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { Chip, Paper, Stack, TableBody, TableCell, TableRow, TextField, Typography } from '@mui/material';
-import { Choice } from '../panes/fields.tsx';
+import { Chip, MenuItem, Paper, Select, Stack, TableBody, TableCell, TableRow, TextField, Typography } from '@mui/material';
 import type { GatePrefs, GateSettingRow } from '../types.ts';
 import type { GateApi } from '../api.ts';
 import { trackerOf, trackerRelays } from '../format.ts';
-import { Box, CLEAR_NOTE, DAY_LETTERS, DAY_NAMES, GroupPage, Head, rowState, setBit, TimeBox, TogglePill } from './GroupPage.tsx';
+import { MobileFilterChip } from '../panes/MobilePrimitives.tsx';
+import { Box, CLEAR_NOTE, GroupPage, Head, rowState, setBit, TimeBox, WeekdayRow } from './GroupPage.tsx';
 import { useGateSettings } from './useGateSettings.ts';
 import { HOL_FOR_SL } from './ListPages.tsx';
 
@@ -60,7 +60,7 @@ export function HoldOpenPage({ gapi, relays: shown }: HoldOpenPageProps) {
   return (
     <GroupPage settings={settings} group="Hold Open" title="Hold Open" help="holdOpen" bare clearValue={holdOpenClear(shown)}
       intro={`Set begin/end times and days for each schedule row (7 rows + the Holiday row), and which relays (${relayRanges(shown)}) it holds open. Leave a row's times blank to disable it. ${CLEAR_NOTE} ${EDITS_NOTE}`}>
-      <Stack spacing={1} sx={{ width: '100%', maxWidth: 680 }}>
+      <Stack spacing={1.25} sx={{ width: '100%', maxWidth: 680 }}>
         {['1', '2', '3', '4', '5', '6', '7', 'Hol'].map((label, rowIndex) => {
           const begin = field(label, 'Begin'); const end = field(label, 'End'); const days = field(label, 'Days');
           if (!begin || !end || !days) return null;
@@ -82,42 +82,42 @@ export function HoldOpenPage({ gapi, relays: shown }: HoldOpenPageProps) {
                 ? { label: 'Active', color: 'success' as const }
                 : { label: 'Unused', color: 'default' as const };
           return (
-            <Paper key={label} variant="outlined" sx={{ p: 1.25, width: '100%', boxSizing: 'border-box', backgroundColor: row.style.background || 'background.paper' }}>
-              <Stack spacing={1}>
-                <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
-                  <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
-                    <Chip size="small" color={active ? 'primary' : 'default'} label={label === 'Hol' ? 'HOL' : `#${label}`} sx={{ minWidth: 44 }} />
-                    <TimeBox value={curBegin} ariaLabel={`Row ${label} begin time`} onChange={(value) => settings.edit(begin, value)} />
-                    <Typography variant="caption" color="text.secondary">–</Typography>
-                    <TimeBox value={curEnd} ariaLabel={`Row ${label} end time`} onChange={(value) => settings.edit(end, value)} />
-                  </Stack>
-                  <Chip size="small" color={pill.color} label={pill.label} sx={{ minWidth: 68, flexShrink: 0 }} />
+            <Paper
+              key={label}
+              elevation={0}
+              sx={{
+                p: 2,
+                borderRadius: '12px',
+                width: '100%',
+                boxSizing: 'border-box',
+                bgcolor: row.style.background || 'var(--md-surface-low)',
+              }}
+            >
+              <Stack spacing={1.25}>
+                <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Chip size="small" color={active ? 'primary' : 'default'} label={label === 'Hol' ? 'HOL' : `Row #${label}`} sx={{ height: 26 }} />
+                  <Chip size="small" color={pill.color} label={pill.label} sx={{ height: 26 }} />
                 </Stack>
-                <Stack direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-                  <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
-                    <Typography variant="caption" color="text.secondary" sx={{ mr: 0.25, fontWeight: 600 }}>Days</Typography>
-                    {DAY_LETTERS.map((letter, day) => (
-                      <TogglePill
-                        key={day}
-                        label={letter}
-                        active={curDays[day] === '1'}
-                        ariaLabel={`Row ${label} ${DAY_NAMES[day]}`}
-                        onToggle={(on) => settings.edit(days, setBit(curDays, day, on))}
-                      />
-                    ))}
-                  </Stack>
-                  <Stack direction="row" spacing={0.5} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-                    <Typography variant="caption" color="text.secondary" sx={{ mr: 0.25, fontWeight: 600 }}>Relays</Typography>
-                    {relays.map((relay, i) => relay && (
-                      <TogglePill
-                        key={i}
-                        label={String(shown[i])}
-                        active={settings.current(relay)[rowIndex] === '1'}
-                        ariaLabel={`Row ${label} relay ${shown[i]}`}
-                        onToggle={(on) => settings.edit(relay, setBit(settings.current(relay), rowIndex, on))}
-                      />
-                    ))}
-                  </Stack>
+                <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                  <TimeBox label="Start" fullWidth value={curBegin} ariaLabel={`Row ${label} start time`} onChange={(value) => settings.edit(begin, value)} />
+                  <TimeBox label="End" fullWidth value={curEnd} ariaLabel={`Row ${label} end time`} onChange={(value) => settings.edit(end, value)} />
+                </Stack>
+                <WeekdayRow
+                  bits={curDays}
+                  labelPrefix={`Row ${label}`}
+                  onToggle={(day, on) => settings.edit(days, setBit(curDays, day, on))}
+                />
+                <Stack direction="row" sx={{ gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, mr: 0.25 }}>Relays</Typography>
+                  {relays.map((relay, i) => relay && (
+                    <MobileFilterChip
+                      key={i}
+                      label={`R${shown[i]}`}
+                      selected={settings.current(relay)[rowIndex] === '1'}
+                      showCheck
+                      onClick={() => settings.edit(relay, setBit(settings.current(relay), rowIndex, settings.current(relay)[rowIndex] !== '1'))}
+                    />
+                  ))}
                 </Stack>
               </Stack>
             </Paper>
@@ -256,14 +256,29 @@ export function SecurityPage({ gapi, floors: showFloors, relays: shown }: Securi
   const [picked, setPicked] = useState(2);
   const level = levels.includes(picked) ? picked : levels[0];
   const field = (tz: number, part: string) => settings.field(`sec${level}tz${tz}${part}`);
+  const activeCountForLevel = (lvl: number) => [1, 2, 3, 4].filter((tz) => {
+    const b = settings.field(`sec${lvl}tz${tz}Begin`);
+    const e = settings.field(`sec${lvl}tz${tz}End`);
+    return Boolean((b && settings.current(b)) || (e && settings.current(e)));
+  }).length;
+  const levelLabel = (lvl: number) => {
+    const active = activeCountForLevel(lvl);
+    const num = String(lvl).padStart(2, '0');
+    return active > 0 ? `Level ${num} · ${active} active` : `Level ${num}`;
+  };
   const picker = levels.length > 0 && (
-    <Choice
-      title="Level"
-      ariaLabel="Security level"
+    <Select
+      size="small"
+      fullWidth
       value={String(level)}
-      onChange={(value) => setPicked(Number(value))}
-      options={levels.map((lvl) => [String(lvl), `Level ${String(lvl).padStart(2, '0')}`] as const)}
-    />
+      inputProps={{ 'aria-label': 'Security level' }}
+      onChange={(event) => setPicked(Number(event.target.value))}
+      sx={{ maxWidth: 680, borderRadius: '12px' }}
+    >
+      {levels.map((lvl) => (
+        <MenuItem key={lvl} value={String(lvl)}>{levelLabel(lvl)}</MenuItem>
+      ))}
+    </Select>
   );
   return (
     <GroupPage settings={settings} group="Security" title="Security Levels" help="security" bare buttons={picker}
@@ -271,7 +286,7 @@ export function SecurityPage({ gapi, floors: showFloors, relays: shown }: Securi
         ? `relays (${relayRanges(shown)}) and floors (comma-separated, 1–64)` : `and relays (${relayRanges(shown)})`}. ${hol
         ? 'Holidays for Security Levels is on (Holidays page), so TZ4 is the Holiday time zone (HOL): on a holiday it overrides the other time zones of the level. '
         : ''}${EDITS_NOTE}`}>
-      <Stack spacing={1} sx={{ width: '100%', maxWidth: 680 }}>
+      <Stack spacing={1.25} sx={{ width: '100%', maxWidth: 680 }}>
         {[1, 2, 3, 4].map((tz) => {
           const begin = field(tz, 'Begin'); const end = field(tz, 'End'); const days = field(tz, 'Days'); const relays = field(tz, 'Relays'); const floors = field(tz, 'Floors');
           if (!begin || !end || !days || !relays || !floors) return null;
@@ -293,54 +308,51 @@ export function SecurityPage({ gapi, floors: showFloors, relays: shown }: Securi
                 ? { label: 'Active', color: 'success' as const }
                 : { label: 'Unused', color: 'default' as const };
           return (
-            <Paper key={tz} variant="outlined" sx={{ p: 1.25, width: '100%', boxSizing: 'border-box', backgroundColor: row.style.background || 'background.paper' }}>
-              <Stack spacing={1}>
-                <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
-                  <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
-                    <Chip size="small" color={active ? 'primary' : 'default'} label={tzLabel} sx={{ minWidth: 46 }} />
-                    <TimeBox value={curBegin} ariaLabel={`${tzLabel} begin time`} onChange={(value) => settings.edit(begin, value)} />
-                    <Typography variant="caption" color="text.secondary">–</Typography>
-                    <TimeBox value={curEnd} ariaLabel={`${tzLabel} end time`} onChange={(value) => settings.edit(end, value)} />
-                  </Stack>
-                  <Chip size="small" color={pill.color} label={pill.label} sx={{ minWidth: 68, flexShrink: 0 }} />
+            <Paper
+              key={tz}
+              elevation={0}
+              sx={{
+                p: 2,
+                borderRadius: '12px',
+                width: '100%',
+                boxSizing: 'border-box',
+                bgcolor: row.style.background || 'var(--md-surface-low)',
+              }}
+            >
+              <Stack spacing={1.25}>
+                <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Chip size="small" color={active ? 'primary' : 'default'} label={tzLabel} sx={{ height: 26 }} />
+                  <Chip size="small" color={pill.color} label={pill.label} sx={{ height: 26 }} />
                 </Stack>
-                <Stack direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-                  <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
-                    <Typography variant="caption" color="text.secondary" sx={{ mr: 0.25, fontWeight: 600 }}>Days</Typography>
-                    {DAY_LETTERS.map((letter, day) => (
-                      <TogglePill
-                        key={day}
-                        label={letter}
-                        active={curDays[day] === '1'}
-                        ariaLabel={`${tzLabel} ${DAY_NAMES[day]}`}
-                        onToggle={(on) => settings.edit(days, setBit(curDays, day, on))}
-                      />
-                    ))}
-                  </Stack>
-                  <Stack direction="row" spacing={0.5} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-                    <Typography variant="caption" color="text.secondary" sx={{ mr: 0.25, fontWeight: 600 }}>Relays</Typography>
-                    {shown.map((relay) => (
-                      <TogglePill
-                        key={relay}
-                        label={String(relay)}
-                        active={curRelays[relay] === '1'}
-                        ariaLabel={`${tzLabel} relay ${relay}`}
-                        onToggle={(on) => settings.edit(relays, setBit(curRelays, relay, on))}
-                      />
-                    ))}
-                  </Stack>
+                <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                  <TimeBox label="Start" fullWidth value={curBegin} ariaLabel={`${tzLabel} start time`} onChange={(value) => settings.edit(begin, value)} />
+                  <TimeBox label="End" fullWidth value={curEnd} ariaLabel={`${tzLabel} end time`} onChange={(value) => settings.edit(end, value)} />
+                </Stack>
+                <WeekdayRow
+                  bits={curDays}
+                  labelPrefix={tzLabel}
+                  onToggle={(day, on) => settings.edit(days, setBit(curDays, day, on))}
+                />
+                <Stack direction="row" sx={{ gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, mr: 0.25 }}>Relays</Typography>
+                  {shown.map((relay) => (
+                    <MobileFilterChip
+                      key={relay}
+                      label={`R${relay}`}
+                      selected={curRelays[relay] === '1'}
+                      showCheck
+                      onClick={() => settings.edit(relays, setBit(curRelays, relay, curRelays[relay] !== '1'))}
+                    />
+                  ))}
                   {showFloors && (
-                    <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
-                      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>Floors</Typography>
-                      <TextField
-                        size="small"
-                        placeholder="e.g. 1,8"
-                        value={settings.current(floors)}
-                        slotProps={{ htmlInput: { 'aria-label': `${tzLabel} floors` } }}
-                        sx={{ width: '11ch', '& .MuiInputBase-input': { py: 0.5, px: 0.75, fontSize: '0.85rem' } }}
-                        onChange={(event) => settings.edit(floors, event.target.value.trim())}
-                      />
-                    </Stack>
+                    <TextField
+                      size="small"
+                      placeholder="Floors (e.g. 1,8)"
+                      value={settings.current(floors)}
+                      slotProps={{ htmlInput: { 'aria-label': `${tzLabel} floors` } }}
+                      sx={{ width: '13ch', '& .MuiInputBase-input': { py: 0.5, px: 0.75, fontSize: '0.85rem' } }}
+                      onChange={(event) => settings.edit(floors, event.target.value.trim())}
+                    />
                   )}
                 </Stack>
               </Stack>

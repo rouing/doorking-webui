@@ -3,9 +3,11 @@ import {
   Alert,
   Box as MuiBox,
   Button,
+  ButtonBase,
   Checkbox,
   Chip,
   FormControlLabel,
+  IconButton,
   Paper,
   Stack,
   Table,
@@ -15,9 +17,11 @@ import {
   TableRow,
   Typography,
 } from '@mui/material';
+import CloseIcon from '@mui/icons-material/Close';
 import type { GateSettingRow } from '../types.ts';
 import { errorText, useDraftActions } from '../api.ts';
 import { HelpTip } from '../HelpTip.tsx';
+import { usePhone } from '../phone.ts';
 import type { GateSettings } from './useGateSettings.ts';
 
 export const DAY_LETTERS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
@@ -131,30 +135,140 @@ export function TogglePill({ label, active, ariaLabel, disabled = false, onToggl
   );
 }
 
+/** Compact single-row 7-day toggle grid matching Android's `WeekdayToggleRow` (never wraps Saturday). */
+export function WeekdayRow({
+  bits,
+  labelPrefix,
+  disabled = false,
+  onToggle,
+}: {
+  bits: string;
+  labelPrefix: string;
+  disabled?: boolean;
+  onToggle: (dayIndex: number, next: boolean) => void;
+}) {
+  return (
+    <MuiBox
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+        gap: '4px',
+        width: '100%',
+      }}
+    >
+      {DAY_LETTERS.map((letter, day) => {
+        const active = bits[day] === '1';
+        return (
+          <ButtonBase
+            key={day}
+            type="button"
+            disabled={disabled}
+            role="checkbox"
+            aria-checked={active}
+            aria-label={`${labelPrefix} ${DAY_NAMES[day]}`}
+            onClick={() => onToggle(day, !active)}
+            sx={{
+              height: 36,
+              borderRadius: '10px',
+              fontSize: '0.75rem',
+              fontWeight: active ? 700 : 500,
+              bgcolor: active ? 'var(--md-primary-container)' : 'var(--md-surface-highest)',
+              color: active ? 'var(--md-on-primary-container)' : 'text.secondary',
+              transition: 'background-color 140ms ease, color 140ms ease',
+            }}
+          >
+            {letter}
+          </ButtonBase>
+        );
+      })}
+    </MuiBox>
+  );
+}
+
 interface TimeBoxProps {
+  label?: string;
   value: string;
   onChange: (v: string) => void;
   ariaLabel?: string;
+  fullWidth?: boolean;
 }
 
 /**
- * The browser's own time input (sized to the time), styled like the other fields.
- *
- * @param props - Component props.
- * @param props.value - Input value.
- * @param props.onChange - Callback invoked when the value changes.
- * @param props.ariaLabel - Accessible label for the time input.
- * @returns Rendered React element.
+ * Native time input (displays 12-hour AM/PM in US locales while storing 24-hour "HH:MM" for the gate).
+ * Supports optional floating label + clear button when used on Board Settings cards.
  */
-export function TimeBox({ value, onChange, ariaLabel }: TimeBoxProps) {
+export function TimeBox({ label, value, onChange, ariaLabel, fullWidth = false }: TimeBoxProps) {
+  if (!fullWidth && !label) {
+    return (
+      <input
+        type="time"
+        className="time-input"
+        aria-label={ariaLabel}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    );
+  }
   return (
-    <input
-      type="time"
-      className="time-input"
-      aria-label={ariaLabel}
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-    />
+    <MuiBox
+      sx={{
+        position: 'relative',
+        flex: fullWidth ? 1 : undefined,
+        minWidth: 0,
+        display: 'flex',
+        alignItems: 'center',
+        border: '1px solid var(--md-outline)',
+        borderRadius: '12px',
+        bgcolor: 'transparent',
+        px: 1.5,
+        height: 48,
+      }}
+    >
+      {label && (
+        <Typography
+          component="span"
+          sx={{
+            position: 'absolute',
+            top: -8,
+            left: 10,
+            px: 0.5,
+            fontSize: '0.7rem',
+            lineHeight: 1.2,
+            color: 'text.secondary',
+            bgcolor: 'var(--md-surface-low)',
+          }}
+        >
+          {label}
+        </Typography>
+      )}
+      <input
+        type="time"
+        aria-label={ariaLabel || label}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        style={{
+          border: 'none',
+          outline: 'none',
+          background: 'transparent',
+          color: 'inherit',
+          font: 'inherit',
+          fontSize: '0.875rem',
+          width: '100%',
+          minWidth: 0,
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      />
+      {value && (
+        <IconButton
+          size="small"
+          aria-label={`Clear ${label || 'time'}`}
+          onClick={() => onChange('')}
+          sx={{ p: 0.25, ml: 0.25, color: 'text.secondary' }}
+        >
+          <CloseIcon sx={{ fontSize: 16 }} />
+        </IconButton>
+      )}
+    </MuiBox>
   );
 }
 
@@ -178,6 +292,8 @@ interface GroupPageProps {
   settings: GateSettings;
   group: string;
   buttons?: ReactNode;
+  /** Optional control placed to the left of the red Clear button in the title row (e.g. Facility Codes switch). */
+  headerRight?: ReactNode;
   clearValue?: (setting: GateSettingRow) => string | undefined;
   help?: string;
   /** When true, renders `children` directly instead of wrapping in a `<TableContainer><Table>`. */
@@ -185,23 +301,8 @@ interface GroupPageProps {
   children: ReactNode;
 }
 
-/**
- * A page editing one group of gate settings in the working copy (Save / Discard, plus `buttons`), then `children`.
- * clearValue: adds a Clear button that sets each setting of the group to its unset value (undefined = leave it).
- * help: a key in HELP, shown as a "?" tip after the title.
- *
- * @param props - Component props.
- * @param props.title - Title.
- * @param props.intro - Intro.
- * @param props.settings - Settings map or configuration.
- * @param props.group - Group.
- * @param props.buttons - Buttons.
- * @param props.clearValue - Optional function returning each setting's cleared value (`undefined` leaves the field unchanged).
- * @param props.help - A key in HELP, shown as a "?" tip after the title.
- * @param props.children - Children.
- * @returns Rendered React element.
- */
-export function GroupPage({ title, intro, settings, group, buttons, clearValue, help, bare = false, children }: GroupPageProps) {
+export function GroupPage({ title, intro, settings, group, buttons, headerRight, clearValue, help, bare = false, children }: GroupPageProps) {
+  const phone = usePhone();
   const [saved, setSaved] = useState('');
   const [saveError, setSaveError] = useState('');
   const fields = settings.fields.filter((setting) => setting.group === group);
@@ -226,33 +327,53 @@ export function GroupPage({ title, intro, settings, group, buttons, clearValue, 
   const info = !settings.reply ? '' : saved && !unsaved ? saved
     : [unsaved ? `${unsaved} unsaved change(s)` : '', pending ? `${pending} saved, not sent` : ''].filter(Boolean).join(' · ');
   return (
-    <Stack spacing={2}>
-      <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-        <Typography variant="h5" component="h1" sx={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
-          {title}{help && <HelpTip of={help} />}
-        </Typography>
-        {clearValue && (
-          <Button
-            size="small"
-            variant="contained"
-            color="error"
-            disabled={!canClear}
-            sx={{ flexShrink: 0 }}
-            onClick={() => {
-              for (const setting of fields) { const v = clearValue(setting); if (v !== undefined) settings.edit(setting, v); }
-              setSaved('');
-              setSaveError('');
+    <Stack spacing={phone ? 1.25 : 2}>
+      <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+        <Stack sx={{ flex: 1, minWidth: 0 }}>
+          <Typography
+            component="h1"
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              minWidth: 0,
+              fontSize: phone ? '1.375rem' : '1.5rem',
+              lineHeight: 1.25,
+              fontWeight: phone ? 500 : 700,
             }}
           >
-            Clear
-          </Button>
-        )}
+            {title}{help && <HelpTip of={help} />}
+          </Typography>
+          {phone && unsaved > 0 && (
+            <Typography variant="caption" color="primary">
+              {unsaved} unsaved change(s) — tap Gate tab to Save or Discard.
+            </Typography>
+          )}
+        </Stack>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexShrink: 0 }}>
+          {headerRight}
+          {clearValue && (
+            <Button
+              size="small"
+              variant="contained"
+              color="error"
+              disabled={!canClear}
+              sx={{ flexShrink: 0, minHeight: 36, px: 2, borderRadius: '999px' }}
+              onClick={() => {
+                for (const setting of fields) { const v = clearValue(setting); if (v !== undefined) settings.edit(setting, v); }
+                setSaved('');
+                setSaveError('');
+              }}
+            >
+              Clear
+            </Button>
+          )}
+        </Stack>
       </Stack>
-      <Typography variant="body2" color="text.secondary">{intro}</Typography>
-      {(buttons || info) && (
-        <Stack direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+      {!phone && <Typography variant="body2" color="text.secondary">{intro}</Typography>}
+      {(buttons || (!phone && info)) && (
+        <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
           {buttons}
-          {info && <Typography variant="body2" color="text.secondary">{info}</Typography>}
+          {!phone && info && <Typography variant="body2" color="text.secondary">{info}</Typography>}
         </Stack>
       )}
       {!settings.reply && settings.error && <Alert severity="error">{settings.error}</Alert>}

@@ -199,7 +199,7 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
       {phone && (
         <PhoneTopBar
           gateName={gateLabel(gate)}
-          pageTitle={moreHub ? 'More' : isPhoneSubPage ? PAGE_TITLES[nav] : undefined}
+          pageTitle={isPhoneSubPage ? PAGE_TITLES[nav] : undefined}
           onBack={isPhoneSubPage ? openMoreHub : undefined}
           workingCopy={workingCopy}
           running={running}
@@ -277,6 +277,11 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
           <PhoneMorePage
             gate={gate}
             user={session.user}
+            dark={session.dark}
+            onSelectDark={(nextDark) => {
+              if (nextDark === session.dark) return;
+              void api('PUT', '/api/me', { dark: nextDark }).then(onChange).catch((err) => setError(errorText(err)));
+            }}
             onGo={go}
             onOpenSearch={() => setQuickJump(true)}
             onAllGates={allGates}

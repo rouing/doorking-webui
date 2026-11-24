@@ -9,6 +9,7 @@ import {
   Alert,
   Box,
   Button,
+  ButtonBase,
   Card,
   CardContent,
   Chip,
@@ -30,6 +31,7 @@ import {
 import type { AccessAuditReply, ResidentRequest, ResidentRow, SuspiciousReport, TransactionRow } from '../types.ts';
 import { errorText, useIsAdmin, useReadOnly, type GateApi } from '../api.ts';
 import { fmtTime } from '../format.ts';
+import { usePhone } from '../phone.ts';
 
 interface AuditProps {
   gapi: GateApi;
@@ -73,6 +75,7 @@ export function Audit({ gapi, residents, transactions, onOpenResident, onOpenSna
   const [partialWarning, setPartialWarning] = useState('');
   const isAdmin = useIsAdmin();
   const readOnly = useReadOnly();
+  const phone = usePhone();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -125,6 +128,207 @@ export function Audit({ gapi, residents, transactions, onOpenResident, onOpenSna
   };
 
   const maxHour = audit ? Math.max(1, ...audit.traffic.byHour) : 1;
+
+  if (phone) {
+    const mobileTabs: readonly { key: 'dormant' | 'unknown' | 'codes'; label: string }[] = [
+      { key: 'dormant', label: `Dormant (${audit?.dormant.length ?? 0})` },
+      { key: 'unknown', label: `Unknown (${audit?.unknownCards.length ?? 0})` },
+      { key: 'codes', label: `Codes (${audit?.entryCodes.length ?? 0})` },
+    ];
+    const activeMobileTab = tab === 'traffic' ? 'dormant' : tab;
+
+    return (
+      <Stack spacing={1.5}>
+        {/* Borderless 4-pill period selector matching Android InsightsScreen */}
+        <Stack direction="row" spacing={1}>
+          {['30', '90', '180', '365'].map((opt) => {
+            const selected = days === opt;
+            return (
+              <ButtonBase
+                key={opt}
+                type="button"
+                onClick={() => setDays(opt)}
+                aria-pressed={selected}
+                sx={{
+                  flex: 1,
+                  py: 1,
+                  borderRadius: '999px',
+                  fontSize: '0.875rem',
+                  fontWeight: 500,
+                  bgcolor: selected ? 'var(--md-primary-container)' : 'var(--md-surface-high)',
+                  color: selected ? 'var(--md-on-primary-container)' : 'text.secondary',
+                }}
+              >
+                {opt}d
+              </ButtonBase>
+            );
+          })}
+        </Stack>
+
+        {error && <Alert severity="error">{error}</Alert>}
+        {partialWarning && <Alert severity="warning">{partialWarning}</Alert>}
+
+        {audit && (
+          <>
+            {/* 2x2 borderless tonal KPI tiles matching Android InsightsScreen */}
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1 }}>
+              {[
+                ['Total Events', String(audit.traffic.totalEvents)],
+                ['Admits', String(audit.traffic.admits)],
+                ['Denies', String(audit.traffic.denies)],
+                ['Open Cycles', String(audit.traffic.openCycles)],
+              ].map(([label, val]) => (
+                <Paper key={label} elevation={0} sx={{ p: 2, borderRadius: '12px', bgcolor: 'var(--md-surface-low)' }}>
+                  <Typography variant="caption" color="text.secondary">{label}</Typography>
+                  <Typography variant="h5" sx={{ fontWeight: 500, mt: 0.5 }}>{val}</Typography>
+                </Paper>
+              ))}
+            </Box>
+
+            {/* Borderless tonal Activity by Hour card */}
+            <Paper elevation={0} sx={{ p: 2, borderRadius: '16px', bgcolor: 'var(--md-surface-high)' }}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 500, mb: 1.5 }}>Activity by Hour (0–23)</Typography>
+              <Stack direction="row" sx={{ alignItems: 'flex-end', height: 88, gap: '3px' }}>
+                {audit.traffic.byHour.map((count, hour) => (
+                  <Box
+                    key={hour}
+                    title={`${fmtHourFull(hour)} — ${count} event${count === 1 ? '' : 's'}`}
+                    sx={{
+                      flex: 1,
+                      height: `${Math.max(6, Math.round((count / maxHour) * 100))}%`,
+                      bgcolor: count === 0 ? 'var(--md-surface-highest)' : 'primary.main',
+                      borderRadius: '4px 4px 0 0',
+                    }}
+                  />
+                ))}
+              </Stack>
+              <Stack direction="row" sx={{ justifyContent: 'space-between', mt: 1 }}>
+                {['12 AM', '6 AM', '12 PM', '6 PM', '11 PM'].map((lbl) => (
+                  <Typography key={lbl} variant="caption" color="text.secondary" sx={{ fontSize: '0.6875rem' }}>{lbl}</Typography>
+                ))}
+              </Stack>
+            </Paper>
+
+            {/* Borderless tonal segmented switcher */}
+            <Box sx={{ display: 'flex', gap: '4px', p: '4px', borderRadius: '999px', bgcolor: 'var(--md-surface-high)' }}>
+              {mobileTabs.map((t) => {
+                const selected = activeMobileTab === t.key;
+                return (
+                  <ButtonBase
+                    key={t.key}
+                    type="button"
+                    onClick={() => setTab(t.key)}
+                    aria-pressed={selected}
+                    sx={{
+                      flex: 1,
+                      py: 1.25,
+                      px: 1,
+                      borderRadius: '999px',
+                      fontSize: '0.75rem',
+                      fontWeight: 500,
+                      bgcolor: selected ? 'var(--md-primary-container)' : 'transparent',
+                      color: selected ? 'var(--md-on-primary-container)' : 'text.secondary',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {t.label}
+                  </ButtonBase>
+                );
+              })}
+            </Box>
+
+            {activeMobileTab === 'dormant' && (
+              <Stack spacing={1.25}>
+                {audit.dormant.length === 0 ? (
+                  <Paper elevation={0} sx={{ p: 2, borderRadius: '12px', bgcolor: 'var(--md-surface-low)' }}>
+                    <Typography variant="body2">No dormant credentials in the last {days} days.</Typography>
+                  </Paper>
+                ) : audit.dormant.map((entry) => (
+                  <Paper
+                    key={entry.directoryCode}
+                    elevation={0}
+                    onClick={() => openByCode(entry.directoryCode)}
+                    sx={{ p: 2, borderRadius: '12px', bgcolor: 'var(--md-surface-low)', cursor: 'pointer' }}
+                  >
+                    <Stack spacing={1}>
+                      <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>{entry.name || `Unit ${entry.directoryCode}`}</Typography>
+                        <Chip size="small" color="primary" label={`Unit ${entry.directoryCode}`} sx={{ height: 26 }} />
+                      </Stack>
+                      <Stack direction="row" sx={{ gap: '6px', flexWrap: 'wrap' }}>
+                        <Chip size="small" label={entry.type} sx={{ height: 26 }} />
+                        {entry.entryCode && <Chip size="small" color="success" label={`#${entry.entryCode}`} sx={{ height: 26 }} />}
+                        <Chip size="small" color="warning" label={entry.lastSeen ? `Last seen ${entry.lastSeen.slice(0, 10)}` : 'Never seen'} sx={{ height: 26 }} />
+                      </Stack>
+                    </Stack>
+                  </Paper>
+                ))}
+              </Stack>
+            )}
+
+            {activeMobileTab === 'unknown' && (
+              <Stack spacing={1.25}>
+                {audit.unknownCards.length === 0 ? (
+                  <Paper elevation={0} sx={{ p: 2, borderRadius: '12px', bgcolor: 'var(--md-surface-low)' }}>
+                    <Typography variant="body2">No unknown card activity in the last {days} days.</Typography>
+                  </Paper>
+                ) : audit.unknownCards.map((card) => (
+                  <Paper key={card.cardNumber} elevation={0} sx={{ p: 2, borderRadius: '12px', bgcolor: 'var(--md-surface-low)' }}>
+                    <Stack spacing={1}>
+                      <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Card #{card.cardNumber}</Typography>
+                        <Chip size="small" color="warning" label={`${card.uses} uses`} sx={{ height: 26 }} />
+                      </Stack>
+                      <Stack direction="row" sx={{ gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                        {card.admits > 0 && <Chip size="small" color="success" label={`${card.admits} admit`} sx={{ height: 26 }} />}
+                        {card.denies > 0 && <Chip size="small" color="error" label={`${card.denies} deny`} sx={{ height: 26 }} />}
+                        {card.lastSeen && <Chip size="small" label={`Last ${card.lastSeen.slice(0, 10)}`} sx={{ height: 26 }} />}
+                        {card.hasSnapshot && (
+                          <Button size="small" variant="outlined" onClick={() => openMinuteSnap(card.lastMinute, card.cardNumber)}>Snapshot</Button>
+                        )}
+                      </Stack>
+                    </Stack>
+                  </Paper>
+                ))}
+              </Stack>
+            )}
+
+            {activeMobileTab === 'codes' && (
+              <Stack spacing={1.25}>
+                {audit.entryCodes.length === 0 ? (
+                  <Paper elevation={0} sx={{ p: 2, borderRadius: '12px', bgcolor: 'var(--md-surface-low)' }}>
+                    <Typography variant="body2">No entry code usage recorded in the last {days} days.</Typography>
+                  </Paper>
+                ) : audit.entryCodes.map((entry) => (
+                  <Paper
+                    key={`${entry.directoryCode}-${entry.entryCode}`}
+                    elevation={0}
+                    onClick={() => openByCode(entry.directoryCode)}
+                    sx={{ p: 2, borderRadius: '12px', bgcolor: 'var(--md-surface-low)', cursor: 'pointer' }}
+                  >
+                    <Stack spacing={1}>
+                      <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>{entry.name || `Unit ${entry.directoryCode}`}</Typography>
+                        <Chip size="small" color={entry.flagged ? 'error' : 'primary'} label={`#${entry.entryCode}`} sx={{ height: 26 }} />
+                      </Stack>
+                      <Stack direction="row" sx={{ gap: '6px', flexWrap: 'wrap' }}>
+                        <Chip size="small" label={`${entry.uses} uses`} sx={{ height: 26 }} />
+                        <Chip size="small" label={`${entry.distinctDays} days`} sx={{ height: 26 }} />
+                        {entry.offHoursUses > 0 && <Chip size="small" color="warning" label={`${entry.offHoursUses} off-hours`} sx={{ height: 26 }} />}
+                        {entry.flagged && <Chip size="small" color="error" label="Flagged" sx={{ height: 26 }} />}
+                      </Stack>
+                    </Stack>
+                  </Paper>
+                ))}
+              </Stack>
+            )}
+          </>
+        )}
+      </Stack>
+    );
+  }
 
   return (
     <Stack spacing={2}>

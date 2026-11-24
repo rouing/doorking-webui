@@ -28,14 +28,14 @@ import {
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import FenceIcon from '@mui/icons-material/Fence';
 import FenceOutlinedIcon from '@mui/icons-material/FenceOutlined';
+import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
 import ListAltIcon from '@mui/icons-material/ListAlt';
 import ListAltOutlinedIcon from '@mui/icons-material/ListAltOutlined';
-import LockOpenOutlinedIcon from '@mui/icons-material/LockOpenOutlined';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import PeopleIcon from '@mui/icons-material/People';
 import PeopleOutlinedIcon from '@mui/icons-material/PeopleOutlined';
 import RestoreOutlinedIcon from '@mui/icons-material/RestoreOutlined';
-import TerminalOutlinedIcon from '@mui/icons-material/TerminalOutlined';
+import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined';
 import UploadOutlinedIcon from '@mui/icons-material/UploadOutlined';
 import WorkIcon from '@mui/icons-material/Work';
 import WorkOutlinedIcon from '@mui/icons-material/WorkOutlined';
@@ -336,10 +336,20 @@ export function GateSheet({
   const actions = useGateActions({ gapi, workingCopy, hasWorkingCopy, running, onReset, onJobStarted, onNotify });
   const closeThen = (action: () => void) => () => { onOpenChange(false); onNotify(''); action(); };
 
+  const sheetBtnSx = {
+    minHeight: 40,
+    py: 1,
+    borderRadius: '999px',
+    fontSize: '0.875rem',
+    fontWeight: 500,
+    boxShadow: 'none',
+    '&:hover': { boxShadow: 'none' },
+  };
+
   const tonalBtnSx = {
+    ...sheetBtnSx,
     bgcolor: 'var(--md-secondary-container)',
     color: 'var(--md-on-secondary-container)',
-    boxShadow: 'none',
     '&:hover': {
       bgcolor: 'var(--md-primary-container)',
       color: 'var(--md-on-primary-container)',
@@ -368,10 +378,10 @@ export function GateSheet({
         }}
       >
         <Box sx={{ width: 32, height: 4, borderRadius: 2, bgcolor: 'text.disabled', mx: 'auto', mt: 1.5, mb: 0.5, opacity: 0.4 }} />
-        <Stack spacing={1.25} sx={{ px: 2.5, py: 1.5 }}>
-          <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
-            <Typography variant="h6" component="h2" sx={{ fontWeight: 600 }}>Gate connection</Typography>
-            <Stack direction="row" spacing={0.75} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+        <Stack sx={{ px: 2.5, py: 1.5, gap: '10px' }}>
+          <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', gap: 0.75, flexWrap: 'wrap' }}>
+            <Typography sx={{ fontSize: '1.15rem', lineHeight: 1.25, fontWeight: 600, whiteSpace: 'nowrap' }}>Gate connection</Typography>
+            <Stack direction="row" sx={{ alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
               {statusLabel && job && (
                 <Chip
                   size="small"
@@ -379,18 +389,20 @@ export function GateSheet({
                   label={statusLabel}
                   color={JOB_COLORS[job.state]}
                   onClick={closeThen(onShowProgress)}
+                  sx={{ height: 24, fontSize: '0.7rem', fontWeight: 500, '& .MuiChip-label': { px: 1 } }}
                 />
               )}
               <Chip
                 size="small"
                 label={workingCopy.label}
                 color={WORKING_COPY_CHIP_COLOR[workingCopy.color]}
+                sx={{ height: 24, fontSize: '0.7rem', fontWeight: 500, '& .MuiChip-label': { px: 1 } }}
               />
             </Stack>
           </Stack>
 
           {running && (
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="caption" color="text.secondary">
               Connection running ({job?.what || 'gate'}). Data reloads automatically when finished.
             </Typography>
           )}
@@ -400,20 +412,20 @@ export function GateSheet({
               <Button
                 variant="contained"
                 color="success"
-                size="large"
                 fullWidth
                 disabled={!draft.unsaved || Boolean(draft.blocked)}
                 onClick={closeThen(() => { void draft.save(); })}
+                sx={sheetBtnSx}
               >
                 Save to working copy{draft.unsaved ? ` (${draft.unsaved})` : ''}
               </Button>
               <Button
                 variant="contained"
                 color="error"
-                size="large"
                 fullWidth
                 disabled={!draft.unsaved}
                 onClick={closeThen(draft.discard)}
+                sx={sheetBtnSx}
               >
                 Discard unsaved
               </Button>
@@ -425,29 +437,28 @@ export function GateSheet({
             <>
               <Button
                 variant="contained"
-                size="large"
                 fullWidth
-                startIcon={<UploadOutlinedIcon />}
+                startIcon={<UploadOutlinedIcon sx={{ fontSize: 18 }} />}
                 disabled={!isAdmin || !actions.canSend}
                 onClick={closeThen(actions.send)}
+                sx={sheetBtnSx}
               >
                 Send to gate
               </Button>
-              {!isAdmin && <Typography variant="body2" color="text.secondary">Ask a gate admin to review and Send to gate.</Typography>}
+              {!isAdmin && <Typography variant="caption" color="text.secondary">Ask a gate admin to review and Send to gate.</Typography>}
               {workingCopy.conflicts.length > 0 && (
-                <Typography variant="body2" color="error">Decide the conflicts on the Residents page first.</Typography>
+                <Typography variant="caption" color="error">Decide the conflicts on the Residents page first.</Typography>
               )}
               <Button
                 variant="contained"
-                size="large"
                 fullWidth
-                startIcon={<RestoreOutlinedIcon />}
+                startIcon={<RestoreOutlinedIcon sx={{ fontSize: 18 }} />}
                 disabled={!actions.canReset}
                 onClick={closeThen(actions.reset)}
                 sx={{
+                  ...sheetBtnSx,
                   bgcolor: 'var(--md-error-container)',
                   color: 'var(--md-on-error-container)',
-                  boxShadow: 'none',
                   '&:hover': { bgcolor: 'var(--md-error-container)', filter: 'brightness(0.95)', boxShadow: 'none' },
                 }}
               >
@@ -459,9 +470,8 @@ export function GateSheet({
 
           <Button
             variant="contained"
-            size="large"
             fullWidth
-            startIcon={<PeopleIcon />}
+            startIcon={<PeopleIcon sx={{ fontSize: 18 }} />}
             disabled={running}
             onClick={() => onPull('residents')}
             sx={tonalBtnSx}
@@ -470,38 +480,35 @@ export function GateSheet({
           </Button>
           <Button
             variant="contained"
-            size="large"
             fullWidth
-            startIcon={<ListAltIcon />}
+            startIcon={<ListAltIcon sx={{ fontSize: 18 }} />}
             disabled={running}
             onClick={() => onPull('transactions')}
             sx={tonalBtnSx}
           >
             Pull transactions
           </Button>
-          {job && job.log.length > 0 && (
-            <Button
-              variant="text"
-              color="inherit"
-              size="large"
-              fullWidth
-              startIcon={<TerminalOutlinedIcon />}
-              onClick={closeThen(onShowProgress)}
-            >
-              Show progress
-            </Button>
-          )}
           <Button
             variant="contained"
-            size="large"
             fullWidth
-            startIcon={<LockOpenOutlinedIcon />}
+            startIcon={<TuneOutlinedIcon sx={{ fontSize: 18 }} />}
             onClick={closeThen(onLiveRelays)}
             sx={tonalBtnSx}
           >
             Live relays
           </Button>
-          <Button variant="text" color="inherit" size="medium" fullWidth onClick={() => onOpenChange(false)}>
+          {job && job.log.length > 0 && (
+            <Button
+              variant="contained"
+              fullWidth
+              startIcon={<HistoryOutlinedIcon sx={{ fontSize: 18 }} />}
+              onClick={closeThen(onShowProgress)}
+              sx={tonalBtnSx}
+            >
+              Show progress ({job.state})
+            </Button>
+          )}
+          <Button variant="text" fullWidth onClick={() => onOpenChange(false)} sx={{ ...sheetBtnSx, color: 'primary.main' }}>
             Close
           </Button>
         </Stack>

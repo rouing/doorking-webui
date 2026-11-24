@@ -34,6 +34,7 @@ import { useBackLayer } from '../back.ts';
 import { useConfirm } from '../Confirm.tsx';
 import { fmtTime } from '../format.ts';
 import { roleLabel } from '../Gates.tsx';
+import { usePhone } from '../phone.ts';
 
 export const ACTIONS: Record<string, string> = {
   change: 'Change', revert: 'Revert', pull: 'Pull', send: 'Send', relay: 'Relay', camera: 'Camera',
@@ -56,6 +57,7 @@ interface HistoryProps {
  */
 export function History({ gapi, onReverted }: HistoryProps) {
   const readOnly = useReadOnly();
+  const phone = usePhone();
   const [history, setHistory] = useState<HistoryReply | null>(null);
   const [pulls, setPulls] = useState<PullArchiveEntry[]>([]);
   const [diffView, setDiffView] = useState<{ pull: PullArchiveEntry; changes: SendChange[] } | null>(null);
@@ -128,20 +130,21 @@ export function History({ gapi, onReverted }: HistoryProps) {
   const visibleEvents = events.slice(0, shown);
 
   return (
-    <Stack spacing={2}>
+    <Stack spacing={phone ? 1.5 : 2}>
       {dialog}
-      <Typography variant="h5" component="h1">History</Typography>
-      <Typography variant="body2" color="text.secondary">
-        Pulls, sends, live relay changes and working-copy changes for this gate. Tap an event with changes to inspect
-        details. <strong>Revert</strong> undoes a change in the working copy only; review it, then use Send to gate.
-      </Typography>
+      {!phone && <Typography variant="h5" component="h1">History</Typography>}
+      {!phone && (
+        <Typography variant="body2" color="text.secondary">
+          Pulls, sends, live relay changes and working-copy changes for this gate. Tap an event with changes to inspect
+          details. <strong>Revert</strong> undoes a change in the working copy only; review it, then use Send to gate.
+        </Typography>
+      )}
       {error && <Alert severity="error">{error}</Alert>}
 
-      <Accordion variant="outlined" disableGutters>
+      <Accordion disableGutters elevation={0} sx={{ border: 'none', borderRadius: '16px !important', bgcolor: 'var(--md-surface-high)' }}>
         <AccordionSummary expandIcon={<ExpandMoreIcon />}>
           <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap', pr: 1 }}>
-            <Typography variant="h6" component="h2">Gate users</Typography>
-            <Chip size="small" label={`${users.length}`} />
+            <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 500 }}>Gate users ({users.length})</Typography>
           </Stack>
         </AccordionSummary>
         <AccordionDetails sx={{ pt: 0 }}>
@@ -150,7 +153,7 @@ export function History({ gapi, onReverted }: HistoryProps) {
           ) : (
             <Stack spacing={1}>
               {users.map((user) => (
-                <Paper key={user.username} elevation={0} sx={{ p: 1.25, borderRadius: 'var(--md-card-radius, 10px)', bgcolor: 'action.hover' }}>
+                <Paper key={user.username} elevation={0} sx={{ p: 1.5, borderRadius: '12px', bgcolor: 'var(--md-surface-lowest)' }}>
                   <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
                     <Stack direction="row" spacing={0.75} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
                       <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>{user.username}</Typography>
@@ -158,9 +161,12 @@ export function History({ gapi, onReverted }: HistoryProps) {
                         size="small"
                         label={roleLabel(user.role)}
                         color={user.role === 'admin' ? 'primary' : user.role === 'editor' ? 'warning' : user.role === 'resident' ? 'success' : 'default'}
+                        sx={{ height: 26 }}
                       />
                     </Stack>
-                    <Chip size="small" label={`Last sign-in: ${user.lastSignIn ? fmtTime(user.lastSignIn) : 'never'}`} />
+                    <Typography variant="caption" color="text.secondary">
+                      {user.lastSignIn ? user.lastSignIn.slice(0, 10) : 'Never'}
+                    </Typography>
                   </Stack>
                 </Paper>
               ))}
@@ -169,20 +175,24 @@ export function History({ gapi, onReverted }: HistoryProps) {
         </AccordionDetails>
       </Accordion>
 
-      <Card>
-        <CardContent>
-          <Stack spacing={1.5}>
-            <Stack direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
-              <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-                <Typography variant="h6" component="h2">Events</Typography>
-                {info && <Chip size="small" label={info} />}
+      <Card elevation={0} sx={phone ? { border: 'none', bgcolor: 'transparent', boxShadow: 'none' } : undefined}>
+        <CardContent sx={phone ? { p: 0, '&:last-child': { pb: 0 } } : undefined}>
+          <Stack spacing={phone ? 1.25 : 1.5}>
+            {!phone && (
+              <Stack direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+                <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                  <Typography variant="h6" component="h2">Events</Typography>
+                  {info && <Chip size="small" label={info} />}
+                </Stack>
+                <Button size="small" variant="outlined" color="inherit" onClick={load}>Refresh</Button>
               </Stack>
-              <Button size="small" variant="outlined" color="inherit" onClick={load}>Refresh</Button>
-            </Stack>
+            )}
             {!events.length ? (
-              <Typography variant="body2" color="text.secondary">No history events yet.</Typography>
+              <Paper elevation={0} sx={{ p: 2, borderRadius: '12px', bgcolor: 'var(--md-surface-low)' }}>
+                <Typography variant="body2" color="text.secondary">No history events yet.</Typography>
+              </Paper>
             ) : (
-              <Stack spacing={1}>
+              <Stack spacing={1.25}>
                 {visibleEvents.map((entry) => {
                   const details = entry.details || [];
                   const expanded = open === entry.id && details.length > 0;
@@ -193,10 +203,10 @@ export function History({ gapi, onReverted }: HistoryProps) {
                       elevation={0}
                       onClick={details.length ? () => setOpen(expanded ? null : entry.id) : undefined}
                       sx={(theme) => ({
-                        p: 1.5,
-                        borderRadius: 'var(--md-card-radius, 10px)',
+                        p: 2,
+                        borderRadius: '12px',
                         cursor: details.length ? 'pointer' : 'default',
-                        bgcolor: failed ? alpha(theme.palette.error.main, 0.14) : theme.palette.action.hover,
+                        bgcolor: failed ? alpha(theme.palette.error.main, 0.14) : 'var(--md-surface-low)',
                         opacity: entry.revertedBy ? 0.72 : 1,
                       })}
                     >
@@ -289,22 +299,23 @@ export function History({ gapi, onReverted }: HistoryProps) {
       </Card>
 
       {pulls.length > 0 && (
-        <Accordion variant="outlined" disableGutters>
+        <Accordion disableGutters elevation={0} sx={{ border: 'none', borderRadius: '16px !important', bgcolor: 'var(--md-surface-high)' }}>
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>
             <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap', pr: 1 }}>
-              <Typography variant="h6" component="h2">Past pulls (point-in-time rollback)</Typography>
-              <Chip size="small" label={`${pulls.length}`} />
+              <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 500 }}>Past pulls ({pulls.length})</Typography>
             </Stack>
           </AccordionSummary>
           <AccordionDetails sx={{ pt: 0 }}>
-            <Stack spacing={1.5}>
-              <Typography variant="body2" color="text.secondary">
-                Up to 50 distinct residents pulls are archived per gate. Compare any past pull against your current working
-                copy, or restore it to the working copy (nothing touches the gate until Send to gate).
-              </Typography>
+            <Stack spacing={1.25}>
+              {!phone && (
+                <Typography variant="body2" color="text.secondary">
+                  Up to 50 distinct residents pulls are archived per gate. Compare any past pull against your current working
+                  copy, or restore it to the working copy (nothing touches the gate until Send to gate).
+                </Typography>
+              )}
               <Stack spacing={1}>
                 {pulls.map((pull) => (
-                  <Paper key={pull.id} elevation={0} sx={{ p: 1.25, borderRadius: 'var(--md-card-radius, 10px)', bgcolor: 'action.hover' }}>
+                  <Paper key={pull.id} elevation={0} sx={{ p: 1.5, borderRadius: '12px', bgcolor: 'var(--md-surface-lowest)' }}>
                     <Stack direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
                       <Stack direction="row" spacing={0.75} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
                         <Chip size="small" label={fmtTime(pull.pulledAt)} />

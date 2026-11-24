@@ -9,6 +9,7 @@ import type { ReactNode } from 'react';
 import {
   Box,
   Button,
+  ButtonBase,
   Card,
   CardContent,
   Chip,
@@ -38,6 +39,8 @@ import type { NavKey } from './pages.ts';
 interface PhoneMorePageProps {
   gate: GateInfo;
   user: string;
+  dark: boolean;
+  onSelectDark: (dark: boolean) => void;
   onGo: (page: NavKey) => void;
   onOpenSearch: () => void;
   onAllGates: () => void;
@@ -82,6 +85,8 @@ const ROLE_LABELS: Record<string, string> = {
 export function PhoneMorePage({
   gate,
   user,
+  dark,
+  onSelectDark,
   onGo,
   onOpenSearch,
   onAllGates,
@@ -188,13 +193,47 @@ export function PhoneMorePage({
               />
             </List>
           </Box>
+          <Box
+            sx={{
+              display: 'flex',
+              gap: '4px',
+              p: '4px',
+              borderRadius: '999px',
+              bgcolor: 'var(--md-surface-highest)',
+              mb: 1.5,
+            }}
+          >
+            {([['Light', false], ['Dark', true]] as const).map(([label, isDark]) => {
+              const selected = dark === isDark;
+              return (
+                <ButtonBase
+                  key={label}
+                  type="button"
+                  onClick={() => onSelectDark(isDark)}
+                  aria-pressed={selected}
+                  sx={{
+                    flex: 1,
+                    py: 1.25,
+                    borderRadius: '999px',
+                    fontSize: '0.875rem',
+                    fontWeight: selected ? 600 : 500,
+                    bgcolor: selected ? 'var(--md-primary-container)' : 'transparent',
+                    color: selected ? 'var(--md-on-primary-container)' : 'text.secondary',
+                    transition: 'background-color 140ms ease, color 140ms ease',
+                  }}
+                >
+                  {label}
+                </ButtonBase>
+              );
+            })}
+          </Box>
           <Button
             variant="contained"
             color="error"
             fullWidth
             startIcon={<LogoutOutlinedIcon />}
             onClick={onSignOut}
-            sx={{ boxShadow: 'none', '&:hover': { boxShadow: 'none' } }}
+            sx={{ minHeight: 40, borderRadius: '999px', boxShadow: 'none', '&:hover': { boxShadow: 'none' } }}
           >
             Sign out
           </Button>

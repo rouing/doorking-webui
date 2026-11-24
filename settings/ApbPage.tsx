@@ -18,7 +18,7 @@ import type { GateSettingRow } from '../types.ts';
 import type { GateApi } from '../api.ts';
 import { HelpTip } from '../HelpTip.tsx';
 import { usePhone } from '../phone.ts';
-import { DAY_LETTERS, DAY_NAMES, GroupPage, Head, rowState, setBit, TimeBox, TogglePill } from './GroupPage.tsx';
+import { GroupPage, Head, rowState, setBit, TimeBox, TogglePill, WeekdayRow } from './GroupPage.tsx';
 import { useGateSettings, type GateSettings } from './useGateSettings.ts';
 
 const MAX_RELAYS = 10;
@@ -200,17 +200,11 @@ export function ApbPage({ gapi, relayLabels, relays: shown }: ApbPageProps) {
       />
     ), true],
     ['Scheduled Re-Sync All days', [field('apbScheduleDays')], ([setting]) => (
-      <Stack direction="row" spacing={0.5} useFlexGap sx={{ flexWrap: 'wrap' }}>
-        {DAY_LETTERS.map((letter, i) => (
-          <TogglePill
-            key={i}
-            label={letter}
-            ariaLabel={DAY_NAMES[i]}
-            active={settings.current(setting)[i] === '1'}
-            onToggle={(on) => settings.edit(setting, setBit(settings.current(setting), i, on))}
-          />
-        ))}
-      </Stack>
+      <WeekdayRow
+        bits={settings.current(setting)}
+        labelPrefix="Re-Sync"
+        onToggle={(i, on) => settings.edit(setting, setBit(settings.current(setting), i, on))}
+      />
     )],
     ['Scheduled Re-Sync All time', [field('apbScheduleTime')], ([setting]) => (
       <TimeBox value={settings.current(setting)} ariaLabel="Scheduled Re-Sync All time" onChange={(value) => settings.edit(setting, value)} />
@@ -220,7 +214,7 @@ export function ApbPage({ gapi, relayLabels, relays: shown }: ApbPageProps) {
   if (phone) {
     return (
       <GroupPage settings={settings} group="Anti-Pass Back" title="Anti-Pass Back" help="apb" bare clearValue={(setting) => CLEAR[setting.key]} intro={intro}>
-        <Stack spacing={1} sx={{ width: '100%' }}>
+        <Stack spacing={1.25} sx={{ width: '100%' }}>
           {rows.map(([label, fs, build, inline]) => {
             if (fs.some((setting) => !setting)) return null;
             const row = rowState(settings, fs, { pendingText: 'Not sent' });
@@ -230,10 +224,9 @@ export function ApbPage({ gapi, relayLabels, relays: shown }: ApbPageProps) {
                 key={label}
                 elevation={0}
                 sx={{
-                  px: 1.5,
-                  py: 1,
-                  borderRadius: 2,
-                  bgcolor: row.style.background || 'action.hover',
+                  p: 2,
+                  borderRadius: '12px',
+                  bgcolor: row.style.background || 'var(--md-surface-low)',
                 }}
               >
                 {inline ? (

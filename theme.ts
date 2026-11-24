@@ -128,6 +128,7 @@ export function createAppTheme(dark: boolean) {
       MuiCssBaseline: {
         styleOverrides: {
           ':root': {
+            colorScheme: dark ? 'dark' : 'light',
             '--md-surface': c.surface,
             '--md-surface-lowest': c.surfaceLowest,
             '--md-surface-low': c.surfaceLow,

@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
+  Box,
   Button,
+  ButtonBase,
   Card,
   CardContent,
   Chip,
   FormControlLabel,
   MenuItem,
-  Radio,
-  RadioGroup,
   Select,
   Stack,
   Switch,
@@ -23,6 +23,7 @@ import { trackerOf, trackerRelays } from '../format.ts';
 import { GateSettingsEditor } from './GateSettingsEditor.tsx';
 import { RelayNameBox } from './LocalPrefs.tsx';
 import { HelpTip } from '../HelpTip.tsx';
+import { usePhone } from '../phone.ts';
 import { useGateSettings, type GateSettings } from './useGateSettings.ts';
 
 interface Common {
@@ -397,33 +398,80 @@ export function RelaysPage({ prefs, ...common }: RelaysPageProps) {
  * @returns Rendered React element.
  */
 export function DisplayPage(common: Common) {
+  const phone = usePhone();
   const settings = useGateSettings(common.gapi);
-  /** Stored as plain text (not JSON), so a saved choice from before the React page still reads back. */
-  const [mode, setMode] = useState<'single' | '8line'>(() => {
-    try { return localStorage.getItem('dk-display-mode') === '8line' ? '8line' : 'single'; } catch { return 'single'; }
-  });
-  const choose = (value: string) => {
-    const displayMode = value === '8line' ? '8line' : 'single';
+  const [mode, setMode] = useState<'single' | '8line'>('single');
+  const [initialized, setInitialized] = useState(false);
+
+  // Auto-detect whichever layout (2-Line vs 8-Line) is currently populated on the gate, matching Android.
+  useEffect(() => {
+    if (initialized || !settings.fields.length) return;
+    const twoLine = settings.fields.filter((f) => f.group === 'Display (single line)' && f.value.trim()).length;
+    const eightLine = settings.fields.filter((f) => f.group === 'Display (8 line)' && f.value.trim()).length;
+    setMode(eightLine > twoLine ? '8line' : 'single');
+    setInitialized(true);
+  }, [initialized, settings.fields]);
+
+  const choose = (displayMode: 'single' | '8line') => {
     setMode(displayMode);
-    try { localStorage.setItem('dk-display-mode', displayMode); } catch { /* storage blocked */ }
+    setInitialized(true);
   };
+
   return (
-    <Stack spacing={3}>
-      <Typography variant="h5" component="h1">Display</Typography>
-      <Card>
-        <CardContent>
-          <Stack spacing={1.5}>
-            <Stack direction="row" spacing={2} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-              <Typography variant="body2" sx={{ fontWeight: 500 }}>LCD message layout:</Typography>
-              <RadioGroup row value={mode} aria-label="LCD message layout" onChange={(_, val) => choose(val)}>
-                <FormControlLabel value="single" control={<Radio size="small" />} label="Single Line" />
-                <FormControlLabel value="8line" control={<Radio size="small" />} label="8 Line" />
-              </RadioGroup>
-            </Stack>
-            <Typography variant="body2" color="text.secondary">
-              Which layout is shown below: Single Line (2 boxes) or 8 Line (8 boxes). Remembered in this browser; the gate
-              stores both and the active mode is set in the DoorKing app.
-            </Typography>
+    <Stack spacing={phone ? 1.25 : 3}>
+      <Typography
+        component="h1"
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          fontSize: phone ? '1.375rem' : '1.5rem',
+          fontWeight: phone ? 500 : 700,
+        }}
+      >
+        Display
+      </Typography>
+      <Card elevation={0} sx={{ border: 'none', borderRadius: '12px', bgcolor: 'var(--md-surface-low)' }}>
+        <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+          <Stack spacing={1.25}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>LCD Message Layout</Typography>
+            <Box
+              sx={{
+                display: 'flex',
+                gap: '4px',
+                p: '4px',
+                borderRadius: '999px',
+                bgcolor: 'var(--md-surface-highest)',
+              }}
+            >
+              {([['single', '2-Line'], ['8line', '8-Line']] as const).map(([val, label]) => {
+                const selected = mode === val;
+                return (
+                  <ButtonBase
+                    key={val}
+                    type="button"
+                    onClick={() => choose(val)}
+                    aria-pressed={selected}
+                    sx={{
+                      flex: 1,
+                      py: 1,
+                      borderRadius: '999px',
+                      fontSize: '0.875rem',
+                      fontWeight: selected ? 600 : 500,
+                      bgcolor: selected ? 'var(--md-primary-container)' : 'transparent',
+                      color: selected ? 'var(--md-on-primary-container)' : 'text.secondary',
+                      transition: 'background-color 140ms ease, color 140ms ease',
+                    }}
+                  >
+                    {label}
+                  </ButtonBase>
+                );
+              })}
+            </Box>
+            {!phone && (
+              <Typography variant="body2" color="text.secondary">
+                Switch between 2-Line (Single Line) and 8-Line display messages. Defaults to the layout currently populated on the gate.
+              </Typography>
+            )}
           </Stack>
         </CardContent>
       </Card>

@@ -52,24 +52,24 @@ function HolidayRow({ settings, setting, index, holidays }: HolidayRowProps) {
 
   return (
     <Paper
-      variant="outlined"
+      elevation={0}
       title={`Gate (pulled): ${setting.gate || '(none)'}${setting.value !== setting.gate ? `\nWorking copy: ${setting.value || '(none)'}` : ''}`
         + `${dirty ? `\nYour change: ${v || '(none)'}` : ''}`}
       sx={{
-        px: 1.5,
-        py: 1,
+        p: 2,
+        borderRadius: '12px',
         width: '100%',
         boxSizing: 'border-box',
-        backgroundColor: row.style.background || 'background.paper',
+        bgcolor: row.style.background || 'var(--md-surface-low)',
       }}
     >
       <Stack direction="row" spacing={1} sx={{ alignItems: 'center', width: '100%' }}>
-        <Chip size="small" label={`#${index + 1}`} sx={{ flexShrink: 0, minWidth: 36, fontVariantNumeric: 'tabular-nums' }} />
+        <Chip size="small" label={`#${index + 1}`} sx={{ flexShrink: 0, height: 26, minWidth: 36, fontVariantNumeric: 'tabular-nums' }} />
         <Select
           size="small"
           value={custom || (v !== '' && !known) ? CUSTOM : v === '' ? NONE : v}
           inputProps={{ 'aria-label': `Holiday ${index + 1}` }}
-          sx={{ flex: '1 1 auto', minWidth: 0, '& .MuiSelect-select': { py: 0.5, fontSize: '0.85rem' } }}
+          sx={{ flex: '1 1 auto', minWidth: 0, '& .MuiSelect-select': { py: 0.75, fontSize: '0.85rem' } }}
           onChange={(event) => {
             const sel = String(event.target.value);
             if (sel === CUSTOM) { setCustom(true); return; }
@@ -89,11 +89,11 @@ function HolidayRow({ settings, setting, index, holidays }: HolidayRowProps) {
           sx={{
             width: '7.5ch',
             flexShrink: 0,
-            '& .MuiInputBase-input': { py: 0.5, px: 0.75, fontSize: '0.85rem', textAlign: 'center', fontVariantNumeric: 'tabular-nums' },
+            '& .MuiInputBase-input': { py: 0.75, px: 0.75, fontSize: '0.85rem', textAlign: 'center', fontVariantNumeric: 'tabular-nums' },
           }}
           onChange={(event) => { setCustom(false); settings.edit(setting, event.target.value.trim()); }}
         />
-        <Chip size="small" color={pill.color} label={pill.label} sx={{ minWidth: 68, flexShrink: 0 }} />
+        <Chip size="small" color={pill.color} label={pill.label} sx={{ height: 26, minWidth: 64, flexShrink: 0 }} />
       </Stack>
     </Paper>
   );
@@ -133,14 +133,22 @@ function HolidaysForSecurity({ settings }: HolidaysForSecurityProps) {
     settings.edit(field, on ? 'Yes' : 'No');
   };
   return (
-    <Paper variant="outlined" sx={{ px: 2, py: 1, width: '100%', boxSizing: 'border-box', backgroundColor: row.style.background || 'background.paper' }}>
+    <Paper
+      elevation={0}
+      sx={{
+        p: 2,
+        borderRadius: '12px',
+        width: '100%',
+        boxSizing: 'border-box',
+        bgcolor: row.style.background || 'var(--md-surface-low)',
+      }}
+    >
       {dialog}
       <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
         <Typography variant="body2" component="div" sx={{ fontWeight: 600, flex: '1 1 auto', minWidth: 0, display: 'flex', alignItems: 'center' }}>
           Holidays for Security Levels (TZ4 → HOL)<HelpTip of="holidaysForSecurity" />
         </Typography>
         <Switch checked={cur} onChange={(_, checked) => toggle(checked)} slotProps={{ input: { 'aria-label': 'Holidays for Security Levels' } }} />
-        <Chip size="small" color={pill.color} label={pill.label} sx={{ minWidth: 74, flexShrink: 0 }} />
       </Stack>
     </Paper>
   );
@@ -213,49 +221,57 @@ interface FacilityPageProps {
 export function FacilityPage({ gapi }: FacilityPageProps) {
   const settings = useGateSettings(gapi);
   const fields = settings.fields.filter((setting) => setting.group === 'Facility Codes');
+  const toggleField = fields.find((f) => f.key === 'facilityEnabled');
+  const enabled = toggleField ? settings.current(toggleField) === 'Yes' : false;
+  const codeFields = fields.filter((f) => f.key !== 'facilityEnabled');
+
   return (
-    <GroupPage settings={settings} group="Facility Codes" title="Facility Codes" help="facility" bare
+    <GroupPage
+      settings={settings}
+      group="Facility Codes"
+      title="Facility Codes"
+      help="facility"
+      bare
+      headerRight={toggleField && (
+        <Switch
+          checked={enabled}
+          onChange={(_, checked) => settings.edit(toggleField, checked ? 'Yes' : 'No')}
+          slotProps={{ input: { 'aria-label': 'Enable Facility Codes' } }}
+        />
+      )}
       clearValue={(setting) => (setting.key === 'facilityEnabled' ? 'No' : '')}
-      intro={`Enable facility codes and set up to 10 values (000–255; blank = unused). For MicroPLUS transmitters, leave off the leading 0 of the 4-digit facility code (0124 → 124). ${CLEAR_NOTE} Edits go to the working copy.`}>
-      <Stack spacing={1} sx={{ width: '100%', maxWidth: 640 }}>
-        {fields.map((setting) => {
-          const row = rowState(settings, [setting], { pendingText: 'Not sent' });
-          const cur = settings.current(setting);
-          const dirty = setting.key in settings.edits;
-          const pending = setting.value !== setting.gate;
-          const isToggle = setting.key === 'facilityEnabled';
-          const pill = dirty
-            ? { label: 'Unsaved', color: 'primary' as const }
-            : pending
-              ? { label: 'Not sent', color: 'success' as const }
-              : isToggle
-                ? { label: cur === 'Yes' ? 'Enabled' : 'Disabled', color: cur === 'Yes' ? ('success' as const) : ('default' as const) }
+      intro={`Enable facility codes and set up to 10 values (000–255; blank = unused). For MicroPLUS transmitters, leave off the leading 0 of the 4-digit facility code (0124 → 124). ${CLEAR_NOTE} Edits go to the working copy.`}
+    >
+      {enabled && (
+        <Stack spacing={1.25} sx={{ width: '100%', maxWidth: 640 }}>
+          {codeFields.map((setting) => {
+            const row = rowState(settings, [setting], { pendingText: 'Not sent' });
+            const cur = settings.current(setting);
+            const dirty = setting.key in settings.edits;
+            const pending = setting.value !== setting.gate;
+            const pill = dirty
+              ? { label: 'Unsaved', color: 'primary' as const }
+              : pending
+                ? { label: 'Not sent', color: 'success' as const }
                 : cur
                   ? { label: 'Active', color: 'success' as const }
                   : { label: 'Unused', color: 'default' as const };
-          return (
-            <Paper
-              key={setting.key}
-              variant="outlined"
-              sx={{
-                px: 2,
-                py: 1,
-                width: '100%',
-                boxSizing: 'border-box',
-                backgroundColor: row.style.background || 'background.paper',
-              }}
-            >
-              <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                <Typography variant="body2" sx={{ fontWeight: 600, flex: '1 1 auto', minWidth: 0 }}>
-                  {setting.name}
-                </Typography>
-                {isToggle ? (
-                  <Switch
-                    checked={cur === 'Yes'}
-                    onChange={(_, checked) => settings.edit(setting, checked ? 'Yes' : 'No')}
-                    slotProps={{ input: { 'aria-label': setting.name } }}
-                  />
-                ) : (
+            return (
+              <Paper
+                key={setting.key}
+                elevation={0}
+                sx={{
+                  p: 2,
+                  borderRadius: '12px',
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  bgcolor: row.style.background || 'var(--md-surface-low)',
+                }}
+              >
+                <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 600, flex: '1 1 auto', minWidth: 0 }}>
+                    {setting.name}
+                  </Typography>
                   <TextField
                     size="small"
                     type="number"
@@ -265,22 +281,22 @@ export function FacilityPage({ gapi }: FacilityPageProps) {
                     sx={{
                       width: '8.5ch',
                       flexShrink: 0,
-                      '& .MuiInputBase-input': { py: 0.5, px: 1, fontSize: '0.875rem', textAlign: 'center', fontVariantNumeric: 'tabular-nums' },
+                      '& .MuiInputBase-input': { py: 0.75, px: 1, fontSize: '0.875rem', textAlign: 'center', fontVariantNumeric: 'tabular-nums' },
                     }}
                     onChange={(event) => settings.edit(setting, event.target.value.trim())}
                   />
-                )}
-                <Chip
-                  size="small"
-                  color={pill.color}
-                  label={pill.label}
-                  sx={{ minWidth: 74, flexShrink: 0 }}
-                />
-              </Stack>
-            </Paper>
-          );
-        })}
-      </Stack>
+                  <Chip
+                    size="small"
+                    color={pill.color}
+                    label={pill.label}
+                    sx={{ height: 26, minWidth: 68, flexShrink: 0 }}
+                  />
+                </Stack>
+              </Paper>
+            );
+          })}
+        </Stack>
+      )}
     </GroupPage>
   );
 }

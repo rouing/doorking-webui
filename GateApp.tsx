@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Alert, IconButton } from '@mui/material';
+import { Alert, Box, IconButton, Tab, Tabs } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import type { GateInfo, ResidentRow, TransactionRow } from './types.ts';
 import { api, DraftActionsContext, errorText, gateApi, GateRoleContext, ReadOnlyContext, WorkingCopySavedContext, type DraftActions } from './api.ts';
@@ -17,8 +17,9 @@ import { gateLabel } from './Gates.tsx';
 import { JobDock, type DockState } from './JobDock.tsx';
 import { Directory } from './panes/Directory.tsx';
 import { workingCopyState } from './panes/WorkingCopyBar.tsx';
-import { pageShown, type NavKey } from './nav/pages.ts';
-import { GateSheet, PhoneMenu, PhoneTabBar, PhoneTopBar } from './nav/PhoneNav.tsx';
+import { BOARD_SETTING_TABS, isBoardSettingPage, PAGE_TITLES, pageShown, type NavKey } from './nav/pages.ts';
+import { GateSheet, PhoneTabBar, PhoneTopBar, TAB_PAGES } from './nav/PhoneNav.tsx';
+import { PhoneMorePage } from './nav/PhoneMorePage.tsx';
 import { QuickJump } from './nav/QuickJump.tsx';
 import { SidebarItems } from './nav/SidebarItems.tsx';
 import { Audit } from './panes/Audit.tsx';
@@ -71,7 +72,7 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
   const snaps = useSnapshots(gate.phoneNumber, gapi, cameras);
   loadSnaps.current = snaps.load;
   const [dock, setDock] = useState<DockState>('closed');
-  const [menu, setMenu] = useState(false); // the drawer (phones)
+  const [moreHub, setMoreHub] = useState(false); // full-page "More" hub on phones (replaces sidebar drawer)
   const [gateSheet, setGateSheet] = useState(false); // the Gate tab's sheet (phones)
   const [quickJump, setQuickJump] = useState(false); // global Cmd/Ctrl+K search dialog
   const [actionInfo, setActionInfo] = useState(''); // the outcome of Reset to gate / Send to gate (sidebar or Gate sheet)
@@ -97,7 +98,7 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
   const jobStarted = () => { setDock('open'); started(); };
 
   async function pull(what: 'residents' | 'transactions') {
-    setMenu(false);
+    setMoreHub(false);
     setGateSheet(false);
     if (!await confirm({ title: `Pull ${what} from the gate?`, body: PULL_WARNING[what] || undefined, action: `Pull ${what}` })) return;
     try { await gapi('POST', '/pull', { what }); jobStarted(); } catch (err) { setError(errorText(err)); }
@@ -110,7 +111,7 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
    * @param to - Recipient email address.
    */
   const switchGate = async (to: GateInfo) => {
-    setMenu(false);
+    setMoreHub(false);
     try { await api('PUT', '/api/session/gate', { phoneNumber: to.phoneNumber }); onChange(); } catch (err) { setError(errorText(err)); }
   };
   const signOut = async () => { await api('DELETE', '/api/session').catch(() => {}); onChange(); };
@@ -119,10 +120,11 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
    *
    * @param key - Lookup key, API key, or setting key.
    */
-  const go = (key: NavKey) => { setNav(key); setHighlight(null); setMenu(false); setGateSheet(false); window.scrollTo(0, 0); };
+  const go = (key: NavKey) => { setNav(key); setHighlight(null); setMoreHub(false); setGateSheet(false); window.scrollTo(0, 0); };
+  const openMoreHub = () => { setGateSheet(false); setMoreHub(true); window.scrollTo(0, 0); };
+  const isPhoneSubPage = phone && !moreHub && !TAB_PAGES.includes(nav);
   useBackLayer(true, allGates);
-  useBackLayer(nav !== 'residents', () => go('residents'));
-  useBackLayer(menu, () => setMenu(false));
+  useBackLayer(nav !== 'residents' || moreHub, () => (isPhoneSubPage ? openMoreHub() : go('residents')));
   useBackLayer(gateSheet, () => setGateSheet(false));
   useBackLayer(dock === 'open', () => setDock('min'));
   const openResident = (resident: ResidentRow) => { setNav(resident.type === 'Vendor' ? 'vendors' : 'residents'); setHighlight(resident.directoryCode); };
@@ -164,7 +166,11 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
    */
   const workingCopy = workingCopyState(residents ? residents.cache : null);
   const afterReset = async () => { await loadData(); setPageKey((key) => key + 1); };
-  const openGateSheet = () => { setMenu(false); setGateSheet(true); };
+  const openGateSheet = () => { setGateSheet(true); };
+  const boardTabs = useMemo(
+    () => BOARD_SETTING_TABS.filter((t) => pageShown(t.key, features.elevators)),
+    [features.elevators],
+  );
 
   const hasPortalUnit = Boolean(
     prefs.residentPortal?.enabled
@@ -174,7 +180,7 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
   const sidebarItems = (
     <SidebarItems gate={gate} user={session.user} page={nav} phone={phone} elevators={features.elevators} job={job}
       progressShown={dock !== 'closed'} gapi={gapi} readOnly={readOnly} isAdmin={isAdmin} workingCopy={workingCopy} hasWorkingCopy={Boolean(residents)} draft={draft} onGo={go}
-      onOpenSearch={() => { setMenu(false); setQuickJump(true); }}
+      onOpenSearch={() => { setMoreHub(false); setQuickJump(true); }}
       onSwitchGate={switchGate} onAllGates={allGates} onPull={pull} onShowProgress={() => setDock('open')} onReset={afterReset}
       onJobStarted={jobStarted} onNotify={setActionInfo} onOpenPortal={hasPortalUnit ? onOpenPortal : undefined} onSignOut={signOut} />
   );
@@ -183,17 +189,40 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
     <div className="app">
       {dialog}
       {phone && (
-        <PhoneTopBar gateName={gateLabel(gate)} workingCopy={workingCopy} job={job} hasCamera={Boolean(cameras)} onOpenGate={openGateSheet}
-          onShowProgress={() => setDock('open')} />
+        <PhoneTopBar
+          gateName={gateLabel(gate)}
+          pageTitle={moreHub ? 'More' : isPhoneSubPage ? PAGE_TITLES[nav] : undefined}
+          onBack={isPhoneSubPage ? openMoreHub : undefined}
+          workingCopy={workingCopy}
+          job={job}
+          hasCamera={Boolean(cameras)}
+          onOpenGate={openGateSheet}
+          onShowProgress={() => setDock('open')}
+        />
       )}
-      {phone ? <PhoneMenu open={menu} onOpenChange={setMenu}>{sidebarItems}</PhoneMenu> : <aside className="sidebar">{sidebarItems}</aside>}
+      {!phone && <aside className="sidebar">{sidebarItems}</aside>}
       <main className="content">
-        {readOnly && nav !== 'user' && (
+        {phone && !moreHub && isBoardSettingPage(nav) && (
+          <Box sx={{ borderBottom: 1, borderColor: 'divider', mx: -2, mb: 2, px: 1 }}>
+            <Tabs
+              value={nav}
+              onChange={(_e, next: NavKey) => go(next)}
+              variant="scrollable"
+              scrollButtons={false}
+              aria-label="Board Settings sections"
+            >
+              {boardTabs.map((t) => (
+                <Tab key={t.key} value={t.key} label={t.label} sx={{ minHeight: 44, textTransform: 'none' }} />
+              ))}
+            </Tabs>
+          </Box>
+        )}
+        {readOnly && nav !== 'user' && !moreHub && (
           <Alert severity="info" sx={{ mb: 2 }}>
             Read only: you can look at everything, pull from the gate and use the cameras. Ask a gate admin to make changes.
           </Alert>
         )}
-        {gate.role === 'editor' && nav !== 'user' && (
+        {gate.role === 'editor' && nav !== 'user' && !moreHub && (
           <Alert severity="info" sx={{ mb: 2 }}>
             Editor access: your edits save to the working copy. Ask a gate admin to review and click <strong>Send to gate</strong>.
           </Alert>
@@ -212,21 +241,41 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
             {actionInfo}
           </Alert>
         )}
-        <GateRoleContext.Provider value={gate.role}>
-          <ReadOnlyContext.Provider value={readOnly}>
-            <WorkingCopySavedContext.Provider value={loadData}>
-              <DraftActionsContext.Provider value={setDraft}>
-                {((readOnly && EDIT_PAGES.includes(nav)) || (!isAdmin && ADMIN_ONLY_PAGES.includes(nav)))
-                  ? <fieldset disabled className="readonly-page">{page}</fieldset> : page}
-              </DraftActionsContext.Provider>
-            </WorkingCopySavedContext.Provider>
-          </ReadOnlyContext.Provider>
-        </GateRoleContext.Provider>
+        {phone && moreHub ? (
+          <PhoneMorePage
+            gate={gate}
+            user={session.user}
+            onGo={go}
+            onOpenSearch={() => setQuickJump(true)}
+            onAllGates={allGates}
+            onOpenPortal={hasPortalUnit ? onOpenPortal : undefined}
+            onSignOut={signOut}
+          />
+        ) : (
+          <GateRoleContext.Provider value={gate.role}>
+            <ReadOnlyContext.Provider value={readOnly}>
+              <WorkingCopySavedContext.Provider value={loadData}>
+                <DraftActionsContext.Provider value={setDraft}>
+                  {((readOnly && EDIT_PAGES.includes(nav)) || (!isAdmin && ADMIN_ONLY_PAGES.includes(nav)))
+                    ? <fieldset disabled className="readonly-page">{page}</fieldset> : page}
+                </DraftActionsContext.Provider>
+              </WorkingCopySavedContext.Provider>
+            </ReadOnlyContext.Provider>
+          </GateRoleContext.Provider>
+        )}
       </main>
       {phone && (
         <>
-          <PhoneTabBar page={nav} menuOpen={menu} gateOpen={gateSheet} running={running} unsavedCount={draft?.unsaved ?? 0} onGo={go} onOpenGate={openGateSheet}
-            onOpenMore={() => { setGateSheet(false); setMenu(true); }} />
+          <PhoneTabBar
+            page={nav}
+            menuOpen={moreHub}
+            gateOpen={gateSheet}
+            running={running}
+            unsavedCount={draft?.unsaved ?? 0}
+            onGo={go}
+            onOpenGate={openGateSheet}
+            onOpenMore={openMoreHub}
+          />
           <GateSheet open={gateSheet} onOpenChange={setGateSheet} gapi={gapi} job={job} readOnly={readOnly} isAdmin={isAdmin} workingCopy={workingCopy}
             hasWorkingCopy={Boolean(residents)} draft={draft} onPull={pull} onShowProgress={() => setDock('open')} onLiveRelays={() => go('relays')}
             onReset={afterReset} onJobStarted={jobStarted} onNotify={setActionInfo} />

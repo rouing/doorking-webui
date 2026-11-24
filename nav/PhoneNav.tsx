@@ -5,8 +5,9 @@
  */
 import type { ReactNode } from 'react';
 import {
-  AppBar, Badge, BottomNavigation, BottomNavigationAction, Box, Button, ButtonBase, Chip, Drawer, Paper, Stack, Toolbar, Typography,
+  AppBar, Badge, BottomNavigation, BottomNavigationAction, Box, Button, ButtonBase, Chip, Drawer, IconButton, Paper, Stack, Toolbar, Typography,
 } from '@mui/material';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import FenceIcon from '@mui/icons-material/Fence';
 import ListAltIcon from '@mui/icons-material/ListAlt';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
@@ -30,6 +31,8 @@ const WORKING_COPY_COLOR: Record<WorkingCopyState['color'], string> = {
 
 interface PhoneTopBarProps {
   gateName: string;
+  pageTitle?: string;
+  onBack?: () => void;
   workingCopy: WorkingCopyState;
   job: Job | null;
   hasCamera: boolean; // leaves room for the camera button
@@ -38,27 +41,25 @@ interface PhoneTopBarProps {
 }
 
 /**
- * The gate's name with the working copy's state under it (opens the Gate sheet), and the running connection.
- *
- * @param props - Component props.
- * @param props.gateName - Gate name.
- * @param props.workingCopy - Working copy.
- * @param props.job - Job.
- * @param props.hasCamera - Has camera.
- * @param props.onOpenGate - On open gate.
- * @param props.onShowProgress - On show progress.
- * @returns Rendered React element.
+ * Mobile top app bar: shows a Back button + sub-page title on More sub-pages, or the gate name and working-copy state
+ * (tappable to open the Gate connection sheet) on top-level tabs.
  */
-export function PhoneTopBar({ gateName, workingCopy, job, hasCamera, onOpenGate, onShowProgress }: PhoneTopBarProps) {
+export function PhoneTopBar({ gateName, pageTitle, onBack, workingCopy, job, hasCamera, onOpenGate, onShowProgress }: PhoneTopBarProps) {
   const statusLabel = jobLabel(job);
+  const title = pageTitle || gateName;
   return (
     <AppBar position="sticky" color="default" elevation={0}
       sx={{ borderBottom: 1, borderColor: 'divider', pt: 'env(safe-area-inset-top)' }}>
       <Toolbar variant="dense" sx={{
         gap: 1, minHeight: 52,
-        pl: 'calc(env(safe-area-inset-left) + 16px)',
+        pl: onBack ? 'calc(env(safe-area-inset-left) + 8px)' : 'calc(env(safe-area-inset-left) + 16px)',
         pr: hasCamera ? 'calc(env(safe-area-inset-right) + 64px)' : 'calc(env(safe-area-inset-right) + 16px)',
       }}>
+        {onBack && (
+          <IconButton edge="start" aria-label="Back to More" onClick={onBack} sx={{ mr: 0.25 }}>
+            <ArrowBackIcon />
+          </IconButton>
+        )}
         <ButtonBase
           type="button"
           onClick={onOpenGate}
@@ -74,7 +75,7 @@ export function PhoneTopBar({ gateName, workingCopy, job, hasCamera, onOpenGate,
             borderRadius: 1,
           }}
         >
-          <Typography variant="subtitle1" noWrap sx={{ fontWeight: 700, width: '100%' }}>{gateName}</Typography>
+          <Typography variant="subtitle1" noWrap sx={{ fontWeight: 700, width: '100%' }}>{title}</Typography>
           <Typography
             variant="caption"
             noWrap
@@ -86,7 +87,9 @@ export function PhoneTopBar({ gateName, workingCopy, job, hasCamera, onOpenGate,
             }}
           >
             <Box component="span" sx={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', bgcolor: WORKING_COPY_COLOR[workingCopy.color], mr: 0.75, flexShrink: 0 }} />
-            <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{workingCopy.label}</Box>
+            <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {pageTitle ? `${gateName} · ${workingCopy.label}` : workingCopy.label}
+            </Box>
           </Typography>
         </ButtonBase>
         {statusLabel && (
@@ -149,7 +152,7 @@ export function PhoneTabBar({ page, menuOpen, gateOpen, running, unsavedCount, o
       >
         <BottomNavigationAction value="residents" label="Residents" icon={<PeopleIcon />} sx={{ minWidth: 0, px: 0.5 }} />
         <BottomNavigationAction value="vendors" label="Vendors" icon={<WorkIcon />} sx={{ minWidth: 0, px: 0.5 }} />
-        <BottomNavigationAction value="transactions" label="Transactions" icon={<ListAltIcon />} sx={{ minWidth: 0, px: 0.5 }} />
+        <BottomNavigationAction value="transactions" label="Activity" icon={<ListAltIcon />} sx={{ minWidth: 0, px: 0.5 }} />
         <BottomNavigationAction
           value="gate"
           label="Gate"

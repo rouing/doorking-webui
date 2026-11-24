@@ -12,6 +12,40 @@ export const PINNED_NAV = [
   { key: 'history', label: 'History' }, { key: 'schedules', label: 'Scheduled Transfers' }, { key: 'prefs', label: 'System Settings' },
 ] as const;
 export type NavKey = Extract<(typeof NAV)[number], { key: string }>['key'] | (typeof PINNED_NAV)[number]['key'] | 'relays' | 'user';
+
+/** Board-setting pages grouped under a single "Board Settings" hub with scrollable tabs on phones. */
+export const BOARD_SETTING_TABS: readonly { key: NavKey; label: string }[] = [
+  { key: 'facility', label: 'Facility Codes' },
+  { key: 'holidays', label: 'Holidays' },
+  { key: 'security', label: 'Security Levels' },
+  { key: 'holdOpen', label: 'Hold Open' },
+  { key: 'display', label: 'Display' },
+  { key: 'apb', label: 'Anti-Pass Back' },
+  { key: 'elevator', label: 'Elevators' },
+  { key: 'relayElevator', label: 'Relay / Elev.' },
+];
+
+export const isBoardSettingPage = (key: NavKey): boolean => BOARD_SETTING_TABS.some((t) => t.key === key);
+
+export const PAGE_TITLES: Record<NavKey, string> = {
+  residents: 'Residents',
+  vendors: 'Vendors',
+  transactions: 'Activity',
+  audit: 'Access Insights',
+  display: 'Board Settings',
+  relays: 'Live Relays',
+  holdOpen: 'Board Settings',
+  holidays: 'Board Settings',
+  security: 'Board Settings',
+  facility: 'Board Settings',
+  elevator: 'Board Settings',
+  relayElevator: 'Board Settings',
+  apb: 'Board Settings',
+  history: 'History',
+  schedules: 'Scheduled Transfers',
+  prefs: 'System Settings',
+  user: 'User Settings',
+};
 // Pages that only edit gate settings: shown with every control disabled for read-only users.
 
 /**

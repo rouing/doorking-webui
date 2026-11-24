@@ -46,7 +46,7 @@ const manifest = (self as unknown as { __WB_MANIFEST: SwScope['__WB_MANIFEST'] }
 cleanupOutdatedCaches();
 precacheAndRoute(manifest);
 registerRoute(new NavigationRoute(createHandlerBoundToURL('index.html'), {
-  denylist: [/^\/api\//, /^\/help(?:\/|$)/, /^\/download(?:\/|$)/, /^\/\.well-known\//],
+  denylist: [/^\/api\//, /^\/help(?:\/|$)/, /^\/privacy(?:\/|$)/, /^\/download(?:\/|$)/, /^\/\.well-known\//],
 }));
 
 sw.addEventListener('message', (event) => {

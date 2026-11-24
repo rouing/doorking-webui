@@ -39,6 +39,7 @@ export default defineConfig({
     proxy: {
       '/api': proxyToApi,
       '/help': proxyToApi,
+      '/privacy': proxyToApi,
       '/download': proxyToApi,
       '/.well-known': proxyToApi,
     },

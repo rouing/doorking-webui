@@ -92,15 +92,15 @@ export function PhoneMorePage({
 
   return (
     <Stack spacing={2} sx={{ pb: 2 }}>
-      <Card elevation={0} sx={{ border: 'none' }}>
+      <Card elevation={0} sx={{ border: 'none', borderRadius: '16px', bgcolor: 'var(--md-surface-high)' }}>
         <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-          <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 1.25 }}>
-            <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 700 }}>
+          <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
+            <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 600 }}>
               Management &amp; Monitoring
             </Typography>
             {roleLabel && <Chip size="small" color="primary" label={roleLabel} />}
           </Stack>
-          <Box sx={{ bgcolor: 'background.default', borderRadius: 2, overflow: 'hidden' }}>
+          <Box sx={{ bgcolor: 'var(--md-surface-lowest)', borderRadius: '12px', overflow: 'hidden' }}>
             <List disablePadding>
               <MoreRow
                 title="Access Insights"
@@ -141,12 +141,12 @@ export function PhoneMorePage({
         </CardContent>
       </Card>
 
-      <Card elevation={0} sx={{ border: 'none' }}>
+      <Card elevation={0} sx={{ border: 'none', borderRadius: '16px', bgcolor: 'var(--md-surface-high)' }}>
         <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-          <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 700, mb: 1.25 }}>
+          <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 600, mb: 1.5 }}>
             Gate &amp; Account
           </Typography>
-          <Box sx={{ bgcolor: 'background.default', borderRadius: 2, overflow: 'hidden', mb: 1.5 }}>
+          <Box sx={{ bgcolor: 'var(--md-surface-lowest)', borderRadius: '12px', overflow: 'hidden', mb: 1.5 }}>
             <List disablePadding>
               <MoreRow
                 title="Live Relays"
@@ -189,11 +189,12 @@ export function PhoneMorePage({
             </List>
           </Box>
           <Button
-            variant="outlined"
-            color="inherit"
+            variant="contained"
+            color="error"
             fullWidth
             startIcon={<LogoutOutlinedIcon />}
             onClick={onSignOut}
+            sx={{ boxShadow: 'none', '&:hover': { boxShadow: 'none' } }}
           >
             Sign out
           </Button>

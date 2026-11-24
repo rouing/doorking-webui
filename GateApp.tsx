@@ -1,6 +1,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Alert, Box, IconButton, Tab, Tabs } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
+import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined';
+import VideocamOutlinedIcon from '@mui/icons-material/VideocamOutlined';
 import type { GateInfo, ResidentRow, TransactionRow } from './types.ts';
 import { api, DraftActionsContext, errorText, gateApi, GateRoleContext, ReadOnlyContext, WorkingCopySavedContext, type DraftActions } from './api.ts';
 import { useGateData, useGateJob } from './gateData.ts';
@@ -74,6 +76,9 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
   const [dock, setDock] = useState<DockState>('closed');
   const [moreHub, setMoreHub] = useState(false); // full-page "More" hub on phones (replaces sidebar drawer)
   const [gateSheet, setGateSheet] = useState(false); // the Gate tab's sheet (phones)
+  const [dirExportSignal, setDirExportSignal] = useState(0);
+  const [txExportOpen, setTxExportOpen] = useState(false);
+  const [liveCamSignal, setLiveCamSignal] = useState(0);
   const [quickJump, setQuickJump] = useState(false); // global Cmd/Ctrl+K search dialog
   const [actionInfo, setActionInfo] = useState(''); // the outcome of Reset to gate / Send to gate (sidebar or Gate sheet)
   const [draft, setDraft] = useState<DraftActions | null>(null);
@@ -134,13 +139,16 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
 
   const directory = (kind: 'residents' | 'vendors') => (
     <Directory key={kind} kind={kind} gatePhone={gate.phoneNumber} adminPhone={prefs.adminPhone || ''} account={gate.siteName} list={residents} tx={data?.transactions?.rows ?? null} highlight={highlight}
+      exportSignal={dirExportSignal}
       devices={prefs.deviceAssociation || DEFAULT_DEVICE_ASSOCIATION} features={features} snaps={snaps} onOpenSnap={setViewing}
       gapi={gapi} onReload={loadData} />
   );
   const pages: Record<NavKey, () => ReactNode> = {
     residents: () => directory('residents'),
     vendors: () => directory('vendors'),
-    transactions: () => <Transactions tx={data?.transactions ?? null} apbEnabled={Boolean(data?.apbEnabled)} onLoadOlder={loadOlder} residents={residents?.rows ?? []}
+    transactions: () => <Transactions tx={data?.transactions ?? null} apbEnabled={Boolean(data?.apbEnabled)} relayLabels={prefs.relayLabels || {}}
+      exportDialogOpen={txExportOpen} onExportDialogChange={setTxExportOpen}
+      onLoadOlder={loadOlder} residents={residents?.rows ?? []}
       onOpenResident={openResident} snaps={snaps} onOpenSnap={setViewing} />,
     audit: () => <Audit gapi={gapi} residents={residents?.rows ?? []} transactions={data?.transactions?.rows ?? []}
       onOpenResident={openResident} onOpenSnap={setViewing} />,
@@ -194,10 +202,34 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
           pageTitle={moreHub ? 'More' : isPhoneSubPage ? PAGE_TITLES[nav] : undefined}
           onBack={isPhoneSubPage ? openMoreHub : undefined}
           workingCopy={workingCopy}
-          job={job}
-          hasCamera={Boolean(cameras)}
+          running={running}
+          rightAction={
+            moreHub ? (
+              cameras ? (
+                <IconButton aria-label="Live camera view" onClick={() => setLiveCamSignal((n) => n + 1)} sx={{ color: 'text.primary' }}>
+                  <VideocamOutlinedIcon />
+                </IconButton>
+              ) : undefined
+            ) : !isPhoneSubPage && (nav === 'residents' || nav === 'vendors') ? (
+              <IconButton
+                aria-label={nav === 'vendors' ? 'Export vendors CSV' : 'Export residents CSV'}
+                disabled={!residents}
+                onClick={() => setDirExportSignal((n) => n + 1)}
+                sx={{ color: 'text.primary' }}
+              >
+                <DownloadOutlinedIcon />
+              </IconButton>
+            ) : !isPhoneSubPage && nav === 'transactions' ? (
+              <IconButton
+                aria-label="Export CSV or download cameras"
+                onClick={() => setTxExportOpen(true)}
+                sx={{ color: 'text.primary' }}
+              >
+                <DownloadOutlinedIcon />
+              </IconButton>
+            ) : undefined
+          }
           onOpenGate={openGateSheet}
-          onShowProgress={() => setDock('open')}
         />
       )}
       {!phone && <aside className="sidebar">{sidebarItems}</aside>}
@@ -286,7 +318,7 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
         onOpenResident={openResident} onOpenTransaction={(tx) => { go('transactions'); if (cameras && tx.camera) setViewing(tx); }} />
       <JobDock job={job} state={dock} onState={setDock} />
       <SnapViewer transaction={viewing} snaps={snaps} onClose={() => setViewing(null)} />
-      {cameras && <LiveView phone={gate.phoneNumber} settings={cameras} />}
+      {cameras && <LiveView phone={gate.phoneNumber} settings={cameras} hideFloatingToggle={phone} openSignal={liveCamSignal} />}
     </div>
   );
 }

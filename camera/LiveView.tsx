@@ -15,18 +15,15 @@ type Status = { kind: 'connecting' | 'playing' } | { kind: 'stopped'; text: stri
 interface LiveViewProps {
   phone: string;
   settings: CameraSettings;
+  hideFloatingToggle?: boolean;
+  openSignal?: number;
 }
 
 /**
  * Live camera: the top-right camera button opens a window with the server's MJPEG stream in an <img>.
  * Closing or minimizing the window ends the stream, and it pauses after 10 minutes.
- *
- * @param props - Component props.
- * @param props.phone - Gate system phone number (digits or formatted).
- * @param props.settings - Settings map or configuration.
- * @returns Rendered React element.
  */
-export function LiveView({ phone, settings }: LiveViewProps) {
+export function LiveView({ phone, settings, hideFloatingToggle = false, openSignal = 0 }: LiveViewProps) {
   const [dock, setDock] = useState<'closed' | 'min' | 'open'>('closed');
   useBackLayer(dock === 'open', () => setDock('closed'));
   const [channel, setChannel] = useState(String(settings.channels[0]?.channel ?? 1));
@@ -34,6 +31,14 @@ export function LiveView({ phone, settings }: LiveViewProps) {
   const [status, setStatus] = useState<Status>({ kind: 'connecting' });
   const [attempt, setAttempt] = useState(0);
   const img = useRef<HTMLImageElement>(null);
+
+  useEffect(() => {
+    if (openSignal > 0) {
+      setDock('open');
+      setStatus({ kind: 'connecting' });
+      setAttempt((n) => n + 1);
+    }
+  }, [openSignal]);
 
   useEffect(() => {
     if (!settings.channels.some((saved) => String(saved.channel) === channel)) setChannel(String(settings.channels[0]?.channel ?? 1));
@@ -70,22 +75,24 @@ export function LiveView({ phone, settings }: LiveViewProps) {
 
   return (
     <>
-      <IconButton
-        color="primary"
-        title="View Camera"
-        aria-label="View Camera"
-        onClick={toggleOpen}
-        className="live-toggle"
-        sx={{
-          bgcolor: 'background.paper',
-          border: 1,
-          borderColor: 'divider',
-          boxShadow: 2,
-          '&:hover': { bgcolor: 'action.hover' },
-        }}
-      >
-        <PhotoCameraIcon />
-      </IconButton>
+      {!hideFloatingToggle && (
+        <IconButton
+          color="primary"
+          title="View Camera"
+          aria-label="View Camera"
+          onClick={toggleOpen}
+          className="live-toggle"
+          sx={{
+            bgcolor: 'background.paper',
+            border: 1,
+            borderColor: 'divider',
+            boxShadow: 2,
+            '&:hover': { bgcolor: 'action.hover' },
+          }}
+        >
+          <PhotoCameraIcon />
+        </IconButton>
+      )}
       {dock !== 'closed' && (
         <Paper
           elevation={6}

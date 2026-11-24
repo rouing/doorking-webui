@@ -5,6 +5,10 @@ import {
   Box,
   Button,
   Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   LinearProgress,
   Link,
   Paper,
@@ -17,6 +21,8 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
+import StopIcon from '@mui/icons-material/Stop';
+import { MobileFilterChip, MobileSearchBar } from './MobilePrimitives.tsx';
 import { alpha } from '@mui/material/styles';
 import { errorText } from '../api.ts';
 import { Choice } from './fields.tsx';
@@ -38,15 +44,13 @@ type ToneKey = 'red' | 'amber' | 'green';
 type TonePalette = { error: { main: string }; warning: { main: string }; success: { main: string }; action: { hover: string } };
 const TONE_PALETTE_KEY: Record<ToneKey, 'error' | 'warning' | 'success'> = { red: 'error', amber: 'warning', green: 'success' };
 
-const toneBg = (tone: ToneKey | null) => (theme: { palette: TonePalette }) =>
-  (tone ? alpha(theme.palette[TONE_PALETTE_KEY[tone]].main, 0.13) : theme.palette.action.hover);
-
 const tableToneBg = (tone: ToneKey | null) =>
   (tone ? (theme: { palette: TonePalette }) => alpha(theme.palette[TONE_PALETTE_KEY[tone]].main, 0.12) : undefined);
 
 export interface TransactionCardProps {
   transaction: TransactionRow;
   person?: ResidentRow | null;
+  relayLabels?: Partial<Record<string, string>>;
   snaps: Snaps;
   compact?: boolean;
   onOpenResident?: (resident: ResidentRow) => void;
@@ -54,75 +58,78 @@ export interface TransactionCardProps {
 }
 
 /**
- * Formats the combined event pill label: directory events show `"Directory"`, portal opens show `"Portal Open"`,
- * and numbered credentials (cards, remotes, entry codes) combine as `"<Event>: #<Number>"`.
+ * Formats the combined event + access pill matching the native Android `TransactionsTab`:
+ * e.g. `"Entry Code · Admit"`, `"Portal Open · Admit"`, `"Cards · Deny"`.
  */
-function eventPillLabel(transaction: TransactionRow): string {
-  if (transaction.source === 'portal') return 'Portal Open';
-  const type = transaction.eventType || 'Event';
-  const isDir = transaction.lookup === 'directory' || /^directory$/i.test(type);
-  if (isDir) return 'Directory';
-  if (transaction.number) return `${type}: #${transaction.number}`;
-  return type;
+function combinedEventAccessLabel(transaction: TransactionRow): string {
+  const event = transaction.source === 'portal'
+    ? 'Portal Open'
+    : (transaction.eventType || 'Event');
+  return [event, transaction.access].filter(Boolean).join(' · ');
+}
+
+function formatRelayPill(relay: string, relayLabels: Partial<Record<string, string>>): string {
+  const resolved = relayLabels[relay] || relay.trim().replace(/^relay\s+/i, '').trim();
+  const formatted = resolved ? resolved[0].toUpperCase() + resolved.slice(1) : relay;
+  return `Relay · ${formatted}`;
 }
 
 /**
- * Compact tinted transaction bubble card with all details shown directly in solid pills (no click-to-expand):
- * - Left: `"Name - #DirCode"` + Access pill (`!compact`), followed by combined Event pill + combined Date/Time pill.
- * - Right: Camera thumbnail / Get video control pinned to the trailing edge.
- *
- * @param props - Card props.
- * @returns Rendered transaction bubble card.
+ * Borderless tonal transaction card mirroring Android `TransactionsTab` design & pill rules:
+ * - Headline: `"Name · #DirCode"`
+ * - Pill 1: Combined `Event · Access` (green Admit / red Deny / amber Hold / neutral)
+ * - Pill 2: Neutral `Date Time`
+ * - Pill 3: Primary `Relay · <Label>` (when present)
+ * - Trailing: Camera thumbnail / Get video control pinned to the right.
  */
 export function TransactionCard({
-  transaction, person = null, snaps, compact = false, onOpenResident, onOpenSnap,
+  transaction, person = null, relayLabels = {}, snaps, compact = false, onOpenResident, onOpenSnap,
 }: TransactionCardProps) {
   const tone = txTone(transaction);
   const accessColor = tone === 'green' ? 'success' : tone === 'red' ? 'error' : tone === 'amber' ? 'warning' : 'default';
-  const displayName = transaction.name || 'Unknown';
-  const nameWithUnit = transaction.directoryCode ? `${displayName} - #${transaction.directoryCode}` : displayName;
-  const dateTimeLabel = [transaction.date, transaction.time].filter(Boolean).join(' · ');
+  const displayName = transaction.name || transaction.eventType || 'Gate Event';
+  const headline = transaction.directoryCode ? `${displayName} · #${transaction.directoryCode}` : displayName;
+  const dateTimeLabel = [transaction.date, transaction.time].filter(Boolean).join(' ');
+  const combined = combinedEventAccessLabel(transaction);
 
   return (
     <Paper
       elevation={0}
-      sx={(theme) => ({
-        p: compact ? 1.25 : 1.5,
-        borderRadius: 'var(--md-card-radius, 10px)',
-        bgcolor: toneBg(tone)(theme),
-      })}
+      sx={{
+        p: compact ? 1.5 : 2,
+        borderRadius: '12px',
+        bgcolor: 'var(--md-surface-low)',
+      }}
     >
       <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
         <Stack spacing={0.75} sx={{ flex: 1, minWidth: 0 }}>
           {!compact && (
-            <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                {person && transaction.name && transaction.directoryCode && onOpenResident ? (
-                  <Link
-                    href="#"
-                    onClick={(event) => { event.preventDefault(); onOpenResident(person); }}
-                    underline="hover"
-                  >
-                    {nameWithUnit}
-                  </Link>
-                ) : nameWithUnit}
-              </Typography>
-              {transaction.access && (
-                <Chip size="small" color={accessColor} label={transaction.access} />
-              )}
-            </Stack>
+            <Typography sx={{ fontSize: '0.875rem', lineHeight: 1.4, fontWeight: 600 }}>
+              {person && transaction.name && transaction.directoryCode && onOpenResident ? (
+                <Link
+                  href="#"
+                  onClick={(event) => { event.preventDefault(); onOpenResident(person); }}
+                  underline="hover"
+                  color="inherit"
+                >
+                  {headline}
+                </Link>
+              ) : headline}
+            </Typography>
           )}
-          <Stack direction="row" spacing={0.75} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-            {compact && transaction.access && (
-              <Chip size="small" color={accessColor} label={transaction.access} />
+          <Stack direction="row" sx={{ gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+            {combined && (
+              <Chip size="small" color={accessColor} label={combined} sx={{ height: 26, fontSize: '0.75rem', fontWeight: 500 }} />
             )}
-            <Chip
-              size="small"
-              color={transaction.source === 'portal' ? 'primary' : 'default'}
-              label={eventPillLabel(transaction)}
-            />
-            {dateTimeLabel && <Chip size="small" label={dateTimeLabel} />}
-            {transaction.apb && <Chip size="small" label={`APB: ${transaction.apb}`} />}
+            {dateTimeLabel && (
+              <Chip size="small" label={dateTimeLabel} sx={{ height: 26, fontSize: '0.75rem', fontWeight: 500 }} />
+            )}
+            {transaction.relay && (
+              <Chip size="small" color="primary" label={formatRelayPill(transaction.relay, relayLabels)} sx={{ height: 26, fontSize: '0.75rem', fontWeight: 500 }} />
+            )}
+            {transaction.apb && (
+              <Chip size="small" label={`APB · ${transaction.apb}`} sx={{ height: 26, fontSize: '0.75rem', fontWeight: 500 }} />
+            )}
           </Stack>
         </Stack>
         {snaps.settings && transaction.camera && (
@@ -138,6 +145,9 @@ export function TransactionCard({
 interface TransactionsProps {
   tx: { updated: string; rows: TransactionRow[]; next?: number | null } | null;
   apbEnabled?: boolean;
+  relayLabels?: Partial<Record<string, string>>;
+  exportDialogOpen?: boolean;
+  onExportDialogChange?: (open: boolean) => void;
   onLoadOlder: () => Promise<void>;
   residents: ResidentRow[];
   onOpenResident: (resident: ResidentRow) => void;
@@ -258,7 +268,7 @@ function TransactionRowView({
  * @param props.onOpenSnap - Callback to open the snapshot viewer for a transaction.
  * @returns Rendered React element.
  */
-export function Transactions({ tx, apbEnabled = false, onLoadOlder, residents, onOpenResident, snaps, onOpenSnap }: TransactionsProps) {
+export function Transactions({ tx, apbEnabled = false, relayLabels = {}, exportDialogOpen = false, onExportDialogChange, onLoadOlder, residents, onOpenResident, snaps, onOpenSnap }: TransactionsProps) {
   const baseCols: Column[] = apbEnabled ? TX_COLUMNS : TX_COLUMNS.filter(([, key]) => key !== 'apb');
   const cols: Column[] = snaps.settings ? [...baseCols, ['Camera', 'snap']] : baseCols;
   const progress = snaps.run && snaps.running ? snaps.run.progress : undefined;
@@ -328,53 +338,104 @@ export function Transactions({ tx, apbEnabled = false, onLoadOlder, residents, o
   };
 
   return (
-    <Stack spacing={2}>
-      <Typography variant="h5">Transactions</Typography>
-      {phone ? (
-        <Stack spacing={1.25}>
-          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-            <Choice
-              value={days}
-              onChange={setDays}
-              ariaLabel="Time range"
-              options={[['1', 'Last 24 hours'], ['7', 'Last 7 days'], ['30', 'Last 30 days'], ['0', 'All']]}
-            />
-            <TextField
-              size="small"
-              type="search"
-              placeholder="Filter rows"
-              slotProps={{ htmlInput: { 'aria-label': 'Filter rows' } }}
-              value={filter}
-              onChange={(event) => setFilter(event.target.value)}
-              sx={{ flex: 1, minWidth: 0 }}
-            />
-          </Stack>
-          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-            <Button variant="outlined" onClick={csv} disabled={!rows.length} sx={{ flex: 1 }}>
-              Download CSV
-            </Button>
-            {snaps.settings && (
-              <Button variant="outlined" disabled={snaps.running} onClick={snaps.runAll} sx={{ flex: 1 }}>
-                {snaps.video ? 'Get camera videos' : 'Get camera snapshots'}
+    <Stack spacing={1.25}>
+      {phone && (
+        <Dialog open={exportDialogOpen} onClose={() => onExportDialogChange?.(false)}>
+          <DialogTitle>Export or download</DialogTitle>
+          <DialogContent>
+            <Stack spacing={1.25} sx={{ pt: 0.5 }}>
+              <Button
+                variant="contained"
+                fullWidth
+                disabled={!rows.length}
+                onClick={() => { onExportDialogChange?.(false); csv(); }}
+              >
+                Export Activity CSV
               </Button>
-            )}
+              {snaps.settings && (
+                <Button
+                  variant="contained"
+                  fullWidth
+                  disabled={snaps.running}
+                  onClick={() => { onExportDialogChange?.(false); snaps.runAll(); }}
+                >
+                  {snaps.running
+                    ? 'Camera download already running'
+                    : snaps.video
+                      ? 'Download Camera Videos'
+                      : 'Download Camera Snapshots'}
+                </Button>
+              )}
+            </Stack>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => onExportDialogChange?.(false)}>Close</Button>
+          </DialogActions>
+        </Dialog>
+      )}
+      {!phone && <Typography variant="h5">Transactions</Typography>}
+      {phone ? (
+        <Stack spacing={1}>
+          <MobileSearchBar
+            value={filter}
+            onChange={setFilter}
+            placeholder="Search transactions"
+          />
+          <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+            <Stack direction="row" sx={{ gap: '6px', alignItems: 'center' }}>
+              {([['1', '24h'], ['7', '7d'], ['30', '30d'], ['0', 'All']] as const).map(([val, label]) => (
+                <MobileFilterChip
+                  key={val}
+                  label={label}
+                  selected={days === val}
+                  showCheck
+                  onClick={() => setDays(val)}
+                />
+              ))}
+            </Stack>
+            <Chip
+              size="small"
+              label={`${rows.length} shown`}
+              sx={{
+                height: 26,
+                fontSize: '0.75rem',
+                fontWeight: 500,
+                bgcolor: 'var(--md-surface-highest)',
+                color: 'text.secondary',
+              }}
+            />
           </Stack>
           {snaps.settings && snaps.running && (
-            <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-              <Button variant="outlined" color="inherit" disabled={Boolean(snaps.run?.stopping)} onClick={snaps.stop}>
-                {snaps.video ? 'Stop videos' : 'Stop snapshots'}
-              </Button>
-              <LinearProgress
-                variant={progress && progress.frames ? 'determinate' : 'indeterminate'}
-                value={progress && progress.frames ? (progress.framesDone / progress.frames) * 100 : undefined}
-                sx={{ flex: 1 }}
-              />
-            </Stack>
+            <Paper elevation={0} sx={{ p: 2, borderRadius: '12px', bgcolor: 'var(--md-surface-high)' }}>
+              <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center' }}>
+                <Stack spacing={0.75} sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                    {snaps.run?.stopping
+                      ? `Stopping camera ${snaps.video ? 'videos' : 'snapshots'}…`
+                      : progress && progress.frames > 0
+                        ? `Downloading camera ${snaps.video ? 'videos' : 'snapshots'} (${progress.framesDone}/${progress.frames})…`
+                        : `Downloading camera ${snaps.video ? 'videos' : 'snapshots'}…`}
+                  </Typography>
+                  <LinearProgress
+                    variant={progress && progress.frames ? 'determinate' : 'indeterminate'}
+                    value={progress && progress.frames ? (progress.framesDone / progress.frames) * 100 : undefined}
+                    sx={{ borderRadius: 1 }}
+                  />
+                </Stack>
+                <Button
+                  size="small"
+                  variant="contained"
+                  color="error"
+                  startIcon={<StopIcon />}
+                  disabled={Boolean(snaps.run?.stopping)}
+                  onClick={snaps.stop}
+                  sx={{ boxShadow: 'none' }}
+                >
+                  Stop
+                </Button>
+              </Stack>
+            </Paper>
           )}
-          <Typography variant="body2" color="text.secondary">
-            {!tx ? 'No transactions yet. Pull transactions from the gate.'
-              : `${rows.length} transactions${rows.length > limit ? ` (showing ${limit})` : ''} · downloaded ${fmtTime(tx.updated)}`}
-          </Typography>
         </Stack>
       ) : (
         <Stack direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
@@ -428,34 +489,16 @@ export function Transactions({ tx, apbEnabled = false, onLoadOlder, residents, o
         </Stack>
       )}
       {olderError && <Alert severity="error">{olderError}</Alert>}
-      {snaps.settings && snaps.info && <Typography variant="body2" color="text.secondary">{snaps.info}</Typography>}
+      {!phone && snaps.settings && snaps.info && <Typography variant="body2" color="text.secondary">{snaps.info}</Typography>}
       {phone ? (
         <Stack spacing={1.25}>
-          <Stack direction="row" spacing={0.75} sx={{ overflowX: 'auto', pb: 0.5, alignItems: 'center', '&::-webkit-scrollbar': { display: 'none' } }}>
-            <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0, mr: 0.25 }}>Sort:</Typography>
-            {cols.filter(([, key]) => key !== 'snap').map(([label, key]) => {
-              const active = sort?.col === key || sort?.then?.col === key;
-              const dir = sort?.col === key ? (sort.dir > 0 ? ' ▲' : ' ▼')
-                : sort?.then?.col === key ? (sort.then.dir > 0 ? ' ▲' : ' ▼') : '';
-              return (
-                <Chip
-                  key={key}
-                  size="small"
-                  clickable
-                  color={active ? 'primary' : 'default'}
-                  label={`${label}${dir}`}
-                  onClick={() => setSort(nextSort(sort, key, true))}
-                  sx={{ flexShrink: 0 }}
-                />
-              );
-            })}
-          </Stack>
-          <Stack spacing={1}>
+          <Stack spacing={1.25}>
             {rows.slice(0, limit).map((transaction, index) => (
               <TransactionCard
                 key={`${transaction.raw}-${index}`}
                 transaction={transaction}
                 person={who(transaction)}
+                relayLabels={relayLabels}
                 snaps={snaps}
                 onOpenResident={onOpenResident}
                 onOpenSnap={onOpenSnap}

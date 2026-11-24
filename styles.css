@@ -96,11 +96,11 @@ html, body { margin: 0; }
   .app { flex-direction: column; }
   .sidebar { display: none; }
   .content {
-    padding: 12px calc(env(safe-area-inset-right) + 12px) calc(env(safe-area-inset-bottom) + 76px) calc(env(safe-area-inset-left) + 12px);
+    padding: 12px calc(env(safe-area-inset-right) + 16px) calc(env(safe-area-inset-bottom) + 96px) calc(env(safe-area-inset-left) + 16px);
   }
   .dock {
     left: calc(env(safe-area-inset-left) + 8px); right: calc(env(safe-area-inset-right) + 8px); width: auto;
-    bottom: calc(env(safe-area-inset-bottom) + 68px);
+    bottom: calc(env(safe-area-inset-bottom) + 88px);
   }
   .dock .job-log { max-height: 30vh; }
   .live-toggle { top: calc(env(safe-area-inset-top) + 6px); right: calc(env(safe-area-inset-right) + 8px); }

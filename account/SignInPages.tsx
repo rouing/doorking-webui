@@ -76,13 +76,22 @@ export function EmailLink({ kind, token, onDone, sso = [] }: EmailLinkProps) {
   }
   const title = kind === 'verify' ? 'Confirm your email' : kind === 'reset' ? 'Choose a new password' : 'Welcome';
   const asksPassword = !state.ok && (kind === 'reset' || (kind === 'invite' && username));
+  const isAndroidBrowser = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '');
+  const androidAppHref = kind === 'invite' && typeof window !== 'undefined'
+    ? `doorking://invite?server=${encodeURIComponent(window.location.origin)}&token=${encodeURIComponent(token)}`
+    : '';
   return (
     <Container maxWidth="xs" sx={authContainerSx}>
-      <Card>
+      <Card elevation={0} sx={{ border: 'none', borderRadius: '16px', bgcolor: 'var(--md-surface-high)' }}>
         <CardContent sx={{ p: { xs: 2.5, sm: 3.5 } }}>
           <form onSubmit={submit} autoComplete="off">
             <Stack spacing={2}>
               <Typography variant="h5" component="h1">{title}</Typography>
+              {kind === 'invite' && isAndroidBrowser && !state.ok && androidAppHref && (
+                <Button component="a" href={androidAppHref} variant="outlined" fullWidth>
+                  Open in Android app
+                </Button>
+              )}
               {kind === 'invite' && username && !state.ok && (
                 isResident
                   ? <Typography variant="body2" color="text.secondary">Welcome! You will sign in with <strong>{email || username}</strong>. Choose a password to activate your Resident Portal.</Typography>

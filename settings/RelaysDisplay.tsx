@@ -390,9 +390,28 @@ export function RelaysPage({ prefs, ...common }: RelaysPageProps) {
   );
 }
 
+const FACTORY_DISPLAY_DEFAULTS: Record<string, string> = {
+  displayLine1: 'this space is',
+  displayLine2: 'for your user',
+  displayLine3: 'programmable',
+  displayLine4: 'message',
+  displayLine5: 'use a-z to find name',
+  displayLine6: 'or number-enter code',
+  displayLine7: 'or push call-if busy',
+  displayLine8: 'press # - try again.',
+  systemInstruction: 'push a-z to find name or no. enter code or push call',
+};
+
+function isCustomizedDisplayField(field: { key: string; value: string }): boolean {
+  const norm = field.value.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!norm) return false;
+  const def = FACTORY_DISPLAY_DEFAULTS[field.key];
+  return !def || norm !== def;
+}
+
 /**
  * Display: LCD message settings. The layout choice only picks which Display group is shown (the gate stores both;
- * the active mode is set in the DoorKing app). Remembered in this browser.
+ * the physical LCD panel reads whichever block matches its screen).
  *
  * @param common - `Common` value.
  * @returns Rendered React element.
@@ -403,12 +422,22 @@ export function DisplayPage(common: Common) {
   const [mode, setMode] = useState<'single' | '8line'>('single');
   const [initialized, setInitialized] = useState(false);
 
-  // Auto-detect whichever layout (2-Line vs 8-Line) is currently populated on the gate, matching Android.
+  // Auto-detect whichever layout (2-Line vs 8-Line) is customized away from DoorKing factory defaults, matching Android.
   useEffect(() => {
     if (initialized || !settings.fields.length) return;
-    const twoLine = settings.fields.filter((f) => f.group === 'Display (single line)' && f.value.trim()).length;
-    const eightLine = settings.fields.filter((f) => f.group === 'Display (8 line)' && f.value.trim()).length;
-    setMode(eightLine > twoLine ? '8line' : 'single');
+    const twoLineFields = settings.fields.filter((f) => f.group === 'Display (single line)');
+    const eightLineFields = settings.fields.filter((f) => f.group === 'Display (8 line)');
+    const twoCustom = twoLineFields.filter(isCustomizedDisplayField).length;
+    const eightCustom = eightLineFields.filter(isCustomizedDisplayField).length;
+    if (twoCustom > 0 && eightCustom === 0) setMode('single');
+    else if (eightCustom > 0 && twoCustom === 0) setMode('8line');
+    else if (eightCustom > twoCustom) setMode('8line');
+    else if (twoCustom > 0) setMode('single');
+    else {
+      const twoNonBlank = twoLineFields.filter((f) => f.value.trim()).length;
+      const eightNonBlank = eightLineFields.filter((f) => f.value.trim()).length;
+      setMode(twoNonBlank === 0 && eightNonBlank > 0 ? '8line' : 'single');
+    }
     setInitialized(true);
   }, [initialized, settings.fields]);
 

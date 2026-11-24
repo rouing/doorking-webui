@@ -11,6 +11,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Divider,
   Drawer,
   Fab,
   IconButton,
@@ -29,8 +30,15 @@ import {
 import { alpha } from '@mui/material/styles';
 import AddIcon from '@mui/icons-material/Add';
 import CloseIcon from '@mui/icons-material/Close';
+import ContentCopyOutlinedIcon from '@mui/icons-material/ContentCopyOutlined';
+import CreditCardOutlinedIcon from '@mui/icons-material/CreditCardOutlined';
+import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
+import PictureAsPdfOutlinedIcon from '@mui/icons-material/PictureAsPdfOutlined';
+import SensorsOutlinedIcon from '@mui/icons-material/SensorsOutlined';
 import { MobileFilterChip, MobileSearchBar } from './MobilePrimitives.tsx';
 import type { DeviceRange, EntryChange, GateFeatures, ResidentRow, ResidentsReply, TransactionRow } from '../types.ts';
 import { dirCell, doorKingCsv, downloadText, fmtTime, isEmptySlot, phoneFull } from '../format.ts';
@@ -436,40 +444,129 @@ export function Directory({ kind, gatePhone, adminPhone, account, list, tx, devi
                     </Box>
 
                     {isOpen && (
-                      <Box sx={{ pt: 0.5 }}>
-                        <Stack spacing={1.5}>
-                          {resident.cards.length > 0 && (
-                            <Box>
-                              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-                                Cards &amp; remotes
-                              </Typography>
-                              <CardList cards={resident.cards} devices={devices} dups={dups.card} />
-                            </Box>
+                      <Stack spacing={1.25} sx={{ pt: 0.5 }}>
+                        <Divider />
+                        {resident.cards.length > 0 && (
+                          <Paper elevation={0} sx={{ p: 1.5, borderRadius: '16px', bgcolor: 'var(--md-surface-high)' }}>
+                            <Stack spacing={1}>
+                              <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+                                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                                  Access cards &amp; remotes
+                                </Typography>
+                                <Chip size="small" color="primary" label={`${resident.cards.length}`} sx={{ height: 22 }} />
+                              </Stack>
+                              <Stack spacing="4px">
+                                {resident.cards.map((cardNum, idx) => {
+                                  const num = Number(cardNum);
+                                  const match = devices.find((r) => Number(r.from) <= num && num <= Number(r.to));
+                                  const devLabel = match?.name || 'Access Card';
+                                  const isRemote = /click|remote|trans/i.test(devLabel);
+                                  const isFob = /key|fob/i.test(devLabel);
+                                  const isDupCard = dups.card.has(cardNum);
+                                  const topR = idx === 0 ? '12px' : '4px';
+                                  const botR = idx === resident.cards.length - 1 ? '12px' : '4px';
+                                  return (
+                                    <Paper
+                                      key={cardNum}
+                                      elevation={0}
+                                      sx={{
+                                        px: 1.5,
+                                        py: 1,
+                                        borderRadius: `${topR} ${topR} ${botR} ${botR}`,
+                                        bgcolor: isDupCard ? 'var(--md-error-container)' : 'var(--md-surface-lowest)',
+                                      }}
+                                    >
+                                      <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center' }}>
+                                        {isRemote ? (
+                                          <SensorsOutlinedIcon sx={{ fontSize: 18, color: 'primary.main' }} />
+                                        ) : isFob ? (
+                                          <KeyOutlinedIcon sx={{ fontSize: 18, color: 'primary.main' }} />
+                                        ) : (
+                                          <CreditCardOutlinedIcon sx={{ fontSize: 18, color: 'primary.main' }} />
+                                        )}
+                                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.2 }}>
+                                            {devLabel}
+                                          </Typography>
+                                          <Typography sx={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '0.875rem' }}>
+                                            #{cardNum}
+                                          </Typography>
+                                        </Box>
+                                        <IconButton
+                                          size="small"
+                                          aria-label={`Copy card ${cardNum}`}
+                                          onClick={() => { void navigator.clipboard?.writeText(cardNum); }}
+                                          sx={{ color: 'text.secondary' }}
+                                        >
+                                          <ContentCopyOutlinedIcon sx={{ fontSize: 16 }} />
+                                        </IconButton>
+                                      </Stack>
+                                    </Paper>
+                                  );
+                                })}
+                              </Stack>
+                            </Stack>
+                          </Paper>
+                        )}
+                        {resident.note && (
+                          <Typography variant="body2" color="text.secondary">
+                            Note: {resident.note}
+                          </Typography>
+                        )}
+                        <MobileRecentTransactions resident={resident} tx={tx} snaps={snaps} onOpenSnap={onOpenSnap} />
+                        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                          {!readOnly && (
+                            <Button
+                              variant="contained"
+                              startIcon={<EditOutlinedIcon sx={{ fontSize: 18 }} />}
+                              onClick={() => setEditingTarget(resident)}
+                              sx={{ flex: 1, minHeight: 44, borderRadius: '14px' }}
+                            >
+                              Edit
+                            </Button>
                           )}
-                          {resident.note && (
-                            <Typography variant="body2" color="text.secondary">{resident.note}</Typography>
+                          {!vendor && (
+                            <Button
+                              variant="outlined"
+                              startIcon={<PictureAsPdfOutlinedIcon sx={{ fontSize: 18 }} />}
+                              onClick={() => setWelcomeResident(resident)}
+                              sx={{ flex: 1, minHeight: 44, borderRadius: '14px' }}
+                            >
+                              PDF
+                            </Button>
                           )}
-                          <LastEdit resident={resident} gapi={gapi} version={list ? String(list.saved) : ''} />
-                          <RecentTransactions resident={resident} tx={tx} snaps={snaps} onOpenSnap={onOpenSnap} />
-                          <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-                            {!readOnly && (
-                              <Button
-                                size="small"
-                                variant="contained"
-                                onClick={() => setEditingTarget(resident)}
-                                sx={{ flex: 1 }}
-                              >
-                                Edit
-                              </Button>
-                            )}
-                            {!vendor && (
-                              <Button size="small" variant="outlined" onClick={() => setWelcomeResident(resident)} sx={{ flex: 1 }}>
-                                Welcome &amp; PDF…
-                              </Button>
-                            )}
-                          </Stack>
+                          {!readOnly && (
+                            <IconButton
+                              aria-label={`Delete ${resident.name || resident.directoryCode}`}
+                              onClick={async () => {
+                                if (!await confirm({
+                                  title: `Delete ${resident.name || resident.directoryCode}?`,
+                                  body: 'Removes this entry in the working copy. Nothing touches the physical gate until you Send to gate.',
+                                  action: 'Delete',
+                                  color: 'red',
+                                })) return;
+                                try {
+                                  await gapi('DELETE', `/residents/${encodeURIComponent(resident.directoryCode)}`);
+                                  setOpen(null);
+                                  await onReload();
+                                } catch (err) {
+                                  setBulkError(errorText(err));
+                                }
+                              }}
+                              sx={{
+                                width: 44,
+                                height: 44,
+                                borderRadius: '14px',
+                                bgcolor: 'var(--md-error-container)',
+                                color: 'var(--md-on-error-container)',
+                                '&:hover': { bgcolor: 'var(--md-error-container)', filter: 'brightness(0.95)' },
+                              }}
+                            >
+                              <DeleteOutlinedIcon />
+                            </IconButton>
+                          )}
                         </Stack>
-                      </Box>
+                      </Stack>
                     )}
                   </Stack>
                 </Paper>
@@ -799,5 +896,79 @@ function RecentTransactions({ resident, tx, snaps, onOpenSnap }: RecentTransacti
         />
       ))}
     </Stack>
+  );
+}
+
+/**
+ * Collapsible mobile Recent Transactions container cloning Android's `ResidentRecentTransactionsSection`.
+ */
+function MobileRecentTransactions({ resident, tx, snaps, onOpenSnap }: RecentTransactionsProps) {
+  const [expanded, setExpanded] = useState(false);
+  const norm = (c: string) => c.trim().replace(/^0+/, '') || c.trim();
+  const target = norm(resident.directoryCode);
+  const recent = useMemo(
+    () => (tx || []).filter((t) => t.directoryCode && norm(t.directoryCode) === target).slice(0, 5),
+    [tx, target],
+  );
+  return (
+    <Paper elevation={0} sx={{ borderRadius: '16px', bgcolor: 'var(--md-surface-high)', overflow: 'hidden' }}>
+      <Box
+        onClick={() => setExpanded((v) => !v)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpanded((v) => !v); } }}
+        sx={{
+          px: 1.5,
+          py: 1.25,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          cursor: 'pointer',
+        }}
+      >
+        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+          Recent transactions
+        </Typography>
+        <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
+          <Chip
+            size="small"
+            color={recent.length > 0 ? 'primary' : 'default'}
+            label={tx ? `${recent.length}` : '—'}
+            sx={{ height: 22 }}
+          />
+          {expanded ? (
+            <ExpandLessIcon sx={{ fontSize: 20, color: 'text.secondary' }} />
+          ) : (
+            <ExpandMoreIcon sx={{ fontSize: 20, color: 'text.secondary' }} />
+          )}
+        </Stack>
+      </Box>
+      {expanded && (
+        <Box sx={{ px: 1.5, pb: 1.5 }}>
+          {!tx ? (
+            <Typography variant="caption" color="text.secondary">
+              Pull transactions from the Gate tab to see recent activity.
+            </Typography>
+          ) : recent.length === 0 ? (
+            <Typography variant="caption" color="text.secondary">
+              No recent activity for this unit.
+            </Typography>
+          ) : (
+            <Stack spacing={0.75}>
+              {recent.map((transaction, i) => (
+                <Box key={`${transaction.raw}-${i}`} sx={{ '& > .MuiPaper-root': { bgcolor: 'var(--md-surface-lowest)' } }}>
+                  <TransactionCard
+                    transaction={transaction}
+                    snaps={snaps}
+                    compact
+                    onOpenSnap={onOpenSnap}
+                  />
+                </Box>
+              ))}
+            </Stack>
+          )}
+        </Box>
+      )}
+    </Paper>
   );
 }

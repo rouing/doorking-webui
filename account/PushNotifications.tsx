@@ -44,6 +44,7 @@ export function PushNotificationsCard() {
     && 'Notification' in window;
   const [publicKey, setPublicKey] = useState('');
   const [subscriptions, setSubscriptions] = useState<PushSubscriptionInfo[]>([]);
+  const [fcmTokens, setFcmTokens] = useState<PushSubscriptionInfo[]>([]);
   const [subscribedHere, setSubscribedHere] = useState(false);
   const [permission, setPermission] = useState<NotificationPermission>(
     () => (supported ? Notification.permission : 'default'),
@@ -55,9 +56,13 @@ export function PushNotificationsCard() {
 
   const load = useCallback(async () => {
     try {
-      const reply = await api<{ publicKey: string; subscriptions: PushSubscriptionInfo[] }>('GET', '/api/me/push');
+      const [reply, fcmReply] = await Promise.all([
+        api<{ publicKey: string; subscriptions: PushSubscriptionInfo[] }>('GET', '/api/me/push'),
+        api<{ enabled: boolean; tokens: PushSubscriptionInfo[] }>('GET', '/api/me/fcm').catch(() => ({ enabled: false, tokens: [] })),
+      ]);
       setPublicKey(reply.publicKey);
       setSubscriptions(reply.subscriptions);
+      setFcmTokens(fcmReply.tokens || []);
     } catch (err) {
       setFeedback({ severity: 'error', text: errorText(err) });
     }
@@ -149,6 +154,26 @@ export function PushNotificationsCard() {
     }
   };
 
+  const removeFcmDevice = async (dev: PushSubscriptionInfo) => {
+    if (!await confirm({
+      title: `Remove "${dev.label}"?`,
+      action: 'Remove',
+      color: 'red',
+      body: 'This Android device will no longer receive push notifications until you re-enable them in the app.',
+    })) return;
+    setBusy(true);
+    setFeedback(null);
+    try {
+      const reply = await api<{ tokens: PushSubscriptionInfo[] }>('DELETE', `/api/me/fcm/${encodeURIComponent(dev.id)}`);
+      setFcmTokens(reply.tokens || []);
+      setFeedback({ severity: 'success', text: `Removed "${dev.label}".` });
+    } catch (err) {
+      setFeedback({ severity: 'error', text: errorText(err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const sendTest = async () => {
     setBusy(true);
     setFeedback({ severity: 'info', text: 'Sending test notification…' });
@@ -209,20 +234,41 @@ export function PushNotificationsCard() {
                   Disable on this device
                 </Button>
               )}
-              {subscriptions.length > 0 && (
+              {(subscriptions.length > 0 || fcmTokens.length > 0) && (
                 <Button variant="outlined" disabled={busy} onClick={sendTest}>
                   Send test notification
                 </Button>
               )}
             </Stack>
           )}
-          {subscriptions.length > 0 && (
+          {(subscriptions.length > 0 || fcmTokens.length > 0) && (
             <Stack spacing={1.25}>
-              {subscriptions.map((sub) => (
-                <Paper key={sub.id} elevation={0} sx={{ p: 1.5, borderRadius: 2, bgcolor: 'action.hover' }}>
+              {fcmTokens.map((dev) => (
+                <Paper key={`fcm-${dev.id}`} elevation={0} sx={{ p: 1.5, borderRadius: '12px', bgcolor: 'var(--md-surface-lowest)' }}>
                   <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }} useFlexGap>
                     <Box sx={{ minWidth: 0, flex: '1 1 12rem' }}>
-                      <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>{sub.label}</Typography>
+                      <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>{dev.label}</Typography>
+                        <Chip size="small" color="primary" label="Android" sx={{ height: 22 }} />
+                      </Stack>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                        Added {fmtTime(dev.createdAt)} · Last alert {dev.lastUsedAt ? fmtTime(dev.lastUsedAt) : 'never'}
+                      </Typography>
+                    </Box>
+                    <Button size="small" variant="text" color="error" disabled={busy} onClick={() => removeFcmDevice(dev)}>
+                      Remove
+                    </Button>
+                  </Stack>
+                </Paper>
+              ))}
+              {subscriptions.map((sub) => (
+                <Paper key={`web-${sub.id}`} elevation={0} sx={{ p: 1.5, borderRadius: '12px', bgcolor: 'var(--md-surface-lowest)' }}>
+                  <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }} useFlexGap>
+                    <Box sx={{ minWidth: 0, flex: '1 1 12rem' }}>
+                      <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>{sub.label}</Typography>
+                        <Chip size="small" label="Browser" sx={{ height: 22 }} />
+                      </Stack>
                       <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
                         Added {fmtTime(sub.createdAt)} · Last alert {sub.lastUsedAt ? fmtTime(sub.lastUsedAt) : 'never'}
                       </Typography>

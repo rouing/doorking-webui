@@ -97,7 +97,15 @@ export function Login({ onSignedIn, emailEnabled, sso }: LoginProps) {
 
   return (
     <Container maxWidth="xs" sx={{ px: { xs: 2, sm: 3 }, pt: { xs: 4, sm: 6 }, pb: 4 }}>
-      <Paper variant="outlined" sx={{ p: { xs: 2.5, sm: 3.5 } }}>
+      <Paper
+        elevation={0}
+        sx={{
+          p: { xs: 2.5, sm: 3.5 },
+          border: 'none',
+          borderRadius: '16px',
+          bgcolor: 'var(--md-surface-high)',
+        }}
+      >
         {forgot ? (
           <>
             <Typography variant="h5" component="h1" sx={{ mb: 2 }}>Reset your password</Typography>

@@ -1,9 +1,35 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Alert, Box, Button, Chip, Container, Divider, Link, Paper, Stack, TextField, Typography } from '@mui/material';
+import {
+  Alert,
+  AppBar,
+  Box,
+  Button,
+  ButtonBase,
+  Chip,
+  Container,
+  Divider,
+  Drawer,
+  Fab,
+  IconButton,
+  Link,
+  Paper,
+  Stack,
+  TextField,
+  Toolbar,
+  Typography,
+} from '@mui/material';
+import AddIcon from '@mui/icons-material/Add';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import Brightness6OutlinedIcon from '@mui/icons-material/Brightness6Outlined';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import FenceOutlinedIcon from '@mui/icons-material/FenceOutlined';
+import LogoutOutlinedIcon from '@mui/icons-material/LogoutOutlined';
+import PersonOutlinedIcon from '@mui/icons-material/PersonOutlined';
 import type { GateInfo, Job } from './types.ts';
 import { api, errorText } from './api.ts';
 import { useConfirm } from './Confirm.tsx';
+import { usePhone } from './phone.ts';
+import { fmtPhone } from './lib/shared.ts';
 import { UserSettings } from './account/UserSettings.tsx';
 import { Field } from './panes/fields.tsx';
 import { ConfigFields } from './settings/GateConfig.tsx';
@@ -179,8 +205,10 @@ export function Gates({ session, autoOpen = false, onChange }: GatesProps) {
   const [gates, setGates] = useState<GateInfo[] | null>(null);
   const [error, setError] = useState('');
   const [settings, setSettings] = useState(false);
+  const [addSheetOpen, setAddSheetOpen] = useState(false);
   const autoOpened = useRef(false);
   const [dialog, confirm] = useConfirm();
+  const phone = usePhone();
 
   const load = () => api<{ gates: GateInfo[] }>('GET', '/api/gates').then((reply) => setGates(reply.gates), (err) => setError(errorText(err)));
   useEffect(() => { load(); }, []);
@@ -206,15 +234,156 @@ export function Gates({ session, autoOpen = false, onChange }: GatesProps) {
   };
 
   const signOut = () => run(async () => { await api('DELETE', '/api/session'); onChange(); });
+  const toggleTheme = () => run(async () => { await api('PUT', '/api/me', { dark: !session.dark }); onChange(); });
+
+  const roleColor = (role: GateInfo['role']) =>
+    role === 'admin' ? 'primary' : role === 'editor' ? 'warning' : role === 'resident' ? 'success' : 'default';
+
+  if (phone) {
+    return (
+      <Box sx={{ minHeight: '100dvh', bgcolor: 'var(--md-surface)' }}>
+        {dialog}
+        <AppBar
+          position="sticky"
+          color="default"
+          elevation={0}
+          sx={{ bgcolor: 'var(--md-surface)', color: 'text.primary', borderBottom: 'none', pt: 'env(safe-area-inset-top)' }}
+        >
+          <Toolbar sx={{ minHeight: '64px !important', px: settings ? 0.5 : 2, gap: 0.5 }}>
+            {settings && (
+              <IconButton aria-label="Back to gates" onClick={() => setSettings(false)} sx={{ color: 'text.primary' }}>
+                <ArrowBackIcon />
+              </IconButton>
+            )}
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography noWrap sx={{ fontSize: '1.375rem', lineHeight: 1.25, fontWeight: 500 }}>
+                {settings ? 'User Settings' : 'Your Gates'}
+              </Typography>
+              <Typography noWrap sx={{ fontSize: '0.75rem', lineHeight: 1.33, fontWeight: 500, color: 'text.secondary' }}>
+                {session.user}
+              </Typography>
+            </Box>
+            {!settings && (
+              <>
+                <IconButton aria-label="User settings" onClick={() => setSettings(true)} sx={{ color: 'text.primary' }}>
+                  <PersonOutlinedIcon />
+                </IconButton>
+                <IconButton aria-label="Toggle dark mode" onClick={toggleTheme} sx={{ color: 'text.primary' }}>
+                  <Brightness6OutlinedIcon />
+                </IconButton>
+                <IconButton aria-label="Sign out" onClick={signOut} sx={{ color: 'text.primary' }}>
+                  <LogoutOutlinedIcon />
+                </IconButton>
+              </>
+            )}
+          </Toolbar>
+        </AppBar>
+
+        <Box sx={{ px: 2, pt: 1.5, pb: 'calc(env(safe-area-inset-bottom) + 96px)' }}>
+          {settings ? (
+            <UserSettings session={session} onSaved={onChange} />
+          ) : (
+            <Stack spacing={1.5}>
+              {error && <Alert severity="error">{error}</Alert>}
+              {gates && !gates.length && (
+                <Paper elevation={0} sx={{ p: 2, borderRadius: '12px', bgcolor: 'var(--md-surface-low)' }}>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 500, mb: 0.5 }}>No gates yet</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {session.isResidentOnly
+                      ? 'Ask your property manager to enable Resident Portal access for your unit.'
+                      : 'Tap + Add gate below using the gate phone number, master code, and DKS Cloud login.'}
+                  </Typography>
+                </Paper>
+              )}
+              {(gates || []).map((gate) => (
+                <Paper
+                  key={gate.phoneNumber}
+                  elevation={0}
+                  sx={{ borderRadius: '12px', bgcolor: 'var(--md-surface-low)', overflow: 'hidden' }}
+                >
+                  <ButtonBase
+                    type="button"
+                    onClick={() => open(gate)}
+                    sx={{ width: '100%', textAlign: 'left', p: 2, display: 'flex', alignItems: 'center', gap: 1.5 }}
+                  >
+                    <FenceOutlinedIcon sx={{ color: 'primary.main', flexShrink: 0 }} />
+                    <Stack spacing={0.75} sx={{ flex: 1, minWidth: 0 }}>
+                      <Typography sx={{ fontSize: '1rem', fontWeight: 500, lineHeight: 1.35 }} noWrap>
+                        {gateLabel(gate)}
+                      </Typography>
+                      <Stack direction="row" sx={{ gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <Chip size="small" label={fmtPhone(gate.phoneNumber)} sx={{ height: 26, fontSize: '0.75rem', fontWeight: 500 }} />
+                        <Chip size="small" color={roleColor(gate.role)} label={roleLabel(gate.role)} sx={{ height: 26, fontSize: '0.75rem', fontWeight: 500 }} />
+                      </Stack>
+                    </Stack>
+                    <ChevronRightIcon sx={{ color: 'text.secondary', flexShrink: 0 }} />
+                  </ButtonBase>
+                </Paper>
+              ))}
+            </Stack>
+          )}
+        </Box>
+
+        {!settings && !session.isResidentOnly && (
+          <>
+            <Fab
+              variant="extended"
+              onClick={() => setAddSheetOpen(true)}
+              sx={{
+                position: 'fixed',
+                right: 'calc(env(safe-area-inset-right) + 16px)',
+                bottom: 'calc(env(safe-area-inset-bottom) + 20px)',
+                zIndex: 1050,
+                height: 56,
+                borderRadius: '16px',
+                bgcolor: 'var(--md-primary-container)',
+                color: 'var(--md-on-primary-container)',
+                textTransform: 'none',
+                fontWeight: 600,
+                px: 2.25,
+                boxShadow: 3,
+                '&:hover': { bgcolor: 'var(--md-primary-container)', filter: 'brightness(0.96)' },
+              }}
+            >
+              <AddIcon sx={{ mr: 1 }} />
+              Add gate
+            </Fab>
+            <Drawer
+              anchor="bottom"
+              open={addSheetOpen}
+              onClose={() => setAddSheetOpen(false)}
+              slotProps={{
+                paper: {
+                  sx: {
+                    maxHeight: '92dvh',
+                    overflowY: 'auto',
+                    borderTopLeftRadius: 28,
+                    borderTopRightRadius: 28,
+                    bgcolor: 'var(--md-surface-low)',
+                    pb: 'env(safe-area-inset-bottom)',
+                  },
+                },
+              }}
+            >
+              <Box sx={{ width: 32, height: 4, borderRadius: 2, bgcolor: 'text.disabled', mx: 'auto', mt: 1.5, mb: 0.5, opacity: 0.4 }} />
+              <Box sx={{ px: 2.5, py: 1.5 }}>
+                <AddGate session={session} onAdded={() => { setAddSheetOpen(false); load(); }} />
+              </Box>
+            </Drawer>
+          </>
+        )}
+      </Box>
+    );
+  }
 
   return (
     <Container maxWidth="md" sx={{ px: { xs: 2, sm: 3 }, pt: { xs: 3, sm: 5 }, pb: 4 }}>
       {dialog}
-      <Paper variant="outlined" sx={{
+      <Paper elevation={0} sx={{
         p: { xs: 0, sm: 3 },
-        border: { xs: 0, sm: 1 },
-        borderColor: 'divider',
-        bgcolor: { xs: 'transparent', sm: 'background.paper' },
+        border: 'none',
+        borderRadius: '16px',
+        bgcolor: { xs: 'transparent', sm: 'var(--md-surface-high)' },
       }}>
         <Stack direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap', mb: 3 }}>
           <Typography variant="h5" component="h1">{settings ? 'User Settings' : 'Your gates'}</Typography>
@@ -234,23 +403,23 @@ export function Gates({ session, autoOpen = false, onChange }: GatesProps) {
             <Stack spacing={1.5}>
               {(gates || []).map((gate) => (
                 <Stack key={gate.phoneNumber} direction={{ xs: 'column', sm: 'row' }} spacing={0.75} sx={{ alignItems: { xs: 'stretch', sm: 'stretch' } }}>
-                  <button type="button" className="gate-tile" style={{ flex: 1, minWidth: 0 }} onClick={() => open(gate)}>
-                    <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
-                      <Box sx={{ minWidth: 0 }}>
-                        <Typography variant="subtitle1" sx={{ fontWeight: 700, overflowWrap: 'anywhere' }}>{gateLabel(gate)}</Typography>
-                        <Typography variant="body2" color="text.secondary">{gate.phoneNumber}</Typography>
+                  <Paper elevation={0} sx={{ flex: 1, minWidth: 0, borderRadius: '12px', bgcolor: 'var(--md-surface-lowest)', overflow: 'hidden' }}>
+                    <ButtonBase
+                      type="button"
+                      onClick={() => open(gate)}
+                      sx={{ width: '100%', textAlign: 'left', p: 2, display: 'flex', alignItems: 'center', gap: 1.5 }}
+                    >
+                      <FenceOutlinedIcon sx={{ color: 'primary.main', flexShrink: 0 }} />
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography variant="subtitle1" sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>{gateLabel(gate)}</Typography>
+                        <Typography variant="body2" color="text.secondary">{fmtPhone(gate.phoneNumber)}</Typography>
                       </Box>
                       <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexShrink: 0 }}>
-                        <Chip
-                          size="small"
-                          label={roleLabel(gate.role)}
-                          color={gate.role === 'admin' ? 'primary' : gate.role === 'editor' ? 'warning' : gate.role === 'resident' ? 'success' : 'default'}
-                          variant="outlined"
-                        />
+                        <Chip size="small" label={roleLabel(gate.role)} color={roleColor(gate.role)} />
                         <ChevronRightIcon color="action" aria-hidden="true" />
                       </Stack>
-                    </Stack>
-                  </button>
+                    </ButtonBase>
+                  </Paper>
                   {gate.role !== 'resident' && (
                     <Button variant="text" color="error" size="small"
                       sx={{ alignSelf: { xs: 'flex-end', sm: 'center' }, flexShrink: 0 }} onClick={() => leave(gate)}>

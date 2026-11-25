@@ -47,7 +47,19 @@ const manifest = (self as unknown as { __WB_MANIFEST: SwScope['__WB_MANIFEST'] }
 cleanupOutdatedCaches();
 precacheAndRoute(manifest);
 registerRoute(new NavigationRoute(createHandlerBoundToURL('index.html'), {
-  denylist: [/^\/api\//, /^\/help(?:\/|$)/, /^\/privacy(?:\/|$)/, /^\/download(?:\/|$)/, /^\/\.well-known\//],
+  denylist: [
+    /^\/api\//,
+    /^\/help(?:\/|$)/,
+    /^\/privacy(?:\/|$)/,
+    /^\/download(?:\/|$)/,
+    /^\/\.well-known\//,
+    /^\/mcp(?:\/|$)/,
+    /^\/authorize(?:\/|$)/,
+    /^\/token(?:\/|$)/,
+    /^\/register(?:\/|$)/,
+    /^\/revoke(?:\/|$)/,
+    /^\/oauth(?:\/|$)/,
+  ],
 }));
 
 sw.addEventListener('message', (event) => {

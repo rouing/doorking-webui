@@ -41,14 +41,15 @@ import PictureAsPdfOutlinedIcon from '@mui/icons-material/PictureAsPdfOutlined';
 import SensorsOutlinedIcon from '@mui/icons-material/SensorsOutlined';
 import { MobileFilterChip, MobileSearchBar } from './MobilePrimitives.tsx';
 import type { DeviceRange, EntryChange, GateFeatures, ResidentRow, ResidentsReply, TransactionRow } from '../types.ts';
-import { dirCell, doorKingCsv, downloadText, fmtTime, isEmptySlot, phoneFull } from '../format.ts';
+import { cell, dirCell, doorKingCsv, downloadText, fieldOf, fmtTime, isEmptySlot, phoneFull, txTone } from '../format.ts';
 import { nextSort, SortHead, sortRows, useShownRows, type Column, type Sort } from '../table.tsx';
 import { CardList } from './fields.tsx';
+import { SnapCell } from '../camera/SnapViews.tsx';
 import type { Snaps } from '../camera/snapshots.ts';
 import { ImportCsvDialog } from './ImportCsvDialog.tsx';
 import { ResidentForm } from './ResidentForm.tsx';
 import { WelcomeInstructionsDialog } from './WelcomeInstructionsDialog.tsx';
-import { TransactionCard } from './Transactions.tsx';
+import { hidePortalHoldNoise, TransactionCard } from './Transactions.tsx';
 import { ACTIONS } from './History.tsx';
 import { WorkingCopyBar } from './WorkingCopyBar.tsx';
 import { errorText, useReadOnly, type GateApi } from '../api.ts';
@@ -880,22 +881,65 @@ interface RecentTransactionsProps {
  * @param props.onOpenSnap - Callback to open the snapshot viewer for a transaction.
  * @returns Rendered React element.
  */
+const RECENT_TX_COLS: [string, string][] = [
+  ['Date', 'date'],
+  ['Time', 'time'],
+  ['Event Type', 'eventType'],
+  ['Number', 'number'],
+  ['Access', 'access'],
+  ['Relay', 'relay'],
+];
+
+const RECENT_TONE_KEY = { red: 'error', amber: 'warning', green: 'success' } as const;
+
+/**
+ * Classic compact desktop table of the last 5 transactions for a resident/vendor (matched on directory code).
+ * Used strictly in the desktop Residents/Vendors expanded row; mobile uses `MobileRecentTransactions`.
+ */
 function RecentTransactions({ resident, tx, snaps, onOpenSnap }: RecentTransactionsProps) {
   if (!tx) return <Typography variant="body2" color="text.secondary">No transactions yet. Pull transactions from the gate.</Typography>;
-  const recent = tx.filter((transaction) => transaction.directoryCode === resident.directoryCode).slice(0, 5);
+  const recent = hidePortalHoldNoise(tx)
+    .filter((transaction) => transaction.directoryCode === resident.directoryCode)
+    .slice(0, 5);
   if (!recent.length) return <Typography variant="body2" color="text.secondary">No transactions for this entry.</Typography>;
+  const cols = snaps.settings ? [...RECENT_TX_COLS, ['Camera', 'snap'] as [string, string]] : RECENT_TX_COLS;
   return (
-    <Stack spacing={1}>
-      {recent.map((transaction, i) => (
-        <TransactionCard
-          key={`${transaction.raw}-${i}`}
-          transaction={transaction}
-          snaps={snaps}
-          compact
-          onOpenSnap={onOpenSnap}
-        />
-      ))}
-    </Stack>
+    <TableContainer component={Paper} variant="outlined">
+      <Table size="small">
+        <TableHead>
+          <TableRow>
+            {cols.map(([header]) => (
+              <TableCell key={header}>{header}</TableCell>
+            ))}
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {recent.map((transaction, i) => {
+            const tone = txTone(transaction);
+            return (
+              <TableRow
+                key={`${transaction.raw}-${i}`}
+                sx={{
+                  bgcolor: tone ? (theme) => alpha(theme.palette[RECENT_TONE_KEY[tone]].main, 0.12) : undefined,
+                }}
+              >
+                {cols.map(([, key]) => (
+                  <TableCell key={key}>
+                    {key === 'snap' ? (
+                      <SnapCell transaction={transaction} snaps={snaps} onOpen={onOpenSnap} />
+                    ) : key === 'eventType' && transaction.source === 'portal' ? (
+                      <Chip color="primary" size="small" label="Portal Open" />
+                    ) : (
+                      cell(fieldOf(transaction, key))
+                    )}
+                  </TableCell>
+                ))}
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </TableContainer>
   );
 }
 

@@ -47,18 +47,20 @@ const manifest = (self as unknown as { __WB_MANIFEST: SwScope['__WB_MANIFEST'] }
 cleanupOutdatedCaches();
 precacheAndRoute(manifest);
 registerRoute(new NavigationRoute(createHandlerBoundToURL('index.html'), {
+  // Note: Workbox tests `denylist` against `url.pathname + url.search`, so `(?:\/|\?|$)` is required
+  // to match routes invoked with query strings (such as `/authorize?response_type=code&...`).
   denylist: [
-    /^\/api\//,
-    /^\/help(?:\/|$)/,
-    /^\/privacy(?:\/|$)/,
-    /^\/download(?:\/|$)/,
-    /^\/\.well-known\//,
-    /^\/mcp(?:\/|$)/,
-    /^\/authorize(?:\/|$)/,
-    /^\/token(?:\/|$)/,
-    /^\/register(?:\/|$)/,
-    /^\/revoke(?:\/|$)/,
-    /^\/oauth(?:\/|$)/,
+    /^\/api(?:\/|\?|$)/,
+    /^\/help(?:\/|\?|$)/,
+    /^\/privacy(?:\/|\?|$)/,
+    /^\/download(?:\/|\?|$)/,
+    /^\/\.well-known(?:\/|\?|$)/,
+    /^\/mcp(?:\/|\?|$)/,
+    /^\/authorize(?:\/|\?|$)/,
+    /^\/token(?:\/|\?|$)/,
+    /^\/register(?:\/|\?|$)/,
+    /^\/revoke(?:\/|\?|$)/,
+    /^\/oauth(?:\/|\?|$)/,
   ],
 }));
 

@@ -11,17 +11,34 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import type { CameraSettings } from '../types.ts';
+import type { CameraSettings, GatePrefs } from '../types.ts';
 import { errorText, gateUrl, type GateApi } from '../api.ts';
 import { useConfirm } from '../Confirm.tsx';
+import { trackerOf, trackerRelays } from '../format.ts';
 import { Choice, Field } from '../panes/fields.tsx';
+import { MobileFilterChip } from '../panes/MobilePrimitives.tsx';
 
 type LiveFrame = { channel: number; name?: string; file?: string; error?: string };
 
 const nums = (list: number[]): string[] => list.map(String);
 
+// Openable gate relays: 0-2 minus Tracker command relays, plus enabled Tracker expansion relays.
+const openableRelaysOf = (prefs: GatePrefs | undefined): number[] => {
+  const tracker = trackerOf(prefs || {});
+  return trackerRelays(tracker).filter((relay) => !(relay === 2 && tracker.tracker2) && !(relay === 1 && tracker.tracker1));
+};
+
+// Configured relay label with "Relay #" fallback.
+const relayLabelOf = (prefs: GatePrefs | undefined, relay: number): string =>
+  prefs?.relayLabels?.[String(relay)]?.trim() || `Relay ${relay}`;
+
+// Sorted, deduplicated relay list (empty array means all relays).
+const normalizeRelays = (relays: number[] | undefined): number[] =>
+  (relays ? [...new Set(relays)].sort((a, b) => a - b) : []);
+
 interface CameraFormProps {
   settings: CameraSettings | null;
+  prefs?: GatePrefs;
   phone: string;
   gapi: GateApi;
   onSaved: () => Promise<void>;
@@ -33,13 +50,15 @@ interface CameraFormProps {
  *
  * @param props - Component props.
  * @param props.settings - Settings map or configuration.
+ * @param [props.prefs] - Gate preferences (relay labels and Tracker settings for channel-to-relay mapping).
  * @param props.phone - Gate system phone number (digits or formatted).
  * @param props.gapi - Gate-scoped API fetch helper.
  * @param props.onSaved - On saved.
  * @returns Rendered React element.
  */
-export function CameraForm({ settings, phone, gapi, onSaved }: CameraFormProps) {
+export function CameraForm({ settings, prefs, phone, gapi, onSaved }: CameraFormProps) {
   const saved = settings;
+  const openableRelays = openableRelaysOf(prefs);
   const [form, setForm] = useState(() => ({
     serial: saved?.serial || '', username: saved?.username || '', password: '', clockOffset: String(saved?.clockOffset ?? 0), mode: saved?.mode || 'snapshots',
     frames: String(saved?.frames ?? 3), framesAfter: String(saved?.framesAfter ?? 0), clipTries: String(saved?.clipTries ?? 2), events: saved?.events || 'access',
@@ -48,7 +67,11 @@ export function CameraForm({ settings, phone, gapi, onSaved }: CameraFormProps) 
   /** Four rows, or as many as are saved (up to 8 through the API), so saving keeps every channel. */
   const [channels, setChannels] = useState(() => Array.from({ length: Math.max(4, saved?.channels?.length || 0) }, (_, i) => {
     const channel = (saved?.channels || [{ channel: 1, name: '' }])[i];
-    return { channel: channel ? String(channel.channel) : '', name: channel ? channel.name : '' };
+    return {
+      channel: channel ? String(channel.channel) : '',
+      name: channel ? channel.name : '',
+      relays: normalizeRelays(channel?.relays),
+    };
   }));
   const [info, setInfo] = useState('');
   const [error, setError] = useState('');
@@ -57,6 +80,20 @@ export function CameraForm({ settings, phone, gapi, onSaved }: CameraFormProps) 
   const [dialog, confirm] = useConfirm();
   const set = (key: keyof typeof form, value: string | boolean) => setForm({ ...form, [key]: value });
   const video = form.mode === 'video';
+
+  const toggleChannelRelay = (index: number, relay: number) => {
+    setChannels((prev) => prev.map((entry, j) => {
+      if (j !== index) return entry;
+      const next = entry.relays.includes(relay)
+        ? entry.relays.filter((item) => item !== relay)
+        : normalizeRelays([...entry.relays, relay]);
+      return { ...entry, relays: next };
+    }));
+  };
+
+  const clearChannelRelays = (index: number) => {
+    setChannels((prev) => prev.map((entry, j) => (j === index ? { ...entry, relays: [] } : entry)));
+  };
 
   const run = async (fn: () => Promise<void>) => {
     setError('');
@@ -67,7 +104,16 @@ export function CameraForm({ settings, phone, gapi, onSaved }: CameraFormProps) 
     if (keep && keep !== (settings?.keepDays || 0) && !await confirm({ title: `Keep pictures for ${keep} days?`, action: 'Save', color: 'red',
       body: `Pictures and videos older than ${keep} days are deleted now, and each day from then on. This cannot be undone.` })) return;
     setInfo('Saving…');
-    try { await gapi('PUT', '/cameras', { ...form, channels: channels.map((channel) => ({ channel: channel.channel.trim(), name: channel.name })) }); } catch (err) {
+    try {
+      await gapi('PUT', '/cameras', {
+        ...form,
+        channels: channels.map((channel) => ({
+          channel: channel.channel.trim(),
+          name: channel.name,
+          relays: channel.relays,
+        })),
+      });
+    } catch (err) {
       setInfo('');
       setError(`Save failed: ${errorText(err)}`);
       return;
@@ -163,39 +209,62 @@ export function CameraForm({ settings, phone, gapi, onSaved }: CameraFormProps) 
               <TextField size="small" type="number" value={form.backfillHours} slotProps={{ htmlInput: { min: 0, max: 720, step: 1, 'aria-label': 'Look back (hours)' } }} onChange={(event) => set('backfillHours', event.target.value)} />
             </Field>
           </Box>
-          <Stack spacing={1} sx={{ width: '100%', maxWidth: 540 }}>
+          <Stack spacing={1} sx={{ width: '100%', maxWidth: 640 }}>
             {channels.map((channel, i) => {
               const active = Boolean(channel.channel.trim());
               return (
                 <Paper key={i} variant="outlined" sx={{ px: 1.5, py: 0.75, width: '100%', boxSizing: 'border-box' }}>
-                  <Stack direction="row" spacing={1} sx={{ alignItems: 'center', width: '100%' }}>
-                    <Chip size="small" label={`Ch ${i + 1}`} sx={{ minWidth: 48, flexShrink: 0 }} />
-                    <TextField
-                      size="small"
-                      placeholder="#"
-                      value={channel.channel}
-                      slotProps={{ htmlInput: { inputMode: 'numeric', 'aria-label': `Channel row ${i + 1} number` } }}
-                      sx={{
-                        width: '6.5ch',
-                        flexShrink: 0,
-                        '& .MuiInputBase-input': { py: 0.5, px: 0.75, fontSize: '0.85rem', textAlign: 'center', fontVariantNumeric: 'tabular-nums' },
-                      }}
-                      onChange={(event) => setChannels(channels.map((entry, j) => (j === i ? { ...entry, channel: event.target.value } : entry)))}
-                    />
-                    <TextField
-                      size="small"
-                      placeholder="Channel name"
-                      value={channel.name}
-                      slotProps={{ htmlInput: { maxLength: 40, 'aria-label': `Channel row ${i + 1} name` } }}
-                      sx={{ flex: '1 1 auto', minWidth: 0, '& .MuiInputBase-input': { py: 0.5, px: 1, fontSize: '0.85rem' } }}
-                      onChange={(event) => setChannels(channels.map((entry, j) => (j === i ? { ...entry, name: event.target.value } : entry)))}
-                    />
-                    <Chip
-                      size="small"
-                      color={active ? 'success' : 'default'}
-                      label={active ? 'Active' : 'Unused'}
-                      sx={{ minWidth: 64, flexShrink: 0 }}
-                    />
+                  <Stack spacing={1}>
+                    <Stack direction="row" spacing={1} sx={{ alignItems: 'center', width: '100%' }}>
+                      <Chip size="small" label={`Ch ${i + 1}`} sx={{ minWidth: 48, flexShrink: 0 }} />
+                      <TextField
+                        size="small"
+                        placeholder="#"
+                        value={channel.channel}
+                        slotProps={{ htmlInput: { inputMode: 'numeric', 'aria-label': `Channel row ${i + 1} number` } }}
+                        sx={{
+                          width: '6.5ch',
+                          flexShrink: 0,
+                          '& .MuiInputBase-input': { py: 0.5, px: 0.75, fontSize: '0.85rem', textAlign: 'center', fontVariantNumeric: 'tabular-nums' },
+                        }}
+                        onChange={(event) => setChannels(channels.map((entry, j) => (j === i ? { ...entry, channel: event.target.value } : entry)))}
+                      />
+                      <TextField
+                        size="small"
+                        placeholder="Channel name"
+                        value={channel.name}
+                        slotProps={{ htmlInput: { maxLength: 40, 'aria-label': `Channel row ${i + 1} name` } }}
+                        sx={{ flex: '1 1 auto', minWidth: 0, '& .MuiInputBase-input': { py: 0.5, px: 1, fontSize: '0.85rem' } }}
+                        onChange={(event) => setChannels(channels.map((entry, j) => (j === i ? { ...entry, name: event.target.value } : entry)))}
+                      />
+                      <Chip
+                        size="small"
+                        color={active ? 'success' : 'default'}
+                        label={active ? 'Active' : 'Unused'}
+                        sx={{ minWidth: 64, flexShrink: 0 }}
+                      />
+                    </Stack>
+                    {active && openableRelays.length > 0 && (
+                      <Stack direction="row" sx={{ gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, mr: 0.25 }}>
+                          Relays
+                        </Typography>
+                        <MobileFilterChip
+                          label="All relays"
+                          selected={channel.relays.length === 0}
+                          onClick={() => clearChannelRelays(i)}
+                        />
+                        {openableRelays.map((relay) => (
+                          <MobileFilterChip
+                            key={relay}
+                            label={relayLabelOf(prefs, relay)}
+                            selected={channel.relays.includes(relay)}
+                            showCheck
+                            onClick={() => toggleChannelRelay(i, relay)}
+                          />
+                        ))}
+                      </Stack>
+                    )}
                   </Stack>
                 </Paper>
               );

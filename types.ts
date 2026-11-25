@@ -252,7 +252,7 @@ export interface Schedule extends ScheduleInput {
 
 export interface SchedulesReply { schedules: Schedule[] }
 
-export interface CameraChannel { channel: number; name: string }
+export interface CameraChannel { channel: number; name: string; relays?: number[] }
 
 export interface CameraSettings {
   enabled: boolean;

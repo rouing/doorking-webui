@@ -3,20 +3,60 @@
  *
  * Passkeys: the step-up dialog for sensitive actions and the user's passkey list.
  */
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   Alert, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog, DialogActions, DialogContent,
   DialogContentText, DialogTitle, Paper, Stack,
   TextField, Tooltip, Typography,
 } from '@mui/material';
+import PhoneAndroidOutlinedIcon from '@mui/icons-material/PhoneAndroidOutlined';
 import { browserSupportsWebAuthn, getBrowserCapabilities, sendSignal, startAuthentication, startRegistration } from '@simplewebauthn/browser';
 import type { PasskeyInfo } from '../types.ts';
-import { api, errorText, onStepUp } from '../api.ts';
+import { ApiError, api, errorText, onStepUp } from '../api.ts';
 import { useBackLayer } from '../back.ts';
 import { useConfirm } from '../Confirm.tsx';
 import { fmtTime } from '../format.ts';
 import { Field } from '../panes/fields.tsx';
 import { ApproveDevice, APPROVAL_KEY } from './ApproveDevice.tsx';
+
+// Short browser name parsed from a User-Agent string.
+function detectBrowser(ua: string): string {
+  if (/Edg(?:A|iOS)?\//i.test(ua)) return 'Edge';
+  if (/OPR\/|Opera/i.test(ua)) return 'Opera';
+  if (/Firefox\/|FxiOS\//i.test(ua)) return 'Firefox';
+  if (/Chrome\/|CriOS\//i.test(ua)) return 'Chrome';
+  if (/Safari\//i.test(ua)) return 'Safari';
+  return 'Browser';
+}
+
+// Short OS/device name parsed from a User-Agent string.
+function detectOs(ua: string): string {
+  if (/iPhone/i.test(ua)) return 'iPhone';
+  if (/iPad/i.test(ua)) return 'iPad';
+  if (/Android/i.test(ua)) return 'Android';
+  if (/CrOS/i.test(ua)) return 'Chromebook';
+  if (/Windows/i.test(ua)) return 'Windows';
+  if (/Macintosh|Mac OS X/i.test(ua)) return 'Mac';
+  if (/Linux/i.test(ua)) return 'Linux';
+  return '';
+}
+
+// Builds a friendly label like "Chrome on Windows" for push-notification approval prompts.
+export function describeDevice(userAgent?: string): string {
+  const ua = (userAgent ?? (typeof navigator !== 'undefined' ? navigator.userAgent : '')).trim();
+  if (!ua) return 'Web browser';
+  const browser = detectBrowser(ua);
+  const os = detectOs(ua);
+  return os ? `${browser} on ${os}` : browser;
+}
+
+// Formats remaining approval seconds as m:ss.
+function formatCountdown(seconds: number): string {
+  const clamped = Math.max(0, Math.ceil(seconds));
+  const mins = Math.floor(clamped / 60);
+  const secs = clamped % 60;
+  return `${mins}:${String(secs).padStart(2, '0')}`;
+}
 
 /**
  * A readable message for a failed passkey step (the browser's "not allowed" also means the user cancelled).
@@ -31,7 +71,24 @@ export function passkeyError(err: unknown): string {
   return errorText(err);
 }
 
-interface PasskeysReply { passkeys: PasskeyInfo[]; userHandle: string | null }
+interface PasskeysReply {
+  passkeys: PasskeyInfo[];
+  userHandle: string | null;
+  pushApprovalAvailable?: boolean;
+}
+
+interface PushApprovalStartReply {
+  id: string;
+  numberMatch: number;
+  expiresAt: string;
+}
+
+interface PushApprovalStatusReply {
+  id: string;
+  status: 'pending' | 'approved' | 'denied' | 'expired';
+  approvalCode?: string;
+  expiresAt: string;
+}
 
 /**
  * Tells the browser which of the account's passkeys still work on this site, so the phone or password manager stops
@@ -139,6 +196,10 @@ interface PasskeysProps {
  */
 export function Passkeys({ askPassword, stepUpMinutes }: PasskeysProps) {
   const [list, setList] = useState<PasskeyInfo[]>([]);
+  const [pushApprovalAvailable, setPushApprovalAvailable] = useState(false);
+  const [pendingPush, setPendingPush] = useState<PushApprovalStartReply | null>(null);
+  const [pushStarting, setPushStarting] = useState(false);
+  const [pushSecondsLeft, setPushSecondsLeft] = useState(0);
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [approval, setApproval] = useState(() => sessionStorage.getItem(APPROVAL_KEY) || ''); // a code from another device
@@ -150,7 +211,16 @@ export function Passkeys({ askPassword, stepUpMinutes }: PasskeysProps) {
   const [renameError, setRenameError] = useState('');
   const [dialog, confirm] = useConfirm();
 
-  const show = (reply: PasskeysReply) => { setList(reply.passkeys); syncWithBrowser(reply); };
+  const nameRef = useRef(name);
+  nameRef.current = name;
+  const passwordRef = useRef(password);
+  passwordRef.current = password;
+
+  const show = (reply: PasskeysReply) => {
+    setList(reply.passkeys);
+    if (typeof reply.pushApprovalAvailable === 'boolean') setPushApprovalAvailable(reply.pushApprovalAvailable);
+    syncWithBrowser(reply);
+  };
   const load = () => api<PasskeysReply>('GET', '/api/me/passkeys')
     .then(show, (err) => setFeedback({ severity: 'error', text: errorText(err) }));
   useEffect(() => { load(); }, []);
@@ -162,16 +232,19 @@ export function Passkeys({ askPassword, stepUpMinutes }: PasskeysProps) {
   };
   useBackLayer(renaming !== null, closeRename);
 
-  async function add(event: FormEvent) {
-    event.preventDefault();
+  async function registerPasskey(approvalOverride?: string) {
+    const code = (approvalOverride ?? approval).trim();
     setBusy(true);
     setFeedback({ severity: 'info', text: 'Follow your browser\'s prompt…' });
     try {
-      const optionsJSON = await api<Parameters<typeof startRegistration>[0]['optionsJSON']>('POST', '/api/me/passkeys/options',
-        approval.trim() ? { approval } : { password });
+      const optionsJSON = await api<Parameters<typeof startRegistration>[0]['optionsJSON']>(
+        'POST',
+        '/api/me/passkeys/options',
+        code ? { approval: code } : { password: passwordRef.current },
+      );
       setPassword('');
       const response = await startRegistration({ optionsJSON });
-      show(await api<PasskeysReply>('POST', '/api/me/passkeys', { name: name.trim(), response }));
+      show(await api<PasskeysReply>('POST', '/api/me/passkeys', { name: nameRef.current.trim(), response }));
       setName('');
       setApproval('');
       sessionStorage.removeItem(APPROVAL_KEY);
@@ -181,6 +254,104 @@ export function Passkeys({ askPassword, stepUpMinutes }: PasskeysProps) {
     }
     setBusy(false);
   }
+
+  const registerPasskeyRef = useRef(registerPasskey);
+  registerPasskeyRef.current = registerPasskey;
+
+  async function add(event: FormEvent) {
+    event.preventDefault();
+    await registerPasskey();
+  }
+
+  async function requestPushApproval() {
+    setPushStarting(true);
+    setFeedback(null);
+    try {
+      const reply = await api<PushApprovalStartReply>('POST', '/api/me/passkey-approval-requests', {
+        deviceLabel: describeDevice(),
+      });
+      const expiresMs = Date.parse(reply.expiresAt);
+      setPushSecondsLeft(Number.isNaN(expiresMs) ? 0 : Math.max(0, Math.ceil((expiresMs - Date.now()) / 1000)));
+      setPendingPush(reply);
+    } catch (err) {
+      setFeedback({ severity: 'error', text: errorText(err) });
+    }
+    setPushStarting(false);
+  }
+
+  const cancelPushApproval = () => { setPendingPush(null); };
+
+  useEffect(() => {
+    if (!pendingPush) return;
+    let cancelled = false;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    let transientErrors = 0;
+    const expiresMs = Date.parse(pendingPush.expiresAt);
+
+    const updateCountdown = () => {
+      if (Number.isNaN(expiresMs)) return;
+      setPushSecondsLeft(Math.max(0, Math.ceil((expiresMs - Date.now()) / 1000)));
+    };
+    updateCountdown();
+    const tickTimer = setInterval(updateCountdown, 1000);
+
+    const schedulePoll = () => {
+      if (cancelled) return;
+      pollTimer = setTimeout(poll, 2000);
+    };
+
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const reply = await api<PushApprovalStatusReply>(
+          'GET',
+          `/api/me/passkey-approval-requests/${encodeURIComponent(pendingPush.id)}`,
+        );
+        if (cancelled) return;
+        transientErrors = 0;
+        if (reply.status === 'pending') {
+          schedulePoll();
+          return;
+        }
+        setPendingPush(null);
+        if (reply.status === 'approved') {
+          if (!reply.approvalCode) {
+            setFeedback({ severity: 'error', text: 'Approval succeeded, but no approval code was returned.' });
+            return;
+          }
+          setApproval(reply.approvalCode);
+          void registerPasskeyRef.current(reply.approvalCode);
+          return;
+        }
+        if (reply.status === 'denied') {
+          setFeedback({ severity: 'error', text: 'The approval request was denied on your Android phone.' });
+          return;
+        }
+        setFeedback({ severity: 'info', text: 'The approval request expired. Try again when your phone is ready.' });
+      } catch (err) {
+        if (cancelled) return;
+        if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
+          setPendingPush(null);
+          setFeedback({ severity: 'error', text: errorText(err) });
+          return;
+        }
+        transientErrors += 1;
+        if (transientErrors >= 3 || (!Number.isNaN(expiresMs) && Date.now() >= expiresMs)) {
+          setPendingPush(null);
+          setFeedback({ severity: 'error', text: `Could not check approval status: ${errorText(err)}` });
+          return;
+        }
+        schedulePoll();
+      }
+    };
+
+    schedulePoll();
+    return () => {
+      cancelled = true;
+      clearInterval(tickTimer);
+      if (pollTimer !== undefined) clearTimeout(pollTimer);
+    };
+  }, [pendingPush]);
 
   const openRename = (passkey: PasskeyInfo) => {
     setRenaming(passkey);
@@ -263,29 +434,96 @@ export function Passkeys({ askPassword, stepUpMinutes }: PasskeysProps) {
             </Stack>
           )}
           {browserSupportsWebAuthn() ? (
-            <form onSubmit={add} autoComplete="off">
-              <Stack direction="row" spacing={2} useFlexGap sx={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                <Field label="Name (e.g. iPhone, YubiKey)">
-                  <TextField size="small" value={name} slotProps={{ htmlInput: { maxLength: 40 } }} onChange={(event) => setName(event.target.value)} />
-                </Field>
-                {list.length > 0 && (
-                  <Field label="Approval code (from another device)" help="approvalCode">
-                    <TextField size="small" value={approval} placeholder="ABCD-EFGH" autoComplete="one-time-code"
-                      slotProps={{ htmlInput: { maxLength: 12 } }} onChange={(event) => setApproval(event.target.value)} />
+            <Stack spacing={2}>
+              <form onSubmit={add} autoComplete="off">
+                <Stack direction="row" spacing={2} useFlexGap sx={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                  <Field label="Name (e.g. iPhone, YubiKey)">
+                    <TextField size="small" value={name} slotProps={{ htmlInput: { maxLength: 40 } }} onChange={(event) => setName(event.target.value)} />
                   </Field>
-                )}
-                {askPassword && !approval.trim() && (
-                  <Field label="Your current password">
-                    <TextField type="password" size="small" value={password} required={!list.length}
-                      autoComplete="current-password" onChange={(event) => setPassword(event.target.value)} />
-                  </Field>
-                )}
-                <Button type="submit" variant="contained" disabled={busy}
-                  startIcon={busy ? <CircularProgress size={16} color="inherit" /> : undefined}>
-                  Add a passkey
-                </Button>
-              </Stack>
-            </form>
+                  {list.length > 0 && (
+                    <Field label="Approval code (from another device)" help="approvalCode">
+                      <TextField size="small" value={approval} placeholder="ABCD-EFGH" autoComplete="one-time-code"
+                        slotProps={{ htmlInput: { maxLength: 12 } }} onChange={(event) => setApproval(event.target.value)} />
+                    </Field>
+                  )}
+                  {askPassword && !approval.trim() && (
+                    <Field label="Your current password">
+                      <TextField type="password" size="small" value={password} required={!list.length}
+                        autoComplete="current-password" onChange={(event) => setPassword(event.target.value)} />
+                    </Field>
+                  )}
+                  <Button type="submit" variant="contained" disabled={busy || Boolean(pendingPush)}
+                    startIcon={busy ? <CircularProgress size={16} color="inherit" /> : undefined}>
+                    Add a passkey
+                  </Button>
+                </Stack>
+              </form>
+              {list.length > 0 && pushApprovalAvailable && !pendingPush && (
+                <Paper elevation={0} sx={{ p: 1.5, borderRadius: 2, bgcolor: 'action.hover' }}>
+                  <Stack direction="row" spacing={2} useFlexGap sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+                    <Stack spacing={0.25} sx={{ flex: '1 1 14rem', minWidth: 0 }}>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Approve on your Android phone</Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        Send a push notification to your Android app to approve this device without typing a code.
+                      </Typography>
+                    </Stack>
+                    <Button
+                      variant="contained"
+                      disabled={busy || pushStarting}
+                      onClick={requestPushApproval}
+                      startIcon={pushStarting ? <CircularProgress size={16} color="inherit" /> : <PhoneAndroidOutlinedIcon />}
+                      sx={{ flexShrink: 0 }}
+                    >
+                      Approve with Android app
+                    </Button>
+                  </Stack>
+                </Paper>
+              )}
+              {pendingPush && (() => {
+                const matchText = String(pendingPush.numberMatch).padStart(2, '0');
+                return (
+                  <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, borderColor: 'primary.main' }}>
+                    <Stack direction="row" spacing={2.5} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                      <Box
+                        aria-label={`Verification number ${matchText}`}
+                        sx={{
+                          minWidth: 76,
+                          px: 2,
+                          py: 1.25,
+                          borderRadius: 2,
+                          bgcolor: 'primary.main',
+                          color: 'primary.contrastText',
+                          textAlign: 'center',
+                          fontFamily: 'monospace',
+                          fontSize: '2.25rem',
+                          fontWeight: 700,
+                          lineHeight: 1,
+                          fontVariantNumeric: 'tabular-nums',
+                          letterSpacing: '0.06em',
+                          flexShrink: 0,
+                        }}
+                      >
+                        {matchText}
+                      </Box>
+                      <Stack spacing={0.75} sx={{ flex: '1 1 14rem', minWidth: 0 }}>
+                        <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                          Open the notification on your Android phone and tap {matchText}
+                        </Typography>
+                        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                          <CircularProgress size={14} />
+                          <Typography variant="body2" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                            Waiting for approval{pushSecondsLeft > 0 ? ` · Expires in ${formatCountdown(pushSecondsLeft)}` : '…'}
+                          </Typography>
+                        </Stack>
+                      </Stack>
+                      <Button variant="outlined" color="inherit" onClick={cancelPushApproval} sx={{ flexShrink: 0 }}>
+                        Cancel
+                      </Button>
+                    </Stack>
+                  </Paper>
+                );
+              })()}
+            </Stack>
           ) : (
             <Typography variant="body2" color="text.secondary">This browser doesn&apos;t support passkeys.</Typography>
           )}

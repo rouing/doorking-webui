@@ -297,7 +297,7 @@ export function SystemSettings({ phone, gapi, prefs, defaults, list, cameras, us
         <DeviceAssociation key={JSON.stringify(prefs.deviceAssociation)} prefs={prefs} gapi={gapi} onSaved={onReload} />
       </SettingsSection>
       <SettingsSection title="Cameras">
-        <CameraForm key={JSON.stringify(cameras)} settings={cameras} phone={phone} gapi={gapi} onSaved={onReload} />
+        <CameraForm key={JSON.stringify(cameras)} settings={cameras} prefs={prefs} phone={phone} gapi={gapi} onSaved={onReload} />
       </SettingsSection>
       <SettingsSection title="Danger zone">
         <DeleteGateData phone={phone} gapi={gapi} onDeleted={onSessionChange} />

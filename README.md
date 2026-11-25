@@ -4,10 +4,16 @@ Standalone React 19 + Material UI (MUI 9) + Vite 8 Progressive Web App (PWA) for
 
 ## Features
 
-- **Material 3 Expressive UI** — responsive desktop and mobile PWA layout with light/dark theme support and installable Service Worker (`vite-plugin-pwa` `injectManifest`).
-- **Resident Self-Service Portal** — Buzz Me In relay control, masked keypad code with reroll, printable welcome instructions PDF, activity history with camera clips, and change requests.
-- **Full Gate Management** — Residents & Vendors directory, bulk edits & CSV import, pre-send diff review, live relay control with auto-release timers, Access Insights, History & point-in-time pull archive rollback, Board Settings, Schedules, Cameras, Webhooks, and Scoped API Keys.
-- **Modern Auth** — local accounts, WebAuthn passkeys (with autofill & step-up confirmation), OIDC Single Sign-On, and Web Push (VAPID) notifications.
+- **Material 3 Expressive UI** — responsive desktop and mobile PWA layout with light/dark theme support, `Cmd/Ctrl+K` QuickJump search, and installable Service Worker (`vite-plugin-pwa` `injectManifest`).
+- **Resident Self-Service Portal** — Buzz Me In relay control across all openable gate relays (with per-user **Visible gate relays** synced to Android and Android Auto), masked keypad code with daily-capped reroll, printable welcome instructions PDF, activity history with camera clips and `hidePortalHoldNoise` filtering, suspicious-activity reports, and self-service change requests.
+- **Full Gate Management:**
+  - **Directory** — classic desktop `<Table>` with inline expanded `RecentTransactions` vs. borderless mobile tonal cards, Extended FAB, slide-up `ResidentForm`, and collapsible `MobileRecentTransactions` pill cards; `libphonenumber-js` NANP and international E.164 phone parsing/formatting; duplicate detection across directory codes, entry codes, and cards; bulk edits, CSV import/export, and printable resident PDFs.
+  - **Transactions & Cameras** — virtualized desktop table (`@tanstack/react-virtual`) and paged mobile `TransactionCard`s, paired `Hold Begin`/`Hold End` noise filtering around `Portal Open` events, and **Camera Channel ↔ Relay** mapping (`All relays` or specific named relays per channel).
+  - **Live Relays & Job Dock** — live relay status and timed hold-open auto-release with configured relay names, plus a log-parsed `%` progress bar (`Session Complete: Success` → `100%`) and expandable raw DKS log.
+  - **Access Insights (`Audit`)** — traffic KPIs, 24-hour activity chart, dormant credentials, unknown cards, high-frequency/off-hours entry codes, plus open Suspicious Activity reports and pending Resident Requests on both desktop and mobile.
+  - **History & Rollback** — Gate users, **Past pulls** archive (Compare/Restore) ordered above the **Events** audit log with inline Revert.
+  - **Board Settings & Schedules** — factory-default-aware 2-Line vs. 8-Line LCD detection, named relays throughout Schedules and Anti-Passback (**APB** hides sub-settings when `Off`, shows `Re-Sync List` only when `Re-Sync All Devices` is active, and groups scheduled re-sync controls into one card), floating US holidays, and outbound signed Webhooks.
+- **Modern Auth & Connected Clients** — local accounts, WebAuthn passkeys (autofill, step-up confirmation, and **Approve with Android app** 2-digit number-match push approval with 8-character code fallback), OIDC Single Sign-On, Android browser `doorking://invite` handoff, unified Web Push (VAPID) + Android FCM device management, and **Connected AI Clients** OAuth grant inspection and revocation.
 
 ## Requirements
 
@@ -44,7 +50,7 @@ Deploy `dist/` behind the **same origin** as `doorking-api` so `HttpOnly; SameSi
 
 ```caddyfile
 gate.example.com {
-  @api path /api/* /.well-known/* /download /help /privacy
+  @api path /api/* /.well-known/* /download /help /privacy /mcp* /authorize /token /register /revoke /oauth/*
   handle @api {
     reverse_proxy 127.0.0.1:8080
   }

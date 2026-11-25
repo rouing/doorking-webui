@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from '
 import { Alert, Box, IconButton, Tab, Tabs } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined';
+import SwapHorizOutlinedIcon from '@mui/icons-material/SwapHorizOutlined';
 import VideocamOutlinedIcon from '@mui/icons-material/VideocamOutlined';
 import type { GateInfo, ResidentRow, TransactionRow } from './types.ts';
 import { api, DraftActionsContext, errorText, gateApi, GateRoleContext, ReadOnlyContext, WorkingCopySavedContext, type DraftActions } from './api.ts';
@@ -156,12 +157,12 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
     schedules: () => <Schedules gapi={gapi} video={snaps.video} />,
     prefs: () => <SystemSettings phone={gate.phoneNumber} gapi={gapi} prefs={prefs} defaults={session.defaults} list={residents}
       cameras={cameras} user={session.user} emailEnabled={session.emailEnabled} onReload={loadData} onSessionChange={onChange} onJobStarted={jobStarted} />,
-    user: () => <UserSettings session={session} onSaved={onChange} />,
+    user: () => <UserSettings session={session} onSaved={onChange} onSignOut={phone ? signOut : undefined} />,
     relays: () => <RelaysPage gapi={gapi} prefs={prefs} onReload={loadData} />,
     display: () => <DisplayPage gapi={gapi} onReload={loadData} />,
-    holdOpen: () => <HoldOpenPage gapi={gapi} relays={relays} />,
+    holdOpen: () => <HoldOpenPage gapi={gapi} relays={relays} relayLabels={prefs.relayLabels || {}} />,
     holidays: () => <HolidaysPage gapi={gapi} holidays={session.holidayList || []} />,
-    security: () => <SecurityPage gapi={gapi} floors={features.floors} relays={relays} />,
+    security: () => <SecurityPage gapi={gapi} floors={features.floors} relays={relays} relayLabels={prefs.relayLabels || {}} />,
     facility: () => <FacilityPage gapi={gapi} />,
     elevator: () => <ElevatorPage gapi={gapi} />,
     relayElevator: () => <RelayElevatorPage gapi={gapi} prefs={prefs} />,
@@ -204,30 +205,37 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
           workingCopy={workingCopy}
           running={running}
           rightAction={
-            moreHub ? (
-              cameras ? (
-                <IconButton aria-label="Live camera view" onClick={() => setLiveCamSignal((n) => n + 1)} sx={{ color: 'text.primary' }}>
-                  <VideocamOutlinedIcon />
+            <Box sx={{ display: 'flex', alignItems: 'center' }}>
+              {moreHub ? (
+                cameras ? (
+                  <IconButton aria-label="Live camera view" onClick={() => setLiveCamSignal((n) => n + 1)} sx={{ color: 'text.primary' }}>
+                    <VideocamOutlinedIcon />
+                  </IconButton>
+                ) : null
+              ) : !isPhoneSubPage && (nav === 'residents' || nav === 'vendors') ? (
+                <IconButton
+                  aria-label={nav === 'vendors' ? 'Export vendors CSV' : 'Export residents CSV'}
+                  disabled={!residents}
+                  onClick={() => setDirExportSignal((n) => n + 1)}
+                  sx={{ color: 'text.primary' }}
+                >
+                  <DownloadOutlinedIcon />
                 </IconButton>
-              ) : undefined
-            ) : !isPhoneSubPage && (nav === 'residents' || nav === 'vendors') ? (
-              <IconButton
-                aria-label={nav === 'vendors' ? 'Export vendors CSV' : 'Export residents CSV'}
-                disabled={!residents}
-                onClick={() => setDirExportSignal((n) => n + 1)}
-                sx={{ color: 'text.primary' }}
-              >
-                <DownloadOutlinedIcon />
-              </IconButton>
-            ) : !isPhoneSubPage && nav === 'transactions' ? (
-              <IconButton
-                aria-label="Export CSV or download cameras"
-                onClick={() => setTxExportOpen(true)}
-                sx={{ color: 'text.primary' }}
-              >
-                <DownloadOutlinedIcon />
-              </IconButton>
-            ) : undefined
+              ) : !isPhoneSubPage && nav === 'transactions' ? (
+                <IconButton
+                  aria-label="Export CSV or download cameras"
+                  onClick={() => setTxExportOpen(true)}
+                  sx={{ color: 'text.primary' }}
+                >
+                  <DownloadOutlinedIcon />
+                </IconButton>
+              ) : null}
+              {hasPortalUnit && onOpenPortal && (
+                <IconButton aria-label="Switch to resident portal" onClick={onOpenPortal} sx={{ color: 'text.primary' }}>
+                  <SwapHorizOutlinedIcon />
+                </IconButton>
+              )}
+            </Box>
           }
           onOpenGate={openGateSheet}
         />
@@ -277,16 +285,10 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
           <PhoneMorePage
             gate={gate}
             user={session.user}
-            dark={session.dark}
-            onSelectDark={(nextDark) => {
-              if (nextDark === session.dark) return;
-              void api('PUT', '/api/me', { dark: nextDark }).then(onChange).catch((err) => setError(errorText(err)));
-            }}
             onGo={go}
             onOpenSearch={() => setQuickJump(true)}
             onAllGates={allGates}
             onOpenPortal={hasPortalUnit ? onOpenPortal : undefined}
-            onSignOut={signOut}
           />
         ) : (
           <GateRoleContext.Provider value={gate.role}>

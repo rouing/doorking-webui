@@ -3,7 +3,7 @@
  *
  * The signed-in user's own settings page.
  */
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import {
   Alert, Button, Card, CardContent, Chip, CircularProgress, FormControlLabel, Stack, Switch,
   TextField, Typography,
@@ -42,10 +42,45 @@ export function UserSettings({ session, onSaved, resident = false, onSignOut }: 
   const [phone, setPhone] = useState(fmtIntlPhone(session.phone));
   const [appearanceError, setAppearanceError] = useState('');
   const [notifyError, setNotifyError] = useState('');
+  const [relayError, setRelayError] = useState('');
+  const [portalRelays, setPortalRelays] = useState<Array<{ phone: string; siteName: string; relays: Array<{ relay: number; name: string; hidden: boolean }> }>>([]);
+  const [hiddenRelays, setHiddenRelays] = useState<Record<string, number[]>>({});
   const [emailFeedback, setEmailFeedback] = useState<{ severity: 'success' | 'error' | 'warning'; text: string } | null>(null);
   const [phoneFeedback, setPhoneFeedback] = useState<{ severity: 'success' | 'error'; text: string } | null>(null);
   const [savingEmail, setSavingEmail] = useState(false);
   const [savingPhone, setSavingPhone] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    void api<{
+      hiddenRelays?: Record<string, number[]>;
+      portalRelays?: Array<{ phone: string; siteName: string; relays: Array<{ relay: number; name: string; hidden: boolean }> }>;
+    }>('GET', '/api/me').then((me) => {
+      if (!alive) return;
+      setHiddenRelays(me.hiddenRelays || {});
+      setPortalRelays(me.portalRelays || []);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [session.user]);
+
+  const toggleRelayVisibility = async (gatePhone: string, relay: number, visible: boolean) => {
+    setRelayError('');
+    const nextMap: Record<string, number[]> = { ...hiddenRelays };
+    const set = new Set(nextMap[gatePhone] || []);
+    if (visible) set.delete(relay); else set.add(relay);
+    if (set.size) nextMap[gatePhone] = [...set].sort((a, b) => a - b);
+    else delete nextMap[gatePhone];
+    setHiddenRelays(nextMap);
+    setPortalRelays((prev) => prev.map((g) => (
+      g.phone !== gatePhone ? g : { ...g, relays: g.relays.map((r) => (r.relay === relay ? { ...r, hidden: !visible } : r)) }
+    )));
+    try {
+      await api('PUT', '/api/me', { hiddenRelays: nextMap });
+      onSaved();
+    } catch (err) {
+      setRelayError(`Not saved: ${errorText(err)}`);
+    }
+  };
 
   const toggleSetting = async (body: Record<string, unknown>, setErr: (msg: string) => void) => {
     setErr('');
@@ -150,6 +185,40 @@ export function UserSettings({ session, onSaved, resident = false, onSignOut }: 
           </Stack>
         </CardContent>
       </Card>
+
+      {portalRelays.length > 0 && (
+        <Card>
+          <CardContent>
+            <Stack spacing={1.5}>
+              <Typography variant="h6" component="h2">Visible gate relays</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Choose which gate open buttons appear in Resident View, the Android app, and Android Auto.
+              </Typography>
+              {portalRelays.map((group) => (
+                <Stack key={group.phone} spacing={0.5}>
+                  {portalRelays.length > 1 && (
+                    <Typography variant="subtitle2" color="text.secondary">{group.siteName || group.phone}</Typography>
+                  )}
+                  {group.relays.map((opt) => (
+                    <FormControlLabel
+                      key={opt.relay}
+                      control={
+                        <Switch
+                          size="small"
+                          checked={!opt.hidden}
+                          onChange={(_, checked) => toggleRelayVisibility(group.phone, opt.relay, checked)}
+                        />
+                      }
+                      label={opt.name || `Relay ${opt.relay}`}
+                    />
+                  ))}
+                </Stack>
+              ))}
+              {relayError && <Alert severity="error" role="alert">{relayError}</Alert>}
+            </Stack>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardContent>

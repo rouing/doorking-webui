@@ -8,8 +8,6 @@
 import type { ReactNode } from 'react';
 import {
   Box,
-  Button,
-  ButtonBase,
   Card,
   CardContent,
   Chip,
@@ -26,7 +24,6 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import FenceOutlinedIcon from '@mui/icons-material/FenceOutlined';
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
 import LockOpenOutlinedIcon from '@mui/icons-material/LockOpenOutlined';
-import LogoutOutlinedIcon from '@mui/icons-material/LogoutOutlined';
 import PersonOutlinedIcon from '@mui/icons-material/PersonOutlined';
 import ScheduleOutlinedIcon from '@mui/icons-material/ScheduleOutlined';
 import SearchOutlinedIcon from '@mui/icons-material/SearchOutlined';
@@ -39,13 +36,10 @@ import type { NavKey } from './pages.ts';
 interface PhoneMorePageProps {
   gate: GateInfo;
   user: string;
-  dark: boolean;
-  onSelectDark: (dark: boolean) => void;
   onGo: (page: NavKey) => void;
   onOpenSearch: () => void;
   onAllGates: () => void;
   onOpenPortal?: () => void;
-  onSignOut: () => void;
 }
 
 interface MoreItemProps {
@@ -85,13 +79,10 @@ const ROLE_LABELS: Record<string, string> = {
 export function PhoneMorePage({
   gate,
   user,
-  dark,
-  onSelectDark,
   onGo,
   onOpenSearch,
   onAllGates,
   onOpenPortal,
-  onSignOut,
 }: PhoneMorePageProps) {
   const roleLabel = ROLE_LABELS[gate.role] || gate.role;
 
@@ -151,7 +142,7 @@ export function PhoneMorePage({
           <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 600, mb: 1.5 }}>
             Gate &amp; Account
           </Typography>
-          <Box sx={{ bgcolor: 'var(--md-surface-lowest)', borderRadius: '12px', overflow: 'hidden', mb: 1.5 }}>
+          <Box sx={{ bgcolor: 'var(--md-surface-lowest)', borderRadius: '12px', overflow: 'hidden' }}>
             <List disablePadding>
               <MoreRow
                 title="Live Relays"
@@ -193,50 +184,6 @@ export function PhoneMorePage({
               />
             </List>
           </Box>
-          <Box
-            sx={{
-              display: 'flex',
-              gap: '4px',
-              p: '4px',
-              borderRadius: '999px',
-              bgcolor: 'var(--md-surface-highest)',
-              mb: 1.5,
-            }}
-          >
-            {([['Light', false], ['Dark', true]] as const).map(([label, isDark]) => {
-              const selected = dark === isDark;
-              return (
-                <ButtonBase
-                  key={label}
-                  type="button"
-                  onClick={() => onSelectDark(isDark)}
-                  aria-pressed={selected}
-                  sx={{
-                    flex: 1,
-                    py: 1.25,
-                    borderRadius: '999px',
-                    fontSize: '0.875rem',
-                    fontWeight: selected ? 600 : 500,
-                    bgcolor: selected ? 'var(--md-primary-container)' : 'transparent',
-                    color: selected ? 'var(--md-on-primary-container)' : 'text.secondary',
-                    transition: 'background-color 140ms ease, color 140ms ease',
-                  }}
-                >
-                  {label}
-                </ButtonBase>
-              );
-            })}
-          </Box>
-          <Button
-            variant="contained"
-            color="error"
-            fullWidth
-            startIcon={<LogoutOutlinedIcon />}
-            onClick={onSignOut}
-            sx={{ minHeight: 40, borderRadius: '999px', boxShadow: 'none', '&:hover': { boxShadow: 'none' } }}
-          >
-            Sign out
-          </Button>
         </CardContent>
       </Card>
     </Stack>

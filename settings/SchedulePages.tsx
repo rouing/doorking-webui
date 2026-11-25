@@ -42,7 +42,11 @@ const holdOpenClear = (shown: number[]) => (setting: GateSettingRow) => {
 interface HoldOpenPageProps {
   gapi: GateApi;
   relays: number[];
+  relayLabels?: Record<string, string | undefined>;
 }
+
+const relayName = (relayLabels: Record<string, string | undefined> | undefined, relay: number) =>
+  relayLabels?.[String(relay)]?.trim() || `Relay ${relay}`;
 
 /**
  * Hold Open: begin/end times and days per row (7 rows + Holiday), and which relays each row holds open. The relay
@@ -51,9 +55,10 @@ interface HoldOpenPageProps {
  * @param props - Component props.
  * @param props.gapi - Gate-scoped API fetch helper.
  * @param props.relays - Relays.
+ * @param [props.relayLabels] - Configured relay labels.
  * @returns Rendered React element.
  */
-export function HoldOpenPage({ gapi, relays: shown }: HoldOpenPageProps) {
+export function HoldOpenPage({ gapi, relays: shown, relayLabels }: HoldOpenPageProps) {
   const settings = useGateSettings(gapi);
   const field = (label: string, part: string) => settings.field(`holdOpen${label}${part}`);
   const relays = shown.map((relay) => field('Relay', String(relay)));
@@ -112,7 +117,7 @@ export function HoldOpenPage({ gapi, relays: shown }: HoldOpenPageProps) {
                   {relays.map((relay, i) => relay && (
                     <MobileFilterChip
                       key={i}
-                      label={`R${shown[i]}`}
+                      label={relayName(relayLabels, shown[i])}
                       selected={settings.current(relay)[rowIndex] === '1'}
                       showCheck
                       onClick={() => settings.edit(relay, setBit(settings.current(relay), rowIndex, settings.current(relay)[rowIndex] !== '1'))}
@@ -236,6 +241,7 @@ interface SecurityPageProps {
   gapi: GateApi;
   floors: boolean;
   relays: number[];
+  relayLabels?: Record<string, string | undefined>;
 }
 
 /**
@@ -247,9 +253,10 @@ interface SecurityPageProps {
  * @param props.gapi - Gate-scoped API fetch helper.
  * @param props.floors - Floors.
  * @param props.relays - Relays.
+ * @param [props.relayLabels] - Configured relay labels.
  * @returns Rendered React element.
  */
-export function SecurityPage({ gapi, floors: showFloors, relays: shown }: SecurityPageProps) {
+export function SecurityPage({ gapi, floors: showFloors, relays: shown, relayLabels }: SecurityPageProps) {
   const settings = useGateSettings(gapi);
   const hol = settings.field(HOL_FOR_SL)?.value === 'Yes';
   const levels = [...new Set(settings.fields.filter((setting) => setting.group === 'Security').map((setting) => Number(/^sec(\d+)tz/.exec(setting.key)![1])))].sort((a, b) => a - b);
@@ -338,7 +345,7 @@ export function SecurityPage({ gapi, floors: showFloors, relays: shown }: Securi
                   {shown.map((relay) => (
                     <MobileFilterChip
                       key={relay}
-                      label={`R${relay}`}
+                      label={relayName(relayLabels, relay)}
                       selected={curRelays[relay] === '1'}
                       showCheck
                       onClick={() => settings.edit(relays, setBit(curRelays, relay, curRelays[relay] !== '1'))}

@@ -29,7 +29,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import type { GatePrefs, LoginAuditEntry, ResidentPortalPrefs } from '../types.ts';
 import { DEFAULT_RESIDENT_PORTAL_PREFS } from '../lib/shared.ts';
 import { errorText, type GateApi } from '../api.ts';
-import { fmtTime } from '../format.ts';
+import { fmtTime, trackerOf, trackerRelays } from '../format.ts';
 import { Field } from '../panes/fields.tsx';
 
 interface ResidentPortalSettingsCardProps {
@@ -47,6 +47,8 @@ export function ResidentPortalSettingsCard({ prefs, gapi, onSaved }: ResidentPor
   const [info, setInfo] = useState('');
   const [error, setError] = useState('');
   const labels = prefs.relayLabels || {};
+  const tracker = trackerOf(prefs);
+  const openableRelays = trackerRelays(tracker).filter((r) => !(r === 2 && tracker.tracker2) && !(r === 1 && tracker.tracker1));
 
   const parsedPulse = pulseText.trim() === '' ? NaN : Number(pulseText);
   const pulseInvalid = cfg.enabled && cfg.buzzEnabled && (!Number.isInteger(parsedPulse) || parsedPulse < 2 || parsedPulse > 15);
@@ -139,8 +141,8 @@ export function ResidentPortalSettingsCard({ prefs, gapi, onSaved }: ResidentPor
                 {cfg.buzzEnabled && (
                   <Stack direction="row" spacing={3} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap', pl: 3 }}>
                     <Stack direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-                      <Typography variant="body2" color="text.secondary">Entrances:</Typography>
-                      {[0, 1, 2].map((r) => (
+                      <Typography variant="body2" color="text.secondary">Relays for residents (admins always see all):</Typography>
+                      {openableRelays.map((r) => (
                         <FormControlLabel
                           key={r}
                           sx={{ mr: 0 }}

@@ -1,10 +1,7 @@
 import type { ReactNode } from 'react';
 import {
   Chip,
-  FormControlLabel,
   Paper,
-  Radio,
-  RadioGroup,
   Stack,
   Switch,
   TableBody,
@@ -114,38 +111,48 @@ interface ResyncProps {
  * @returns Rendered React element.
  */
 function Resync({ settings, all, list }: ResyncProps) {
+  const enabled = settings.current(all) === 'Yes';
   const cur = settings.current(list);
-  const mode = cur !== '' ? 'list' : settings.current(all) === 'Yes' ? 'all' : 'none';
   const slots = (cur || ',,,,').split(',');
-  const setMode = (nextMode: string) => {
-    settings.edit(all, nextMode === 'all' ? 'Yes' : 'No');
-    settings.edit(list, nextMode === 'list' ? (cur || ',,,,') : '');
-  };
   return (
-    <Stack spacing={1}>
-      <RadioGroup row value={mode} aria-label="Re-Sync mode" onChange={(_, val) => setMode(val)} sx={{ flexWrap: 'wrap' }}>
-        <FormControlLabel value="none" control={<Radio size="small" />} label="None" />
-        <FormControlLabel value="all" control={<Radio size="small" />} label="Re-Sync All Devices" />
-        <FormControlLabel value="list" control={<Radio size="small" />} label="Enable Re-Sync List" />
-      </RadioGroup>
-      <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
-        {Array.from({ length: 5 }, (_, i) => (
-          <TextField
-            key={i}
-            size="small"
-            type="number"
-            disabled={mode !== 'list'}
-            value={slots[i] ?? ''}
-            slotProps={{ htmlInput: { min: 1, max: 65535, 'aria-label': `Re-Sync device ${i + 1}` } }}
-            sx={{ width: '9ch', '& .MuiInputBase-input': { py: 0.5, px: 1, fontSize: '0.85rem' } }}
-            onChange={(event) => {
-              const next = Array.from({ length: 5 }, (__, j) => slots[j] ?? '');
-              next[i] = event.target.value.trim();
-              settings.edit(list, next.join(','));
-            }}
-          />
-        ))}
+    <Stack spacing={1.25}>
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+        <Typography variant="body2" color="text.secondary">
+          Clear in/out state on all devices (optional: restrict to up to 5 specific device IDs below)
+        </Typography>
+        <Switch
+          size="small"
+          checked={enabled}
+          slotProps={{ input: { 'aria-label': 'Re-Sync All Devices' } }}
+          onChange={(_, on) => {
+            settings.edit(all, on ? 'Yes' : 'No');
+            if (!on && cur) settings.edit(list, '');
+          }}
+        />
       </Stack>
+      {enabled && (
+        <Stack spacing={0.75}>
+          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500 }}>Re-Sync List (optional device IDs)</Typography>
+          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
+            {Array.from({ length: 5 }, (_, i) => (
+              <TextField
+                key={i}
+                size="small"
+                type="number"
+                value={slots[i] ?? ''}
+                slotProps={{ htmlInput: { min: 1, max: 65535, 'aria-label': `Re-Sync device ${i + 1}` } }}
+                sx={{ width: '9ch', '& .MuiInputBase-input': { py: 0.5, px: 1, fontSize: '0.85rem' } }}
+                onChange={(event) => {
+                  const next = Array.from({ length: 5 }, (__, j) => slots[j] ?? '');
+                  next[i] = event.target.value.trim();
+                  const joined = next.some(Boolean) ? next.join(',') : '';
+                  settings.edit(list, joined);
+                }}
+              />
+            ))}
+          </Stack>
+        </Stack>
+      )}
     </Stack>
   );
 }
@@ -170,16 +177,23 @@ export function ApbPage({ gapi, relayLabels, relays: shown }: ApbPageProps) {
   const settings = useGateSettings(gapi);
   const phone = usePhone();
   const field = (key: string) => settings.field(key);
-  const name = (relay: number) => (relayLabels[relay] && relayLabels[relay] !== `Relay ${relay}` ? relayLabels[relay]! : String(relay));
-  const rows: [string, (GateSettingRow | undefined)[], (fs: GateSettingRow[]) => ReactNode, boolean?][] = [
-    ['True Anti Passback', [field('apbMode')], ([setting]) => (
+  const name = (relay: number) => relayLabels[relay]?.trim() || `Relay ${relay}`;
+  const modeField = field('apbMode');
+  const apbOn = Boolean(modeField && settings.current(modeField) !== 'Off');
+  const schedEnabledField = field('apbScheduleEnabled');
+  const schedTimeField = field('apbScheduleTime');
+  const schedDaysField = field('apbScheduleDays');
+  const schedOn = Boolean(schedEnabledField && settings.current(schedEnabledField) === 'Yes');
+
+  const allRows: [string, (GateSettingRow | undefined)[], (fs: GateSettingRow[]) => ReactNode, boolean?, boolean?][] = [
+    ['True Anti Passback', [modeField], ([setting]) => (
       <GateChoice value={settings.current(setting)} ariaLabel="True Anti Passback" options={['Off', 'Passive', 'Active', 'Trap']} onChange={(value) => settings.edit(setting, value)} />
-    ), true],
-    ['Relays In', [field('apbRelaysIn')], ([setting]) => <RelayPicks settings={settings} setting={setting} name={name} shown={shown} />],
-    ['Relays Out', [field('apbRelaysOut')], ([setting]) => <RelayPicks settings={settings} setting={setting} name={name} shown={shown} />],
+    ), true, true],
+    ['Relays In', [field('apbRelaysIn')], ([setting]) => <RelayPicks settings={settings} setting={setting} name={name} shown={shown} />, false, apbOn],
+    ['Relays Out', [field('apbRelaysOut')], ([setting]) => <RelayPicks settings={settings} setting={setting} name={name} shown={shown} />, false, apbOn],
     ['Record Facility Counter Every', [field('apbCounterEvery')], ([setting]) => (
       <GateChoice value={settings.current(setting)} ariaLabel="Record Facility Counter Every" options={['Off', '15 Mins', '30 Mins', 'Hour']} onChange={(value) => settings.edit(setting, value)} />
-    ), true],
+    ), true, apbOn],
     ['Reset Facility Counter to', [field('apbCounterReset')], ([setting]) => (
       <TextField
         size="small"
@@ -189,27 +203,35 @@ export function ApbPage({ gapi, relayLabels, relays: shown }: ApbPageProps) {
         sx={{ width: '10ch', '& .MuiInputBase-input': { py: 0.5, px: 1, fontSize: '0.85rem' } }}
         onChange={(event) => settings.edit(setting, event.target.value.trim())}
       />
-    ), true],
-    ['Re-Sync', [field('apbResyncAll'), field('apbResyncList')], ([a, setting]) => <Resync settings={settings} all={a} list={setting} />],
-    ['Enable Scheduled Re-Sync All', [field('apbScheduleEnabled')], ([setting]) => (
-      <Switch
-        size="small"
-        checked={settings.current(setting) === 'Yes'}
-        slotProps={{ input: { 'aria-label': 'Enable Scheduled Re-Sync All' } }}
-        onChange={(_, on) => settings.edit(setting, on ? 'Yes' : 'No')}
-      />
-    ), true],
-    ['Scheduled Re-Sync All days', [field('apbScheduleDays')], ([setting]) => (
-      <WeekdayRow
-        bits={settings.current(setting)}
-        labelPrefix="Re-Sync"
-        onToggle={(i, on) => settings.edit(setting, setBit(settings.current(setting), i, on))}
-      />
-    )],
-    ['Scheduled Re-Sync All time', [field('apbScheduleTime')], ([setting]) => (
-      <TimeBox value={settings.current(setting)} ariaLabel="Scheduled Re-Sync All time" onChange={(value) => settings.edit(setting, value)} />
-    ), true],
+    ), true, apbOn],
+    ['Re-Sync', [field('apbResyncAll'), field('apbResyncList')], ([a, setting]) => <Resync settings={settings} all={a} list={setting} />, false, apbOn],
+    ['Enable Scheduled Re-Sync All', [schedEnabledField, schedTimeField, schedDaysField], ([en, tm, dy]) => (
+      <Stack spacing={1.25}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+          <Typography variant="body2" color="text.secondary">
+            Automatically re-sync all devices on a recurring schedule
+          </Typography>
+          <Switch
+            size="small"
+            checked={settings.current(en) === 'Yes'}
+            slotProps={{ input: { 'aria-label': 'Enable Scheduled Re-Sync All' } }}
+            onChange={(_, on) => settings.edit(en, on ? 'Yes' : 'No')}
+          />
+        </Stack>
+        {schedOn && (
+          <Stack spacing={1.25}>
+            <TimeBox label="Re-Sync time" fullWidth value={settings.current(tm)} ariaLabel="Scheduled Re-Sync All time" onChange={(value) => settings.edit(tm, value)} />
+            <WeekdayRow
+              bits={settings.current(dy)}
+              labelPrefix="Re-Sync"
+              onToggle={(i, on) => settings.edit(dy, setBit(settings.current(dy), i, on))}
+            />
+          </Stack>
+        )}
+      </Stack>
+    ), false, apbOn],
   ];
+  const rows = allRows.filter(([, , , , visible]) => visible);
   const intro = 'Set the anti-pass back mode, In/Out relays (up to 10 each), facility counter, one-time re-sync functions and the scheduled Re-Sync All. Anti-pass back applies only to cards in security levels 02–27; levels 01, 28, 29 and 30 are never limited by it. Clear sets every setting on this page back to unset. Edits go to the working copy (blue = unsaved, green = saved but not sent to the gate).';
   if (phone) {
     return (

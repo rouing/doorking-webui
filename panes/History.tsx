@@ -175,6 +175,44 @@ export function History({ gapi, onReverted }: HistoryProps) {
         </AccordionDetails>
       </Accordion>
 
+      {pulls.length > 0 && (
+        <Accordion disableGutters elevation={0} sx={{ border: 'none', borderRadius: '16px !important', bgcolor: 'var(--md-surface-high)' }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap', pr: 1 }}>
+              <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 500 }}>Past pulls ({pulls.length})</Typography>
+            </Stack>
+          </AccordionSummary>
+          <AccordionDetails sx={{ pt: 0 }}>
+            <Stack spacing={1.25}>
+              {!phone && (
+                <Typography variant="body2" color="text.secondary">
+                  Up to 50 distinct residents pulls are archived per gate. Compare any past pull against your current working
+                  copy, or restore it to the working copy (nothing touches the gate until Send to gate).
+                </Typography>
+              )}
+              <Stack spacing={1}>
+                {pulls.map((pull) => (
+                  <Paper key={pull.id} elevation={0} sx={{ p: 1.5, borderRadius: '12px', bgcolor: 'var(--md-surface-lowest)' }}>
+                    <Stack direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+                      <Stack direction="row" spacing={0.75} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                        <Chip size="small" label={fmtTime(pull.pulledAt)} />
+                        <Chip size="small" label={pull.actor} />
+                        <Chip size="small" label={`${pull.residentsCount} entries`} />
+                        <Chip size="small" label={`${pull.cardsCount} cards`} />
+                      </Stack>
+                      <Stack direction="row" spacing={1} sx={{ flexShrink: 0, ml: 'auto' }}>
+                        <Button size="small" variant="outlined" color="inherit" onClick={() => previewPull(pull)}>Compare</Button>
+                        {!readOnly && <Button size="small" variant="outlined" onClick={() => restorePull(pull)}>Restore</Button>}
+                      </Stack>
+                    </Stack>
+                  </Paper>
+                ))}
+              </Stack>
+            </Stack>
+          </AccordionDetails>
+        </Accordion>
+      )}
+
       <Card elevation={0} sx={phone ? { border: 'none', bgcolor: 'transparent', boxShadow: 'none' } : undefined}>
         <CardContent sx={phone ? { p: 0, '&:last-child': { pb: 0 } } : undefined}>
           <Stack spacing={phone ? 1.25 : 1.5}>
@@ -297,44 +335,6 @@ export function History({ gapi, onReverted }: HistoryProps) {
           </Stack>
         </CardContent>
       </Card>
-
-      {pulls.length > 0 && (
-        <Accordion disableGutters elevation={0} sx={{ border: 'none', borderRadius: '16px !important', bgcolor: 'var(--md-surface-high)' }}>
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap', pr: 1 }}>
-              <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 500 }}>Past pulls ({pulls.length})</Typography>
-            </Stack>
-          </AccordionSummary>
-          <AccordionDetails sx={{ pt: 0 }}>
-            <Stack spacing={1.25}>
-              {!phone && (
-                <Typography variant="body2" color="text.secondary">
-                  Up to 50 distinct residents pulls are archived per gate. Compare any past pull against your current working
-                  copy, or restore it to the working copy (nothing touches the gate until Send to gate).
-                </Typography>
-              )}
-              <Stack spacing={1}>
-                {pulls.map((pull) => (
-                  <Paper key={pull.id} elevation={0} sx={{ p: 1.5, borderRadius: '12px', bgcolor: 'var(--md-surface-lowest)' }}>
-                    <Stack direction="row" spacing={1.5} useFlexGap sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
-                      <Stack direction="row" spacing={0.75} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-                        <Chip size="small" label={fmtTime(pull.pulledAt)} />
-                        <Chip size="small" label={pull.actor} />
-                        <Chip size="small" label={`${pull.residentsCount} entries`} />
-                        <Chip size="small" label={`${pull.cardsCount} cards`} />
-                      </Stack>
-                      <Stack direction="row" spacing={1} sx={{ flexShrink: 0, ml: 'auto' }}>
-                        <Button size="small" variant="outlined" color="inherit" onClick={() => previewPull(pull)}>Compare</Button>
-                        {!readOnly && <Button size="small" variant="outlined" onClick={() => restorePull(pull)}>Restore</Button>}
-                      </Stack>
-                    </Stack>
-                  </Paper>
-                ))}
-              </Stack>
-            </Stack>
-          </AccordionDetails>
-        </Accordion>
-      )}
 
       <Dialog open={diffView !== null} onClose={() => setDiffView(null)} maxWidth="md" fullWidth>
         <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>

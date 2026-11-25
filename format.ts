@@ -4,6 +4,8 @@
  * Display helpers shared by the tables.
  */
 import type { GateFeatures, GatePrefs, GateTracker, ResidentRow, TransactionRow } from './types.ts';
+import { fmtIntlPhone, fmtPhone, formatPhoneDigits } from './lib/shared.ts';
+export { fmtIntlPhone, formatPhoneDigits };
 import { NO_FOOTAGE_EVENTS } from './lib/shared.ts';
 
 export { doorKingCsv, downloadCsv, downloadText } from './csv.ts';
@@ -60,20 +62,8 @@ export function phoneFull(resident: ResidentRow): string {
   const local = (resident.phone || '').replace(/\D/g, '');
   if (!local) return '';
   const full = (resident.areaCode || '') + local;
-  return full.length === 10 || full.length === 11 ? formatPhoneDigits(full)
-    : local.length === 7 ? `${local.slice(0, 3)}-${local.slice(3)}` : full;
+  return fmtPhone(full);
 }
-
-/**
- * Partial phone digits as typed: up to 7 as 555-1234, 8-10 as (918) 555-0142, 11 as 1 (918) 555-0142.
- *
- * @param digits - Target directory code digit count (1–4).
- * @returns Computed result.
- */
-export const formatPhoneDigits = (digits: string) => (digits.length <= 7
-  ? (digits.length > 3 ? `${digits.slice(0, 3)}-${digits.slice(3)}` : digits)
-  : digits.length === 11 ? `${digits[0]} (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`
-    : `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`);
 
 /**
  * The gate's Tracker switches; Tracker 1/2 count only while Tracker is on.
@@ -167,12 +157,6 @@ export function residentFinder(rows: ResidentRow[]): (transaction: TransactionRo
     return by[transaction.lookup].get(transaction.lookup === 'card' ? Number(transaction.number) : transaction.number) || null;
   };
 }
-
-/** An account phone number (E.164) for display: `+1 (214) 555-0100` for US/Canada, else as stored. */
-export const fmtIntlPhone = (e164: string) => {
-  const match = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(e164 || '');
-  return match ? `+1 (${match[1]}) ${match[2]}-${match[3]}` : e164 || '';
-};
 
 export const fmtTime = (time: string | number | undefined | null) => (time ? new Date(time).toLocaleString('en-US') : '');
 

@@ -23,6 +23,7 @@
     "@mui/material": "^9.5.0",
     "@simplewebauthn/browser": "^14.0.0",
     "@tanstack/react-virtual": "^3.14.26",
+    "libphonenumber-js": "^1.13.17",
     "papaparse": "^5.7.1",
     "qrcode": "^1.5.4",
     "react": "^19.3.1",

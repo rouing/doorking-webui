@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { doorKingCsv } from '../csv.ts';
-import { hidePortalHoldNoise } from '../format.ts';
-import { generateSafeEntryCode, isWeakEntryCode } from '../lib/shared.ts';
+import { fmtIntlPhone, formatPhoneDigits, hidePortalHoldNoise, phoneFull } from '../format.ts';
+import { fmtPhone, generateSafeEntryCode, isWeakEntryCode, parseNanpPhone } from '../lib/shared.ts';
 import type { ResidentRow, TransactionRow } from '../types.ts';
 
 function sampleResident(overrides: Partial<ResidentRow> = {}): ResidentRow {
@@ -69,4 +69,20 @@ test('hidePortalHoldNoise hides paired Hold Begin/End for Portal Open and keeps 
   assert.equal(out[0].eventType, 'Portal Open');
   assert.equal(out[1].raw, 'h3');
   assert.equal(out[2].raw, 'h4');
+});
+
+test('libphonenumber-js phone parsing & formatting covers NANP, local 7-digit, and international E.164', () => {
+  assert.deepEqual(parseNanpPhone('(214) 555-0100'), { areaCode: '214', phone: '5550100' });
+  assert.deepEqual(parseNanpPhone('+1 214 555 0100', { keepLeadingOne: true }), { areaCode: '1214', phone: '5550100' });
+  assert.deepEqual(parseNanpPhone('555-0100'), { areaCode: '', phone: '5550100' });
+  assert.equal(parseNanpPhone('12345'), null);
+
+  assert.equal(fmtPhone('2145550100'), '(214) 555-0100');
+  assert.equal(fmtPhone('12145550100'), '1 (214) 555-0100');
+  assert.equal(fmtPhone('5550100'), '555-0100');
+  assert.equal(phoneFull(sampleResident({ areaCode: '214', phone: '5550100' })), '(214) 555-0100');
+  assert.equal(formatPhoneDigits('2145550100'), '(214) 555-0100');
+
+  assert.equal(fmtIntlPhone('+12145550100'), '+1 (214) 555-0100');
+  assert.equal(fmtIntlPhone('+442079460958'), '+44 20 7946 0958');
 });

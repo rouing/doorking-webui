@@ -4,7 +4,7 @@
  * Mobile-first Resident Self-Service Portal & "Buzz Me In" PWA shell rendered when a signed-in user opens a gate
  * with `role === 'resident'`. Delegates state/polling to `usePortalData` and renders focused tab components.
  */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Alert, AppBar, BottomNavigation, BottomNavigationAction, Box, Button, Container, Paper, Stack, Toolbar, Typography,
 } from '@mui/material';
@@ -33,6 +33,7 @@ interface ResidentPortalProps {
 }
 
 type PortalTab = 'gate' | 'activity' | 'requests' | 'account';
+const MAX_TAB_HISTORY = 15;
 
 function installTipForBrowser(): string {
   if (typeof window === 'undefined' || typeof navigator === 'undefined') return '';
@@ -47,6 +48,10 @@ function installTipForBrowser(): string {
 
 export function ResidentPortal({ session, gate, onChange, onSessionReload, onBackToStaff }: ResidentPortalProps) {
   const [tab, setTab] = useState<PortalTab>('gate');
+  const [tabHistory, setTabHistory] = useState<PortalTab[]>([]);
+  const tabRef = useRef<PortalTab>(tab);
+  const tabHistoryRef = useRef<PortalTab[]>(tabHistory);
+  tabRef.current = tab;
   const [selectedCode, setSelectedCode] = useState('');
   const [copied, setCopied] = useState('');
   const [buzzingRelay, setBuzzingRelay] = useState<number | null>(null);
@@ -59,7 +64,35 @@ export function ResidentPortal({ session, gate, onChange, onSessionReload, onBac
   const [installTip, setInstallTip] = useState(() => (lsGet('dk-hide-install-tip', false) ? '' : installTipForBrowser()));
   const [dialog, confirm] = useConfirm();
 
-  useBackLayer(tab !== 'gate', () => setTab('gate'));
+  const goTab = (next: PortalTab) => {
+    const prev = tabRef.current;
+    if (prev === next) return;
+    const history = tabHistoryRef.current;
+    const nextHistory = history[history.length - 1] === prev
+      ? history
+      : [...history, prev].slice(-MAX_TAB_HISTORY);
+    tabHistoryRef.current = nextHistory;
+    tabRef.current = next;
+    setTabHistory(nextHistory);
+    setTab(next);
+    window.scrollTo(0, 0);
+  };
+
+  const goBackTab = (): boolean => {
+    const history = tabHistoryRef.current;
+    if (history.length === 0) return false;
+    const target = history[history.length - 1];
+    const nextHistory = history.slice(0, -1);
+    tabHistoryRef.current = nextHistory;
+    tabRef.current = target;
+    setTabHistory(nextHistory);
+    setTab(target);
+    window.scrollTo(0, 0);
+    return nextHistory.length > 0;
+  };
+
+  useBackLayer(Boolean(onBackToStaff), () => onBackToStaff?.());
+  useBackLayer(tabHistory.length > 0, goBackTab);
 
   const data = usePortalData({
     gatePhone: gate.phoneNumber,
@@ -318,7 +351,7 @@ export function ResidentPortal({ session, gate, onChange, onSessionReload, onBac
           borderColor: 'divider',
         }}
       >
-        <BottomNavigation showLabels value={tab} onChange={(_, value: PortalTab) => setTab(value)}>
+        <BottomNavigation showLabels value={tab} onChange={(_, value: PortalTab) => goTab(value)}>
           <BottomNavigationAction label="Gate" value="gate" icon={<DoorFrontIcon />} />
           <BottomNavigationAction label="Activity" value="activity" icon={<HistoryIcon />} />
           <BottomNavigationAction label="Requests" value="requests" icon={<EditNoteIcon />} />

@@ -3,7 +3,7 @@
  *
  * Display helpers shared by the tables.
  */
-import type { GateFeatures, GatePrefs, GateTracker, ResidentRow, TransactionRow } from './types.ts';
+import type { GateFeatures, GatePrefs, GateTracker, Job, ResidentRow, TransactionRow } from './types.ts';
 import { fmtIntlPhone, fmtPhone, formatPhoneDigits } from './lib/shared.ts';
 export { fmtIntlPhone, formatPhoneDigits };
 import { NO_FOOTAGE_EVENTS } from './lib/shared.ts';
@@ -159,6 +159,15 @@ export function residentFinder(rows: ResidentRow[]): (transaction: TransactionRo
 }
 
 export const fmtTime = (time: string | number | undefined | null) => (time ? new Date(time).toLocaleString('en-US') : '');
+
+/** Concise status pill label for a gate connection job (never overflows compact mobile/sidebar chips). */
+export function jobLabel(job: Job | null): string {
+  if (!job || job.state === 'idle') return '';
+  if (job.state === 'running') return 'Running';
+  if (job.state === 'done') return 'Done';
+  if (job.state === 'failed') return 'Failed';
+  return '';
+}
 
 const PORTAL_HOLD_MATCH_WINDOW_MS = 90_000;
 

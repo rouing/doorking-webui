@@ -407,23 +407,22 @@ export function GateSheet({
             </Typography>
           )}
 
-          {!readOnly && draft && (
+          {!readOnly && draft && draft.unsaved > 0 && (
             <>
               <Button
                 variant="contained"
                 color="success"
                 fullWidth
-                disabled={!draft.unsaved || Boolean(draft.blocked)}
+                disabled={Boolean(draft.blocked)}
                 onClick={closeThen(() => { void draft.save(); })}
                 sx={sheetBtnSx}
               >
-                Save to working copy{draft.unsaved ? ` (${draft.unsaved})` : ''}
+                Save to working copy ({draft.unsaved})
               </Button>
               <Button
                 variant="contained"
                 color="error"
                 fullWidth
-                disabled={!draft.unsaved}
                 onClick={closeThen(draft.discard)}
                 sx={sheetBtnSx}
               >

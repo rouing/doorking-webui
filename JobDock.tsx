@@ -6,12 +6,11 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 import RemoveIcon from '@mui/icons-material/Remove';
 import type { Job } from './types.ts';
+export { jobLabel } from './format.ts';
 
 export type DockState = 'closed' | 'min' | 'open';
 
 export const JOB_COLORS = { idle: 'default', running: 'primary', done: 'success', failed: 'error' } as const;
-
-export const jobLabel = (job: Job | null) => (!job || job.state === 'idle' ? '' : `${job.what}: ${job.state}`);
 
 const LOG_PERCENT_RE = /(\d{1,3})\s*%/;
 const LOG_TS_PREFIX_RE = /^\s*\d{1,2}:\d{2}:\d{2}\s*(?:AM|PM)?\s+/i;

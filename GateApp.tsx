@@ -38,6 +38,12 @@ import type { SignedIn } from './App.tsx';
 
 const EDIT_PAGES: NavKey[] = ['display', 'relays', 'holdOpen', 'holidays', 'security', 'facility', 'elevator', 'relayElevator', 'apb', 'schedules'];
 const ADMIN_ONLY_PAGES: NavKey[] = ['schedules'];
+const MAX_NAV_HISTORY = 25;
+
+interface NavEntry {
+  nav: NavKey;
+  moreHub: boolean;
+}
 
 const PULL_WARNING = {
   residents: 'This reads the gate\'s current data. Changes you haven\'t sent stay on top of it; anything changed both at the gate and here is listed for you to decide.',
@@ -53,8 +59,8 @@ interface GateAppProps {
 
 /**
  * The open gate: sidebar navigation and gate connection, and the page for the chosen item. On phones the sidebar is a
- * bottom tab bar (Residents, Vendors, Transactions, Gate: the connection sheet, More: the drawer with every other page). Back
- * closes the sheet or drawer, then goes from another page to Residents, then back to the gate list. Read-only users see
+ * bottom tab bar (Residents, Vendors, Transactions, Gate: the connection sheet, More: the hub with every other page). Back
+ * closes the sheet or dock, then steps back through previously visited pages, then returns to the gate list. Read-only users see
  * every page but can't change anything (they can pull and use the cameras).
  *
  * @param props - Component props.
@@ -76,6 +82,12 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
   loadSnaps.current = snaps.load;
   const [dock, setDock] = useState<DockState>('closed');
   const [moreHub, setMoreHub] = useState(false); // full-page "More" hub on phones (replaces sidebar drawer)
+  const [navHistory, setNavHistory] = useState<NavEntry[]>([]);
+  const navRef = useRef<NavKey>(nav);
+  const moreHubRef = useRef<boolean>(moreHub);
+  const navHistoryRef = useRef<NavEntry[]>(navHistory);
+  navRef.current = nav;
+  moreHubRef.current = moreHub;
   const [gateSheet, setGateSheet] = useState(false); // the Gate tab's sheet (phones)
   const [dirExportSignal, setDirExportSignal] = useState(0);
   const [txExportOpen, setTxExportOpen] = useState(false);
@@ -121,19 +133,77 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
     try { await api('PUT', '/api/session/gate', { phoneNumber: to.phoneNumber }); onChange(); } catch (err) { setError(errorText(err)); }
   };
   const signOut = async () => { await api('DELETE', '/api/session').catch(() => {}); onChange(); };
+  const pushHistory = (prevNav: NavKey, prevMoreHub: boolean) => {
+    const prev = navHistoryRef.current;
+    const last = prev[prev.length - 1];
+    if (last && last.nav === prevNav && last.moreHub === prevMoreHub) return;
+    const next = [...prev, { nav: prevNav, moreHub: prevMoreHub }].slice(-MAX_NAV_HISTORY);
+    navHistoryRef.current = next;
+    setNavHistory(next);
+  };
   /**
    * A new page starts at its top (a resident opened from Transactions scrolls itself into view instead).
    *
    * @param key - Lookup key, API key, or setting key.
    */
-  const go = (key: NavKey) => { setNav(key); setHighlight(null); setMoreHub(false); setGateSheet(false); window.scrollTo(0, 0); };
-  const openMoreHub = () => { setGateSheet(false); setMoreHub(true); window.scrollTo(0, 0); };
-  const isPhoneSubPage = phone && !moreHub && !TAB_PAGES.includes(nav);
+  const go = (key: NavKey) => {
+    if (navRef.current !== key || moreHubRef.current) pushHistory(navRef.current, moreHubRef.current);
+    navRef.current = key;
+    moreHubRef.current = false;
+    setNav(key);
+    setHighlight(null);
+    setMoreHub(false);
+    setGateSheet(false);
+    window.scrollTo(0, 0);
+  };
+  const openMoreHub = () => {
+    if (!moreHubRef.current) pushHistory(navRef.current, moreHubRef.current);
+    moreHubRef.current = true;
+    setGateSheet(false);
+    setMoreHub(true);
+    window.scrollTo(0, 0);
+  };
+  const isSubPage = (key: NavKey, hub: boolean) => phone && !hub && !TAB_PAGES.includes(key);
+  const isPhoneSubPage = isSubPage(nav, moreHub);
+  const goBack = (): boolean => {
+    const prev = navHistoryRef.current;
+    if (prev.length > 0) {
+      const target = prev[prev.length - 1];
+      const next = prev.slice(0, -1);
+      navHistoryRef.current = next;
+      navRef.current = target.nav;
+      moreHubRef.current = target.moreHub;
+      setNavHistory(next);
+      setNav(target.nav);
+      setMoreHub(target.moreHub);
+      setHighlight(null);
+      setGateSheet(false);
+      window.scrollTo(0, 0);
+      return next.length > 0 || isSubPage(target.nav, target.moreHub);
+    }
+    if (isSubPage(navRef.current, moreHubRef.current)) {
+      moreHubRef.current = true;
+      setGateSheet(false);
+      setMoreHub(true);
+      setHighlight(null);
+      window.scrollTo(0, 0);
+    }
+    return false;
+  };
   useBackLayer(true, allGates);
-  useBackLayer(nav !== 'residents' || moreHub, () => (isPhoneSubPage ? openMoreHub() : go('residents')));
+  useBackLayer(navHistory.length > 0 || isPhoneSubPage, goBack);
   useBackLayer(gateSheet, () => setGateSheet(false));
   useBackLayer(dock === 'open', () => setDock('min'));
-  const openResident = (resident: ResidentRow) => { setNav(resident.type === 'Vendor' ? 'vendors' : 'residents'); setHighlight(resident.directoryCode); };
+  const openResident = (resident: ResidentRow) => {
+    const targetNav: NavKey = resident.type === 'Vendor' ? 'vendors' : 'residents';
+    if (navRef.current !== targetNav || moreHubRef.current) pushHistory(navRef.current, moreHubRef.current);
+    navRef.current = targetNav;
+    moreHubRef.current = false;
+    setNav(targetNav);
+    setMoreHub(false);
+    setGateSheet(false);
+    setHighlight(resident.directoryCode);
+  };
   const running = job?.state === 'running';
   const features = featuresOf(prefs);
   const relays = trackerRelays(trackerOf(prefs));
@@ -201,7 +271,7 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
         <PhoneTopBar
           gateName={gateLabel(gate)}
           pageTitle={isPhoneSubPage ? PAGE_TITLES[nav] : undefined}
-          onBack={isPhoneSubPage ? openMoreHub : undefined}
+          onBack={isPhoneSubPage ? goBack : undefined}
           workingCopy={workingCopy}
           running={running}
           rightAction={

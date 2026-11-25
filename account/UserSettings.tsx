@@ -10,7 +10,7 @@ import {
 } from '@mui/material';
 import LogoutIcon from '@mui/icons-material/Logout';
 import { api, errorText } from '../api.ts';
-import { fmtIntlPhone } from '../format.ts';
+import { fmtIntlPhone, fmtTime } from '../format.ts';
 import type { SignedIn } from '../App.tsx';
 import { Field } from '../panes/fields.tsx';
 import { Passkeys } from './Passkeys.tsx';
@@ -43,6 +43,17 @@ export function UserSettings({ session, onSaved, resident = false, onSignOut }: 
   const [appearanceError, setAppearanceError] = useState('');
   const [notifyError, setNotifyError] = useState('');
   const [relayError, setRelayError] = useState('');
+  const [aiError, setAiError] = useState('');
+  const [aiBusyId, setAiBusyId] = useState('');
+  const [aiClients, setAiClients] = useState<Array<{
+    id: string;
+    clientName: string;
+    scopes: string[];
+    allowActivity: boolean;
+    createdAt: string;
+    lastSeen: string;
+    relaySummary: Array<{ phone: string; siteName: string; relays: Array<{ relay: number; name: string }> }>;
+  }>>([]);
   const [portalRelays, setPortalRelays] = useState<Array<{ phone: string; siteName: string; relays: Array<{ relay: number; name: string; hidden: boolean }> }>>([]);
   const [hiddenRelays, setHiddenRelays] = useState<Record<string, number[]>>({});
   const [emailFeedback, setEmailFeedback] = useState<{ severity: 'success' | 'error' | 'warning'; text: string } | null>(null);
@@ -60,8 +71,24 @@ export function UserSettings({ session, onSaved, resident = false, onSignOut }: 
       setHiddenRelays(me.hiddenRelays || {});
       setPortalRelays(me.portalRelays || []);
     }).catch(() => {});
+    void api<{ clients?: typeof aiClients }>('GET', '/api/me/ai-clients').then((reply) => {
+      if (alive) setAiClients(reply.clients || []);
+    }).catch(() => {});
     return () => { alive = false; };
   }, [session.user]);
+
+  const revokeAiClient = async (id: string) => {
+    setAiBusyId(id);
+    setAiError('');
+    try {
+      const reply = await api<{ clients?: typeof aiClients }>('DELETE', `/api/me/ai-clients/${encodeURIComponent(id)}`);
+      setAiClients(reply.clients || []);
+    } catch (err) {
+      setAiError(`Could not revoke: ${errorText(err)}`);
+    } finally {
+      setAiBusyId('');
+    }
+  };
 
   const toggleRelayVisibility = async (gatePhone: string, relay: number, visible: boolean) => {
     setRelayError('');
@@ -339,6 +366,66 @@ export function UserSettings({ session, onSaved, resident = false, onSignOut }: 
       <PushNotificationsCard />
       {!resident && <SingleSignOn session={session} />}
       <Passkeys askPassword={session.hasPassword} stepUpMinutes={session.stepUpMinutes} />
+
+      <Card>
+        <CardContent>
+          <Stack spacing={1.5}>
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+              <Typography variant="h6" component="h2">Connected AI Clients</Typography>
+              {aiClients.length > 0 && <Chip size="small" color="primary" label={`${aiClients.length}`} />}
+            </Stack>
+            <Typography variant="body2" color="text.secondary">
+              AI assistants (such as Gemini or Claude) authorized via MCP OAuth to access your DoorKing account. Revoking immediately ends that client&apos;s access.
+            </Typography>
+            {aiError && <Alert severity="error" role="alert">{aiError}</Alert>}
+            {aiClients.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">No connected AI clients.</Typography>
+            ) : (
+              <Stack spacing={1}>
+                {aiClients.map((client) => (
+                  <Stack
+                    key={client.id}
+                    direction={{ xs: 'column', sm: 'row' }}
+                    spacing={1.25}
+                    sx={{
+                      p: 1.5,
+                      borderRadius: '12px',
+                      bgcolor: 'var(--md-surface-lowest)',
+                      alignItems: { sm: 'center' },
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <Stack spacing={0.5} sx={{ minWidth: 0 }}>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>{client.clientName}</Typography>
+                      <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: 'wrap' }}>
+                        {client.relaySummary.flatMap((g) => g.relays.map((r) => (
+                          <Chip key={`${g.phone}-${r.relay}`} size="small" color="primary" label={client.relaySummary.length > 1 ? `${g.siteName}: ${r.name}` : r.name} />
+                        )))}
+                        {client.allowActivity && <Chip size="small" label="Recent activity" />}
+                        {client.scopes.includes('doorking:stage') && <Chip size="small" color="warning" label="Staging & relays" />}
+                        {client.relaySummary.length === 0 && !client.scopes.includes('doorking:stage') && <Chip size="small" label="Read-only" />}
+                      </Stack>
+                      <Typography variant="caption" color="text.secondary">
+                        Connected {fmtTime(client.createdAt)} · Last used {fmtTime(client.lastSeen)}
+                      </Typography>
+                    </Stack>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      color="error"
+                      disabled={aiBusyId === client.id}
+                      onClick={() => revokeAiClient(client.id)}
+                      sx={{ alignSelf: { xs: 'flex-start', sm: 'center' }, flexShrink: 0 }}
+                    >
+                      {aiBusyId === client.id ? 'Revoking…' : 'Revoke'}
+                    </Button>
+                  </Stack>
+                ))}
+              </Stack>
+            )}
+          </Stack>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardContent>

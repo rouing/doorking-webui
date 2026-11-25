@@ -118,15 +118,6 @@ function HolidaysForSecurity({ settings }: HolidaysForSecurityProps) {
   if (!field) return null;
   const row = rowState(settings, [field], { pendingText: 'Not sent' });
   const cur = settings.current(field) === 'Yes';
-  const dirty = field.key in settings.edits;
-  const pending = field.value !== field.gate;
-  const pill = dirty
-    ? { label: 'Unsaved', color: 'primary' as const }
-    : pending
-      ? { label: 'Not sent', color: 'success' as const }
-      : cur
-        ? { label: 'Enabled', color: 'success' as const }
-        : { label: 'Disabled', color: 'default' as const };
   const toggle = async (on: boolean) => {
     if (on && !await confirm({ title: 'Enable Holidays for Security Levels?', action: 'Enable',
       body: 'Time zone 4 (TZ4) of every security level becomes the Holiday schedule (HOL), and it overrides the other time zones of the level on holidays. Nothing is sent to the gate until you Send.' })) return;
@@ -156,7 +147,6 @@ function HolidaysForSecurity({ settings }: HolidaysForSecurityProps) {
 
 interface HolidaysPageProps {
   gapi: GateApi;
-  holidays: Holiday[];
 }
 
 /**

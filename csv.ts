@@ -6,13 +6,21 @@
 import Papa from 'papaparse';
 import type { ResidentRow } from './types.ts';
 
+/** Triggers a browser file download from a Blob, deferring URL revocation for Safari/iOS compatibility. */
+export function downloadBlob(name: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 /** Triggers a browser file download from plain text. */
 export function downloadText(name: string, text: string, type = 'text/csv') {
-  const link = document.createElement('a');
-  link.href = URL.createObjectURL(new Blob([text], { type }));
-  link.download = name;
-  link.click();
-  URL.revokeObjectURL(link.href);
+  downloadBlob(name, new Blob([text], { type }));
 }
 
 /** Downloads rows as an RFC 4180 CSV file via `papaparse`. */

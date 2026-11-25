@@ -37,7 +37,7 @@ interface PortalGateTabProps {
   copied: string;
   onSelectUnit: (code: string) => void;
   onBuzz: (relay: number, relayName: string) => void;
-  onReroll: () => void;
+  onReroll: () => Promise<boolean>;
   onDownloadPdf: () => void;
   onCopy: (label: string, text: string) => void;
 }
@@ -196,7 +196,9 @@ export function PortalGateTab({
                   fullWidth
                   startIcon={rerolling ? <CircularProgress size={16} color="inherit" /> : <KeyIcon />}
                   disabled={offline || rerolling || me.reroll.remainingToday <= 0}
-                  onClick={() => { setShowCode(true); onReroll(); }}
+                  onClick={async () => {
+                    if (await onReroll()) setShowCode(true);
+                  }}
                 >
                   Get a new gate code ({me.reroll.remainingToday}/{me.reroll.maxPerDay} left today)
                 </Button>

@@ -94,7 +94,8 @@ interface ShownRows {
  * @returns Paging state and Show More controls.
  */
 export function useShownRows(total: number, reset: unknown, stepOverride?: number): ShownRows {
-  const step = stepOverride ?? (usePhone() ? PHONE_ROWS : PAGE_ROWS);
+  const isPhone = usePhone();
+  const step = stepOverride ?? (isPhone ? PHONE_ROWS : PAGE_ROWS);
   const [pages, setPages] = useState(1);
   useEffect(() => { setPages(1); }, [reset]);
   const limit = step * pages;

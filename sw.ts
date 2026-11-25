@@ -10,6 +10,7 @@ import { NavigationRoute, registerRoute } from 'workbox-routing';
 interface SwClient {
   url: string;
   focus(): Promise<SwClient>;
+  navigate?(url: string): Promise<SwClient | null>;
 }
 
 interface SwRegistration {
@@ -78,11 +79,13 @@ sw.addEventListener('push', (event) => {
 
 sw.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const target = new URL(event.notification.data?.url || '/', sw.location.origin).href;
+  const parsed = new URL(event.notification.data?.url || '/', sw.location.origin);
+  const target = parsed.origin === sw.location.origin ? parsed.href : new URL('/', sw.location.origin).href;
   event.waitUntil((async () => {
     const windows = await sw.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const win of windows) {
       if (win.url.startsWith(sw.location.origin)) {
+        if (win.navigate && win.url !== target) await win.navigate(target).catch(() => {});
         await win.focus();
         return;
       }

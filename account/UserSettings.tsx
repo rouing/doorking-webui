@@ -65,6 +65,8 @@ export function UserSettings({ session, onSaved, resident = false, onSignOut }: 
 
   const toggleRelayVisibility = async (gatePhone: string, relay: number, visible: boolean) => {
     setRelayError('');
+    const prevHidden = hiddenRelays;
+    const prevPortal = portalRelays;
     const nextMap: Record<string, number[]> = { ...hiddenRelays };
     const set = new Set(nextMap[gatePhone] || []);
     if (visible) set.delete(relay); else set.add(relay);
@@ -78,6 +80,8 @@ export function UserSettings({ session, onSaved, resident = false, onSignOut }: 
       await api('PUT', '/api/me', { hiddenRelays: nextMap });
       onSaved();
     } catch (err) {
+      setHiddenRelays(prevHidden);
+      setPortalRelays(prevPortal);
       setRelayError(`Not saved: ${errorText(err)}`);
     }
   };

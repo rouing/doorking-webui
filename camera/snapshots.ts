@@ -20,59 +20,35 @@ import { frameJobs, posterFile } from '../lib/shared.ts';
  */
 export const isVideo = (file: string) => file.endsWith('.mp4');
 export const posterOf = posterFile;
-/**
- * File channel.
- *
- * @param file - File path or filename.
- * @returns Computed result.
- */
-export const fileChannel = (file: string) => Number(/^ch(\d+)/.exec(file)![1]);
-/**
- * Fmt minute.
- *
- * @param minute - Transaction minute key (`YYYYMMDD-HHMM`).
- * @returns Computed result.
- */
+export const fileChannel = (file: string) => {
+  const match = /^ch(\d+)/.exec(file);
+  return match ? Number(match[1]) : 0;
+};
+
 export const fmtMinute = (minute: string) => `${minute.slice(0, 4)}-${minute.slice(4, 6)}-${minute.slice(6, 8)} ${minute.slice(9, 11)}:${minute.slice(11)}`;
 
-/**
- * Frame caption.
- *
- * @param file - File path or filename.
- * @returns Operation result.
- */
 export function frameCaption(file: string) {
   if (isVideo(file)) return '2-minute video';
-  const [, after, seconds] = /-(a?)(\d+)\.jpg$/.exec(file)!;
+  const match = /-(a?)(\d+)\.jpg$/.exec(file);
+  if (!match) return file;
+  const [, after, seconds] = match;
   return `+${Number(seconds)} s${after ? ' after the minute' : ''}`;
 }
 
-/**
- * Gate time (H:MM:SS) of frame f of minute, taken `shift` seconds off its planned time.
- *
- * @param minute - Transaction minute key (`YYYYMMDD-HHMM`).
- * @param file - File path or filename.
- * @param shift - `number` value.
- * @returns Operation result.
- */
 export function shiftedTime(minute: string, file: string, shift: number) {
-  const [, year, month, day, hour, minuteOfHour] = /^(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)$/.exec(minute)!.map(Number);
-  const [, after, seconds] = /-(a?)(\d+)\.jpg$/.exec(file)!;
+  const minMatch = /^(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)$/.exec(minute);
+  const fileMatch = /-(a?)(\d+)\.jpg$/.exec(file);
+  if (!minMatch || !fileMatch) return '';
+  const [, year, month, day, hour, minuteOfHour] = minMatch.map(Number);
+  const [, after, seconds] = fileMatch;
   return new Date(year, month - 1, day, hour, minuteOfHour, (after ? 60 : 0) + Number(seconds) + shift)
     .toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
 }
 
-/**
- * Every frame of a minute: the camera settings' frames (or videos) plus any other saved file. A minute saved only
- * in the other mode shows just its saved files; in video mode a minute with a saved video shows only its videos.
- *
- * @param settings - Settings map or configuration.
- * @param snapshot - `SnapshotMinute` value.
- * @returns `string[]` result.
- */
 export function snapFiles(settings: CameraSettings | null, snapshot: SnapshotMinute): string[] {
   const video = Boolean(settings && settings.mode === 'video');
-  let saved = snapshot.files;
+  const videoPosters = new Set(snapshot.files.filter(isVideo).map(posterFile));
+  let saved = snapshot.files.filter((file) => !videoPosters.has(file));
   if (video && saved.some(isVideo)) saved = saved.filter(isVideo);
   let want = settings ? frameJobs(settings).map((job) => job.file) : [];
   if (saved.length && !saved.some((file) => isVideo(file) === video)) want = [];

@@ -14,6 +14,7 @@ import HistoryIcon from '@mui/icons-material/History';
 import PersonIcon from '@mui/icons-material/Person';
 import type { GateInfo, ResidentRequest, TransactionRow } from '../types.ts';
 import { api, errorText, lsGet, lsSet } from '../api.ts';
+import { downloadBlob } from '../csv.ts';
 import { useBackLayer } from '../back.ts';
 import { useConfirm } from '../Confirm.tsx';
 import { UserSettings } from '../account/UserSettings.tsx';
@@ -95,8 +96,8 @@ export function ResidentPortal({ session, gate, onChange, onSessionReload, onBac
     }
   };
 
-  const rerollCode = async () => {
-    if (!data.me || data.offline) return;
+  const rerollCode = async (): Promise<boolean> => {
+    if (!data.me || data.offline) return false;
     if (!await confirm({
       title: 'Get a new 4-digit gate code?',
       action: 'Get a new gate code',
@@ -105,7 +106,7 @@ export function ResidentPortal({ session, gate, onChange, onSessionReload, onBac
         + (data.me.reroll.nextScheduledSend
           ? ` Changes are scheduled to sync to the gate at ${new Date(data.me.reroll.nextScheduledSend).toLocaleString()}, or sooner if management sends manually.`
           : ' Management will be notified to send your new code to the gate.'),
-    })) return;
+    })) return false;
     setRerolling(true);
     setNotice('');
     setError('');
@@ -121,8 +122,10 @@ export function ResidentPortal({ session, gate, onChange, onSessionReload, onBac
         setNotice('New gate code saved. Management has been notified to send it to the gate.');
       }
       await Promise.all([data.loadMe(), data.loadStatus()]);
+      return true;
     } catch (err) {
       setError(errorText(err));
+      return false;
     } finally {
       setRerolling(false);
     }
@@ -140,14 +143,7 @@ export function ResidentPortal({ session, gate, onChange, onSessionReload, onBac
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({ error: `HTTP ${res.status}` })) as { error?: string }).error || `HTTP ${res.status}`);
       const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `ResidentInstructions-${data.me.unit.directoryCode}.pdf`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      downloadBlob(`ResidentInstructions-${data.me.unit.directoryCode}.pdf`, blob);
     } catch (err) {
       setError(`PDF download failed: ${errorText(err)}`);
     } finally {

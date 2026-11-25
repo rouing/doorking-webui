@@ -130,6 +130,8 @@ export function Audit({ gapi, residents, transactions, onOpenResident, onOpenSna
   const maxHour = audit ? Math.max(1, ...audit.traffic.byHour) : 1;
 
   if (phone) {
+    const openReports = reports.filter((r) => r.status === 'open');
+    const pendingRequests = requests.filter((r) => r.status === 'pending');
     const mobileTabs: readonly { key: 'dormant' | 'unknown' | 'codes'; label: string }[] = [
       { key: 'dormant', label: `Dormant (${audit?.dormant.length ?? 0})` },
       { key: 'unknown', label: `Unknown (${audit?.unknownCards.length ?? 0})` },
@@ -167,6 +169,80 @@ export function Audit({ gapi, residents, transactions, onOpenResident, onOpenSna
 
         {error && <Alert severity="error">{error}</Alert>}
         {partialWarning && <Alert severity="warning">{partialWarning}</Alert>}
+
+        {openReports.length > 0 && (
+          <Paper elevation={0} sx={{ p: 2, borderRadius: '16px', bgcolor: 'var(--md-surface-high)' }}>
+            <Stack spacing={1.25}>
+              <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Suspicious Activity</Typography>
+                <Chip size="small" color="error" label={`${openReports.length} open`} />
+              </Stack>
+              {openReports.map((rep) => (
+                <Paper key={rep.id} elevation={0} sx={{ p: 1.5, borderRadius: '12px', bgcolor: 'var(--md-surface-lowest)' }}>
+                  <Stack spacing={0.75}>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                      Unit {rep.directoryCode}{rep.residentName ? ` · ${rep.residentName}` : ''}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">{rep.txSummary}</Typography>
+                    {rep.note && <Typography variant="caption">{rep.note}</Typography>}
+                    {isAdmin && (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => resolveReport(rep.id)}
+                        sx={{ alignSelf: 'flex-start' }}
+                      >
+                        Mark resolved
+                      </Button>
+                    )}
+                  </Stack>
+                </Paper>
+              ))}
+            </Stack>
+          </Paper>
+        )}
+
+        {pendingRequests.length > 0 && (
+          <Paper elevation={0} sx={{ p: 2, borderRadius: '16px', bgcolor: 'var(--md-surface-high)' }}>
+            <Stack spacing={1.25}>
+              <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Resident Requests</Typography>
+                <Chip size="small" color="warning" label={`${pendingRequests.length} pending`} />
+              </Stack>
+              {pendingRequests.map((req) => (
+                <Paper key={req.id} elevation={0} sx={{ p: 1.5, borderRadius: '12px', bgcolor: 'var(--md-surface-lowest)' }}>
+                  <Stack spacing={0.75}>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                      Unit {req.directoryCode}{req.residentName ? ` · ${req.residentName}` : ''} · {req.kind}
+                    </Typography>
+                    {req.note && <Typography variant="caption" color="text.secondary">{req.note}</Typography>}
+                    {!readOnly && (
+                      <Stack direction="row" spacing={1}>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          color="inherit"
+                          onClick={() => reviewRequest(req.id, 'rejected')}
+                          sx={{ flex: 1 }}
+                        >
+                          Reject
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="contained"
+                          onClick={() => reviewRequest(req.id, 'approved')}
+                          sx={{ flex: 1 }}
+                        >
+                          Approve
+                        </Button>
+                      </Stack>
+                    )}
+                  </Stack>
+                </Paper>
+              ))}
+            </Stack>
+          </Paper>
+        )}
 
         {audit && (
           <>

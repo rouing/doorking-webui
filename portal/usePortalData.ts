@@ -79,17 +79,23 @@ export function usePortalData({
     }
   }, [gatePhone, cacheKey, codeQuery, onSelectCode, onError]);
 
+  const handlePortalError = useCallback((err: unknown) => {
+    if (!(err instanceof ApiError) && typeof navigator !== 'undefined' && !navigator.onLine) {
+      setOffline(true);
+    } else {
+      onError(errorText(err));
+    }
+  }, [onError]);
+
   const loadStatus = useCallback(async () => {
     try {
       const reply = await api<PortalStatusReply>('GET', portalUrl(gatePhone, '/status'));
       setStatus(reply);
       setOffline(false);
     } catch (err) {
-      if (!(err instanceof ApiError) && typeof navigator !== 'undefined' && !navigator.onLine) {
-        setOffline(true);
-      }
+      handlePortalError(err);
     }
-  }, [gatePhone]);
+  }, [gatePhone, handlePortalError]);
 
   const loadActivity = useCallback(async () => {
     setLoadingActivity(true);
@@ -98,15 +104,11 @@ export function usePortalData({
       setActivity(act);
       setOffline(false);
     } catch (err) {
-      if (!(err instanceof ApiError) && typeof navigator !== 'undefined' && !navigator.onLine) {
-        setOffline(true);
-      } else {
-        onError(errorText(err));
-      }
+      handlePortalError(err);
     } finally {
       setLoadingActivity(false);
     }
-  }, [gatePhone, codeQuery, onError]);
+  }, [gatePhone, codeQuery, handlePortalError]);
 
   const loadRequests = useCallback(async () => {
     setLoadingRequests(true);
@@ -115,29 +117,34 @@ export function usePortalData({
       setRequests(reply.requests);
       setOffline(false);
     } catch (err) {
-      if (!(err instanceof ApiError) && typeof navigator !== 'undefined' && !navigator.onLine) {
-        setOffline(true);
-      } else {
-        onError(errorText(err));
-      }
+      handlePortalError(err);
     } finally {
       setLoadingRequests(false);
     }
-  }, [gatePhone, onError]);
+  }, [gatePhone, handlePortalError]);
 
   useEffect(() => {
+    if (selectedCode && meRef.current?.unit.directoryCode === selectedCode) return;
     void loadMe();
+  }, [loadMe, selectedCode]);
+
+  useEffect(() => {
     void loadStatus();
-  }, [loadMe, loadStatus]);
+  }, [loadStatus]);
 
   useEffect(() => {
     const onOnline = () => { setOffline(false); void loadMe(); void loadStatus(); };
     const onOffline = () => setOffline(true);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible' && navigator.onLine) void loadStatus();
+    };
     window.addEventListener('online', onOnline);
     window.addEventListener('offline', onOffline);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [loadMe, loadStatus]);
 
@@ -149,11 +156,12 @@ export function usePortalData({
   useEffect(() => {
     const needsFastPoll = Boolean((status && (!status.available || status.cooldownSeconds > 0)) || fastPollRequested);
     const id = window.setInterval(() => {
+      if (offline || (typeof document !== 'undefined' && document.hidden)) return;
       void loadStatus();
       if (status && !status.available) void loadMe();
     }, needsFastPoll ? 2000 : 15000);
     return () => window.clearInterval(id);
-  }, [status, fastPollRequested, loadStatus, loadMe]);
+  }, [offline, status, fastPollRequested, loadStatus, loadMe]);
 
   return {
     me, loadingMe, offline, status, activity, loadingActivity, requests, loadingRequests,

@@ -59,11 +59,11 @@ gate.example.com {
 
 ### Docker
 
-A multi-stage `Dockerfile` (Node build → Nginx static server) is included, and container images are published via GitHub Actions to GHCR:
+A multi-stage `Dockerfile` (Node build → Caddy static server listening on port `8080`) is included, and container images are published via GitHub Actions to GHCR:
 
 ```bash
 docker build -t doorking-webui .
-docker run -p 8080:80 doorking-webui
+docker run -p 8080:8080 doorking-webui
 ```
 
 ## Regenerating API Types

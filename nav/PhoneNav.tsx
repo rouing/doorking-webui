@@ -516,24 +516,3 @@ export function GateSheet({
     </>
   );
 }
-
-interface PhoneMenuProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  children: ReactNode;
-}
-
-export function PhoneMenu({ open, onOpenChange, children }: PhoneMenuProps) {
-  return (
-    <Drawer
-      anchor="left"
-      open={open}
-      onClose={() => onOpenChange(false)}
-      slotProps={{ paper: { sx: { width: 'min(280px, 85vw)', display: 'flex', flexDirection: 'column' } } }}
-    >
-      <Box component="nav" aria-label="Menu" sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        {children}
-      </Box>
-    </Drawer>
-  );
-}

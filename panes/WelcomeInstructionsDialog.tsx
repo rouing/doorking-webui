@@ -23,6 +23,7 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import { buildWelcomeMessage } from '../lib/shared.ts';
 import { errorText, gateUrl, useReadOnly } from '../api.ts';
+import { downloadBlob } from '../csv.ts';
 import { useBackLayer } from '../back.ts';
 import { Field } from './fields.tsx';
 
@@ -127,14 +128,7 @@ export function WelcomeInstructionsDialog({
       const disposition = res.headers.get('Content-Disposition') || '';
       const match = /filename="([^"]+)"/.exec(disposition);
       const filename = match ? match[1] : 'ResidentInstructions.pdf';
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      downloadBlob(filename, blob);
       if (shouldSave && onAdminPhoneSaved) await onAdminPhoneSaved();
       setInfo(`Downloaded ${filename}.`);
     } catch (err) {

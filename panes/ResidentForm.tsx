@@ -431,7 +431,7 @@ export function ResidentForm({
             name: name.trim(),
             directoryCode: (resident ? resident.directoryCode : code).trim(),
             entryCode: entryCode.trim(),
-            hidden: !(name.trim() && phone.replace(/\D/g, '')),
+            hidden: !(name.trim() && phone.replace(/\D/g, '')) || hidden,
             cards: cards.map((card) => card.trim()).filter(Boolean),
           }}
           defaultAdminPhone={adminPhone}

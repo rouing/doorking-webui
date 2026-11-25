@@ -12,6 +12,7 @@ import { Login } from './Login.tsx';
 import { Gates } from './Gates.tsx';
 import { GateApp } from './GateApp.tsx';
 import { ResidentPortal } from './portal/ResidentPortal.tsx';
+import { clearPortalCache } from './portal/usePortalData.ts';
 import { UpdateNotice } from './UpdateNotice.tsx';
 
 export type SignedIn = Extract<SessionReply, { loggedIn: true }>;
@@ -75,6 +76,7 @@ export function App() {
     try {
       const reply = await api<SessionReply>('GET', '/api/session');
       if (reply.loggedIn) lsSet('dk-theme', reply.dark);
+      else clearPortalCache();
       setSession(reply);
       setError('');
     } catch (err) { setError(errorText(err)); }

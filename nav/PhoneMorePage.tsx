@@ -31,6 +31,7 @@ import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import SwapHorizOutlinedIcon from '@mui/icons-material/SwapHorizOutlined';
 import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined';
 import type { GateInfo } from '../types.ts';
+import { roleLabel as formatRoleLabel } from '../Gates.tsx';
 import type { NavKey } from './pages.ts';
 
 interface PhoneMorePageProps {
@@ -66,13 +67,6 @@ function MoreRow({ title, subtitle, icon, onClick }: MoreItemProps) {
   );
 }
 
-const ROLE_LABELS: Record<string, string> = {
-  admin: 'Admin',
-  editor: 'Editor',
-  readonly: 'Read only',
-  resident: 'Resident',
-};
-
 /**
  * Full-page mobile/PWA "More" hub matching the Android app's borderless tonal navigation cards.
  */
@@ -84,7 +78,7 @@ export function PhoneMorePage({
   onAllGates,
   onOpenPortal,
 }: PhoneMorePageProps) {
-  const roleLabel = ROLE_LABELS[gate.role] || gate.role;
+  const roleLabel = formatRoleLabel(gate.role);
 
   return (
     <Stack spacing={2} sx={{ pb: 2 }}>

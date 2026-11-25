@@ -152,7 +152,8 @@ export function Directory({ kind, gatePhone, adminPhone, account, list, tx, devi
     return { directoryCode: of('directoryCode'), entryCode: of('entryCode'), card: of('card') };
   }, [list]);
   const dupCell = (resident: ResidentRow, column: string) => (column === 'directoryCode' && dups.directoryCode.has(resident.directoryCode))
-    || (column === 'entryCode' && Boolean(resident.entryCode) && dups.entryCode.has(resident.entryCode));
+    || (column === 'entryCode' && Boolean(resident.entryCode) && dups.entryCode.has(resident.entryCode))
+    || (column === 'cards' && resident.cards.some((card) => dups.card.has(card)));
 
   const { limit, more } = useShownRows(rows.length, `${filter}|${kind}`);
   const end = Math.max(limit, rows.findIndex((resident) => resident.directoryCode === highlight) + 1); // a highlighted entry always shows
@@ -349,10 +350,10 @@ export function Directory({ kind, gatePhone, adminPhone, account, list, tx, devi
               <Button size="small" variant="outlined" color="error" disabled={bulkBusy} onClick={() => runBulk('delete')}>Delete selected</Button>
               <Button size="small" variant="text" color="inherit" onClick={() => setSelected(new Set())}>Clear</Button>
             </Stack>
-            {bulkError && <Alert severity="error" sx={{ py: 0 }}>{bulkError}</Alert>}
           </Stack>
         </Alert>
       )}
+      {bulkError && <Alert severity="error" onClose={() => setBulkError('')}>{bulkError}</Alert>}
       {phone ? (
         <>
           <Stack spacing={1.25}>
@@ -892,15 +893,23 @@ const RECENT_TX_COLS: [string, string][] = [
 
 const RECENT_TONE_KEY = { red: 'error', amber: 'warning', green: 'success' } as const;
 
+const normalizeDirCode = (code: string) => code.trim().replace(/^0+/, '') || code.trim();
+
+function recentTransactionsForResident(tx: TransactionRow[] | null, directoryCode: string): TransactionRow[] {
+  if (!tx) return [];
+  const target = normalizeDirCode(directoryCode);
+  return hidePortalHoldNoise(tx)
+    .filter((t) => t.directoryCode && normalizeDirCode(t.directoryCode) === target)
+    .slice(0, 5);
+}
+
 /**
  * Classic compact desktop table of the last 5 transactions for a resident/vendor (matched on directory code).
  * Used strictly in the desktop Residents/Vendors expanded row; mobile uses `MobileRecentTransactions`.
  */
 function RecentTransactions({ resident, tx, snaps, onOpenSnap }: RecentTransactionsProps) {
   if (!tx) return <Typography variant="body2" color="text.secondary">No transactions yet. Pull transactions from the gate.</Typography>;
-  const recent = hidePortalHoldNoise(tx)
-    .filter((transaction) => transaction.directoryCode === resident.directoryCode)
-    .slice(0, 5);
+  const recent = recentTransactionsForResident(tx, resident.directoryCode);
   if (!recent.length) return <Typography variant="body2" color="text.secondary">No transactions for this entry.</Typography>;
   const cols = snaps.settings ? [...RECENT_TX_COLS, ['Camera', 'snap'] as [string, string]] : RECENT_TX_COLS;
   return (
@@ -948,11 +957,9 @@ function RecentTransactions({ resident, tx, snaps, onOpenSnap }: RecentTransacti
  */
 function MobileRecentTransactions({ resident, tx, snaps, onOpenSnap }: RecentTransactionsProps) {
   const [expanded, setExpanded] = useState(false);
-  const norm = (c: string) => c.trim().replace(/^0+/, '') || c.trim();
-  const target = norm(resident.directoryCode);
   const recent = useMemo(
-    () => (tx || []).filter((t) => t.directoryCode && norm(t.directoryCode) === target).slice(0, 5),
-    [tx, target],
+    () => recentTransactionsForResident(tx, resident.directoryCode),
+    [tx, resident.directoryCode],
   );
   return (
     <Paper elevation={0} sx={{ borderRadius: '16px', bgcolor: 'var(--md-surface-high)', overflow: 'hidden' }}>

@@ -161,7 +161,7 @@ export function GateApp({ session, gate, onChange, onOpenPortal }: GateAppProps)
     relays: () => <RelaysPage gapi={gapi} prefs={prefs} onReload={loadData} />,
     display: () => <DisplayPage gapi={gapi} onReload={loadData} />,
     holdOpen: () => <HoldOpenPage gapi={gapi} relays={relays} relayLabels={prefs.relayLabels || {}} />,
-    holidays: () => <HolidaysPage gapi={gapi} holidays={session.holidayList || []} />,
+    holidays: () => <HolidaysPage gapi={gapi} />,
     security: () => <SecurityPage gapi={gapi} floors={features.floors} relays={relays} relayLabels={prefs.relayLabels || {}} />,
     facility: () => <FacilityPage gapi={gapi} />,
     elevator: () => <ElevatorPage gapi={gapi} />,
